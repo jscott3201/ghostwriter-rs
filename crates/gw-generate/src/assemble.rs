@@ -92,6 +92,10 @@ pub fn assemble(
         tools: None,
         provenance,
         generation,
+        // Carry the user-turn verification contract onto the record so the engine's Verify rail can
+        // run the answer-correctness check (incl. on a crash-resume of the verify edge). `Oracle::None`
+        // contracts are kept verbatim — the rail treats a None oracle as judge-only, not a silent pass.
+        verification_contract: Some(gated.candidate.contract.clone()),
         verification: Default::default(),
         judging: Default::default(),
         reasoning_quality: None,
