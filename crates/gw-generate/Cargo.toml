@@ -1,6 +1,6 @@
 [package]
 name = "gw-generate"
-description = "Synthesizes user and assistant turns from teacher models (prompt templating, teacher selection)."
+description = "Producer: the pre-teacher-spend user-turn QC gate, assistant-turn generation (CoT capture) via teacher models, and TrainingRecord assembly. User-turn elicitation strategy is engine-driven."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -15,7 +15,9 @@ workspace = true
 gw-schema.workspace = true
 gw-providers.workspace = true
 gw-format.workspace = true
-serde.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+semver.workspace = true
 tokio.workspace = true
 futures.workspace = true
 tracing.workspace = true
