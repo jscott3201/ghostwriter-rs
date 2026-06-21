@@ -11,12 +11,17 @@
 use gw_schema::ReasoningDetail;
 use serde::Deserialize;
 
+use crate::delta_wire::{RawChunk, RawDelta, convert_reasoning_details};
+
 /// One streaming delta: the per-chunk slice of an assistant turn.
 ///
 /// Each field defaults to `None` (an OpenRouter chunk carries only what changed), so a chunk
 /// bearing only reasoning, only content, or only a `finish_reason` all deserialize cleanly.
 /// `reasoning` is the flat plaintext CoT some providers emit; `reasoning_details` is the
 /// structured form (`reasoning.text` / `.summary` / `.encrypted`) stored verbatim.
+///
+/// `tool_calls` / `function_call` are intentionally **not** modeled: the harness streams `n=1`
+/// with no tools, so OpenRouter never emits them on the teacher path. (C7)
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct StreamDelta {
     /// Incremental final-answer text. Concatenate across chunks for the answer.
@@ -32,13 +37,26 @@ pub struct StreamDelta {
     #[serde(default)]
     pub reasoning_details: Option<Vec<ReasoningDetail>>,
 
+    /// A model refusal, when the turn declines the request. First-class for refusal grading,
+    /// so a refusal-only chunk is **not** considered empty (see [`is_empty_payload`]). (C4)
+    ///
+    /// [`is_empty_payload`]: StreamDelta::is_empty_payload
+    #[serde(default)]
+    pub refusal: Option<String>,
+
     /// Set on the terminal chunk of a choice: `"stop"`, `"length"`, `"content_filter"`, etc.
     /// Hoisted up from `choices[0].finish_reason` for convenience.
     #[serde(default)]
     pub finish_reason: Option<String>,
 
+    /// OpenRouter's raw upstream stop reason from `choices[0].native_finish_reason` (the
+    /// provider's own code, which may differ from the normalized `finish_reason`). (C3)
+    #[serde(default)]
+    pub native_finish_reason: Option<String>,
+
     /// Provenance captured from the final chunk: which upstream provider served the request
-    /// (`served_by`) and the resolved model slug. Populated only when the chunk carried them.
+    /// (`served_by`), the resolved model slug, and the generation `id`. Populated only when the
+    /// chunk carried them.
     #[serde(default)]
     pub provenance: Option<ChunkProvenance>,
 
@@ -48,12 +66,20 @@ pub struct StreamDelta {
 }
 
 impl StreamDelta {
-    /// `true` when this delta carries no incremental payload (no content, no reasoning, no
-    /// structured reasoning) — e.g. a role-only opening chunk or a bare keep-alive shape. The
-    /// caller may skip emitting such deltas to the UI.
+    /// `true` when this delta carries no incremental **display** payload — no content, no
+    /// reasoning, no structured reasoning, no refusal — e.g. a role-only opening chunk or a
+    /// bare keep-alive shape. A caller may skip emitting such deltas to the UI.
+    ///
+    /// This reflects only the absence of incremental display payload. Callers MUST still
+    /// consume a terminal chunk's `finish_reason` / `native_finish_reason` / `usage` /
+    /// `provenance` even when `is_empty_payload()` is `true` (the final chunk often has no
+    /// display text but carries the stop reason and token accounting). (D)
     #[must_use]
     pub fn is_empty_payload(&self) -> bool {
-        self.content.is_none() && self.reasoning.is_none() && self.reasoning_details.is_none()
+        self.content.is_none()
+            && self.reasoning.is_none()
+            && self.reasoning_details.is_none()
+            && self.refusal.is_none()
     }
 }
 
@@ -66,11 +92,15 @@ pub struct ChunkProvenance {
     /// The resolved model slug OpenRouter reports (its `model` field).
     #[serde(default)]
     pub model: Option<String>,
+    /// OpenRouter's generation id (its top-level `id`, e.g. `"gen-..."`) — the record's
+    /// primary key. Captured verbatim; `created` is intentionally not captured. (C5)
+    #[serde(default)]
+    pub id: Option<String>,
 }
 
 impl ChunkProvenance {
-    fn is_empty(&self) -> bool {
-        self.served_by.is_none() && self.model.is_none()
+    pub(crate) fn is_empty(&self) -> bool {
+        self.served_by.is_none() && self.model.is_none() && self.id.is_none()
     }
 }
 
@@ -86,205 +116,78 @@ pub struct Usage {
     /// `prompt + completion`.
     #[serde(default)]
     pub total_tokens: Option<u64>,
+    /// Nested completion-token breakdown; carries `reasoning_tokens` on the final usage chunk
+    /// for reasoning teachers (feeds the Verify gate). (C1)
+    #[serde(default)]
+    pub completion_tokens_details: Option<CompletionTokensDetails>,
+    /// OpenRouter's authoritative per-generation cost (USD) on the usage block, when present.
+    /// This is the source of truth for record cost (a future PR maps it into `gw-schema::Cost`;
+    /// not wired here to avoid baking in silent-zero defaults). (C2)
+    #[serde(default)]
+    pub cost: Option<f64>,
 }
 
 impl Usage {
-    fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.prompt_tokens.is_none()
             && self.completion_tokens.is_none()
             && self.total_tokens.is_none()
+            && self.completion_tokens_details.is_none()
+            && self.cost.is_none()
+    }
+
+    /// The reasoning-token count from `completion_tokens_details.reasoning_tokens`, if the
+    /// usage block carried it. (C1)
+    #[must_use]
+    pub fn reasoning_tokens(&self) -> Option<u64> {
+        self.completion_tokens_details
+            .and_then(|d| d.reasoning_tokens)
     }
 }
 
-// --- wire wrappers: one OpenRouter SSE `data:` chunk ---------------------------------------
-
-/// The top-level shape of one OpenRouter streaming chunk. Only the fields the harness needs are
-/// modeled; everything else is ignored. Lives crate-private; [`parse_chunk`] flattens it.
-#[derive(Debug, Deserialize)]
-struct RawChunk {
+/// The `usage.completion_tokens_details` sub-object. Kept `Copy` so [`Usage`] stays `Copy`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize)]
+pub struct CompletionTokensDetails {
+    /// Reasoning tokens included in `completion_tokens` (the CoT's token cost). (C1)
     #[serde(default)]
-    choices: Vec<RawChoice>,
-    /// Resolved model slug, present on most chunks (OpenRouter echoes it).
-    #[serde(default)]
-    model: Option<String>,
-    /// Upstream provider name, present on the final chunk.
-    #[serde(default)]
-    provider: Option<String>,
-    /// Token accounting, present on the final chunk when `usage` was requested.
-    #[serde(default)]
-    usage: Option<Usage>,
-}
-
-/// One element of `choices`. The harness streams `n=1`, so only the first is read.
-#[derive(Debug, Deserialize)]
-struct RawChoice {
-    #[serde(default)]
-    delta: RawDelta,
-    #[serde(default)]
-    finish_reason: Option<String>,
-}
-
-/// The `choices[0].delta` object — where the CoT lives.
-///
-/// `reasoning_details` is deserialized as raw `serde_json::Value`s, **not** straight into the
-/// strict [`gw_schema::ReasoningDetail`], so one malformed/novel fragment cannot abort the
-/// whole chunk. Each fragment is then leniently re-parsed and converted per-fragment in
-/// [`parse_chunk`] (Postel's law: be liberal in what the wire decoder accepts).
-#[derive(Debug, Default, Deserialize)]
-struct RawDelta {
-    #[serde(default)]
-    content: Option<String>,
-    #[serde(default)]
-    reasoning: Option<String>,
-    #[serde(default)]
-    reasoning_details: Option<Vec<serde_json::Value>>,
-}
-
-/// A LENIENT wire view of one `reasoning_details[]` fragment.
-///
-/// Internally tagged on `type`, every payload field optional, so a fragment that omits `index`,
-/// sends a null/absent `text`, or carries a brand-new `type` still deserializes instead of
-/// killing the stream. Converted into the STRICT [`gw_schema::ReasoningDetail`] by
-/// [`WireReasoningDetail::into_strict`]; the [`WireReasoningDetail::Unknown`] catch-all (novel
-/// `type` tags) is dropped (the flat `reasoning` string still carries the human-readable CoT).
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type")]
-enum WireReasoningDetail {
-    #[serde(rename = "reasoning.text")]
-    Text {
-        #[serde(default)]
-        text: Option<String>,
-        #[serde(default)]
-        signature: Option<String>,
-        #[serde(default)]
-        id: Option<String>,
-        #[serde(default)]
-        format: Option<String>,
-        #[serde(default)]
-        index: Option<u32>,
-    },
-    #[serde(rename = "reasoning.summary")]
-    Summary {
-        #[serde(default)]
-        summary: Option<String>,
-        #[serde(default)]
-        id: Option<String>,
-        #[serde(default)]
-        format: Option<String>,
-        #[serde(default)]
-        index: Option<u32>,
-    },
-    #[serde(rename = "reasoning.encrypted")]
-    Encrypted {
-        #[serde(default)]
-        data: Option<String>,
-        #[serde(default)]
-        id: Option<String>,
-        #[serde(default)]
-        format: Option<String>,
-        #[serde(default)]
-        index: Option<u32>,
-    },
-    /// Any `type` the schema does not (yet) model. Dropped on conversion.
-    #[serde(other)]
-    Unknown,
-}
-
-impl WireReasoningDetail {
-    /// Convert into the strict stored type, filling absent `index` with `0` and absent
-    /// text/summary/data with `""`. Returns `None` for the [`WireReasoningDetail::Unknown`]
-    /// catch-all, which is dropped.
-    fn into_strict(self) -> Option<ReasoningDetail> {
-        match self {
-            WireReasoningDetail::Text {
-                text,
-                signature,
-                id,
-                format,
-                index,
-            } => Some(ReasoningDetail::Text {
-                text: text.unwrap_or_default(),
-                signature,
-                id,
-                format,
-                index: index.unwrap_or(0),
-            }),
-            WireReasoningDetail::Summary {
-                summary,
-                id,
-                format,
-                index,
-            } => Some(ReasoningDetail::Summary {
-                summary: summary.unwrap_or_default(),
-                id,
-                format,
-                index: index.unwrap_or(0),
-            }),
-            WireReasoningDetail::Encrypted {
-                data,
-                id,
-                format,
-                index,
-            } => Some(ReasoningDetail::Encrypted {
-                data: data.unwrap_or_default(),
-                id,
-                format,
-                index: index.unwrap_or(0),
-            }),
-            WireReasoningDetail::Unknown => None,
-        }
-    }
-}
-
-/// Leniently convert a vec of raw reasoning fragments into strict [`ReasoningDetail`]s,
-/// skipping (with a `debug` log) any fragment that fails to parse or is an unknown tag. Never
-/// errors — a bad fragment must not abort the chunk or drop the rest of the CoT.
-fn convert_reasoning_details(raw: Vec<serde_json::Value>) -> Option<Vec<ReasoningDetail>> {
-    let mut out = Vec::with_capacity(raw.len());
-    for value in raw {
-        match serde_json::from_value::<WireReasoningDetail>(value) {
-            Ok(wire) => match wire.into_strict() {
-                Some(detail) => out.push(detail),
-                None => tracing::debug!("skipping reasoning_details fragment with unknown type"),
-            },
-            Err(e) => {
-                tracing::debug!(error = %e, "skipping unparseable reasoning_details fragment")
-            }
-        }
-    }
-    if out.is_empty() { None } else { Some(out) }
+    pub reasoning_tokens: Option<u64>,
 }
 
 /// Parse one OpenRouter SSE `data:` JSON payload into a [`StreamDelta`], flattening
-/// `choices[0].delta`, hoisting `finish_reason`, and capturing `model`/`provider`/`usage`.
-/// Reasoning fragments are converted leniently (see [`convert_reasoning_details`]).
+/// `choices[0].delta`, hoisting `finish_reason` / `native_finish_reason`, and capturing
+/// `id`/`model`/`provider`/`usage`. Reasoning fragments are converted leniently
+/// (see [`convert_reasoning_details`]).
 ///
 /// # Errors
 /// Returns the underlying `serde_json` error if the payload is not a valid chunk object. A
-/// malformed *reasoning fragment* never errors here — it is skipped, not propagated.
+/// malformed `reasoning_details` (non-array, or a bad fragment) never errors here — it is
+/// skipped, not propagated, so a co-located `content` always survives.
 pub(crate) fn parse_chunk(json: &str) -> Result<StreamDelta, serde_json::Error> {
     let raw: RawChunk = serde_json::from_str(json)?;
     let first = raw.choices.into_iter().next();
-    let (delta, finish_reason) = match first {
-        Some(c) => (c.delta, c.finish_reason),
-        None => (RawDelta::default(), None),
+    let (delta, finish_reason, native_finish_reason) = match first {
+        Some(c) => (c.delta, c.finish_reason, c.native_finish_reason),
+        None => (RawDelta::default(), None, None),
     };
 
     let provenance = {
         let p = ChunkProvenance {
             served_by: raw.provider,
             model: raw.model,
+            id: raw.id,
         };
         if p.is_empty() { None } else { Some(p) }
     };
     let usage = raw.usage.filter(|u| !u.is_empty());
-    let reasoning_details = delta.reasoning_details.and_then(convert_reasoning_details);
+    let reasoning_details = convert_reasoning_details(delta.reasoning_details);
 
     Ok(StreamDelta {
         content: delta.content,
         reasoning: delta.reasoning,
         reasoning_details,
+        refusal: delta.refusal,
         finish_reason,
+        native_finish_reason,
         provenance,
         usage,
     })
@@ -458,5 +361,117 @@ mod tests {
             {"type":"reasoning.foo"},{"type":"reasoning.bar"}]}}]}"#;
         let d = parse_chunk(j).unwrap();
         assert!(d.reasoning_details.is_none());
+    }
+
+    // --- A. non-array reasoning_details container must NEVER abort the chunk ----------------
+
+    #[test]
+    fn reasoning_details_object_shape_does_not_abort() {
+        // A `{...}` instead of an array: ignore reasoning_details, keep co-located content.
+        let j = r#"{"choices":[{"delta":{"content":"keep me",
+            "reasoning_details":{"oops":"object not array"}}}]}"#;
+        let d = parse_chunk(j).unwrap();
+        assert_eq!(d.content.as_deref(), Some("keep me"));
+        assert!(d.reasoning_details.is_none());
+    }
+
+    #[test]
+    fn reasoning_details_string_shape_does_not_abort() {
+        let j = r#"{"choices":[{"delta":{"content":"keep me",
+            "reasoning_details":"a bare string"}}]}"#;
+        let d = parse_chunk(j).unwrap();
+        assert_eq!(d.content.as_deref(), Some("keep me"));
+        assert!(d.reasoning_details.is_none());
+    }
+
+    #[test]
+    fn reasoning_details_number_shape_does_not_abort() {
+        let j = r#"{"choices":[{"delta":{"content":"keep me","reasoning_details":42}}]}"#;
+        let d = parse_chunk(j).unwrap();
+        assert_eq!(d.content.as_deref(), Some("keep me"));
+        assert!(d.reasoning_details.is_none());
+    }
+
+    // --- C. spec-conformance wire capture --------------------------------------------------
+
+    #[test]
+    fn reasoning_tokens_parsed_from_completion_tokens_details() {
+        // C1: final usage chunk carries completion_tokens_details.reasoning_tokens.
+        let j = r#"{"choices":[{"delta":{},"finish_reason":"stop"}],
+            "usage":{"prompt_tokens":10,"completion_tokens":200,"total_tokens":210,
+            "completion_tokens_details":{"reasoning_tokens":150}}}"#;
+        let d = parse_chunk(j).unwrap();
+        let usage = d.usage.expect("usage present");
+        assert_eq!(usage.reasoning_tokens(), Some(150));
+        assert_eq!(
+            usage.completion_tokens_details.unwrap().reasoning_tokens,
+            Some(150)
+        );
+    }
+
+    #[test]
+    fn usage_without_details_has_no_reasoning_tokens() {
+        let j = r#"{"choices":[{"delta":{}}],
+            "usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}"#;
+        let d = parse_chunk(j).unwrap();
+        assert_eq!(d.usage.unwrap().reasoning_tokens(), None);
+    }
+
+    #[test]
+    fn top_level_cost_parsed_from_usage() {
+        // C2: OpenRouter cost on the usage block.
+        let j = r#"{"choices":[{"delta":{},"finish_reason":"stop"}],
+            "usage":{"prompt_tokens":10,"completion_tokens":20,"total_tokens":30,"cost":0.0042}}"#;
+        let d = parse_chunk(j).unwrap();
+        assert_eq!(d.usage.unwrap().cost, Some(0.0042));
+    }
+
+    #[test]
+    fn native_finish_reason_captured_on_finish_chunk() {
+        // C3: raw upstream stop reason surfaced alongside the normalized one.
+        let j = r#"{"choices":[{"delta":{},"finish_reason":"stop",
+            "native_finish_reason":"end_turn"}]}"#;
+        let d = parse_chunk(j).unwrap();
+        assert_eq!(d.finish_reason.as_deref(), Some("stop"));
+        assert_eq!(d.native_finish_reason.as_deref(), Some("end_turn"));
+    }
+
+    #[test]
+    fn refusal_captured_and_refusal_only_chunk_not_empty() {
+        // C4: refusal is first-class; a refusal-only chunk is NOT empty payload.
+        let j = r#"{"choices":[{"delta":{"refusal":"I can't help with that."}}]}"#;
+        let d = parse_chunk(j).unwrap();
+        assert_eq!(d.refusal.as_deref(), Some("I can't help with that."));
+        assert!(!d.is_empty_payload());
+    }
+
+    #[test]
+    fn generation_id_captured_into_provenance() {
+        // C5: top-level `id` flows into ChunkProvenance.id.
+        let j = r#"{"id":"gen-abc123","model":"z-ai/glm-5.2","provider":"Parasail",
+            "choices":[{"delta":{},"finish_reason":"stop"}]}"#;
+        let d = parse_chunk(j).unwrap();
+        let prov = d.provenance.expect("provenance present");
+        assert_eq!(prov.id.as_deref(), Some("gen-abc123"));
+        assert_eq!(prov.served_by.as_deref(), Some("Parasail"));
+        assert_eq!(prov.model.as_deref(), Some("z-ai/glm-5.2"));
+    }
+
+    #[test]
+    fn id_alone_produces_provenance() {
+        // `id` is enough for provenance even without provider/model.
+        let j = r#"{"id":"gen-xyz","choices":[{"delta":{"content":"x"}}]}"#;
+        let d = parse_chunk(j).unwrap();
+        assert_eq!(d.provenance.unwrap().id.as_deref(), Some("gen-xyz"));
+    }
+
+    #[test]
+    fn role_only_chunk_still_empty_with_new_fields() {
+        // A role-only opening chunk remains empty payload (no content/reasoning/refusal).
+        let j = r#"{"choices":[{"delta":{"role":"assistant"}}]}"#;
+        let d = parse_chunk(j).unwrap();
+        assert!(d.is_empty_payload());
+        assert!(d.refusal.is_none());
+        assert!(d.native_finish_reason.is_none());
     }
 }

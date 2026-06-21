@@ -21,3 +21,10 @@ futures.workspace = true
 governor.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+# For the `#[ignore]`-gated live integration test (tests/live_openrouter.rs); the integration
+# test is a separate crate and needs these to construct messages and drive the async stream.
+gw-schema.workspace = true
+tokio.workspace = true
+futures.workspace = true

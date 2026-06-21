@@ -61,6 +61,7 @@
 
 mod client;
 mod delta;
+mod delta_wire;
 mod error;
 mod limiter;
 mod request;
@@ -74,10 +75,10 @@ use futures::stream::Stream;
 pub use client::{
     DEFAULT_API_KEY_ENV, DEFAULT_BASE_URL, OpenRouterProvider, OpenRouterProviderBuilder,
 };
-pub use delta::{ChunkProvenance, StreamDelta, Usage};
+pub use delta::{ChunkProvenance, CompletionTokensDetails, StreamDelta, Usage};
 pub use error::ProviderError;
 pub use limiter::RateLimiter;
-pub use request::{ChatRequest, ReasoningParam, UsageRequest};
+pub use request::{ChatRequest, ProviderRouting, ReasoningParam, UsageRequest};
 pub use retry::{RetryPolicy, retry, retry_with};
 pub use sse::decode_sse;
 
@@ -98,9 +99,11 @@ pub type StreamChatFuture<'a> =
 /// terminal [`ProviderError::StreamReset`] arrive on the stream itself.
 ///
 /// The method returns a boxed future ([`StreamChatFuture`]) rather than RPITIT `impl Future`,
-/// so the trait is **dyn-compatible** — the engine can hold a `&dyn Provider` /
-/// `Box<dyn Provider>`.
-pub trait Provider {
+/// so the trait is **dyn-compatible** — the engine can hold a `&dyn Provider`. The `Send + Sync`
+/// supertrait bound means a bare `Box<dyn Provider>` is itself `Send + Sync`, so it can be moved
+/// into a spawned task / shared across threads (e.g. a `tokio::spawn`-ed generation worker)
+/// without the caller having to spell out the markers.
+pub trait Provider: Send + Sync {
     /// Stream a chat completion. The future completes once the (retried, rate-limited) HTTP
     /// response is established; the body is then decoded lazily as the returned stream is
     /// polled.
@@ -117,4 +120,12 @@ pub trait Provider {
 #[allow(dead_code)]
 fn _assert_provider_dyn_compatible(p: &dyn Provider) -> &dyn Provider {
     p
+}
+
+/// Compile-time assertion that `Box<dyn Provider>` is `Send + Sync` (so it is spawnable /
+/// shareable). If the supertrait bound is dropped, this stops compiling.
+#[allow(dead_code)]
+fn _assert_provider_send_sync() {
+    fn req<T: Send + Sync>() {}
+    req::<Box<dyn Provider>>();
 }
