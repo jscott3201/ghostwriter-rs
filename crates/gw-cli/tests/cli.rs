@@ -175,6 +175,23 @@ fn gen_replay_parses() {
 }
 
 #[test]
+fn gen_replay_requires_explicit_shards() {
+    // `--shards` has NO default on replay (unlike `gen run`): resume re-derives the seed→shard
+    // partition as `index % shards`, so a silently-defaulted value would re-partition the space and
+    // duplicate/orphan records against the persisted cursors. Omitting it must be rejected.
+    let err = Cli::try_parse_from([
+        "gw",
+        "gen",
+        "replay",
+        "--run-id",
+        "r1",
+        "--prompts",
+        "p.txt",
+    ]);
+    assert!(err.is_err(), "replay must require an explicit --shards");
+}
+
+#[test]
 fn eval_audit_separation_parses() {
     let cli = Cli::try_parse_from([
         "gw",

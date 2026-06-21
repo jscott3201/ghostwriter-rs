@@ -48,8 +48,11 @@ pub async fn tui(args: RunArgs) -> anyhow::Result<()> {
     let run_id = args.run_id.clone();
     let handle = tokio::spawn(async move { engine.run(&run_id, &source, engine_cancel).await });
 
-    let tick_rate = Duration::from_millis(config.tick_ms);
-    let frame_rate = Duration::from_millis(config.frame_ms);
+    // Clamp each interval to a non-zero floor: `tokio::time::interval` (inside `gw_tui::run`) PANICS
+    // on a zero period, and `tick_ms` / `frame_ms` are operator-settable config with no `> 0`
+    // validation — so a misconfigured `0` is clamped to 1ms here rather than aborting the dashboard.
+    let tick_rate = nonzero_millis(config.tick_ms);
+    let frame_rate = nonzero_millis(config.frame_ms);
     // The dashboard owns the terminal for its lifetime; on quit it fires `cancel` (winding down the
     // engine task), and when the engine finishes + drops the sink the channel closes and this returns.
     let tui_result = gw_tui::run(rx, cancel, tick_rate, frame_rate)
@@ -76,4 +79,29 @@ pub async fn tui(args: RunArgs) -> anyhow::Result<()> {
         report.errored,
     );
     Ok(())
+}
+
+/// Build a millisecond [`Duration`] clamped to a non-zero floor (1ms). The dashboard's tick/frame
+/// intervals flow into `tokio::time::interval`, which panics on a zero period; `tick_ms` / `frame_ms`
+/// are operator config with no `> 0` validation, so a configured `0` is clamped here instead of
+/// aborting the process.
+fn nonzero_millis(ms: u64) -> Duration {
+    Duration::from_millis(ms.max(1))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn zero_interval_is_clamped_to_one_millisecond() {
+        // A configured 0 would panic `tokio::time::interval`; the clamp yields a non-zero period.
+        assert_eq!(nonzero_millis(0), Duration::from_millis(1));
+    }
+
+    #[test]
+    fn nonzero_interval_is_passed_through_unchanged() {
+        assert_eq!(nonzero_millis(250), Duration::from_millis(250));
+        assert_eq!(nonzero_millis(33), Duration::from_millis(33));
+    }
 }

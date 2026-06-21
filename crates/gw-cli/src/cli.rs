@@ -127,8 +127,10 @@ pub struct ReplayArgs {
     /// The SAME newline-delimited prompts file the original run used (resume re-derives by offset).
     #[arg(long, value_name = "FILE")]
     pub prompts: PathBuf,
-    /// The SAME shard count the original run used.
-    #[arg(long, value_name = "N", default_value_t = 1)]
+    /// The SAME shard count the original run used (REQUIRED — there is no safe default for a resume:
+    /// the seed→shard partition is `index % shards`, so a different (or silently defaulted) value
+    /// re-partitions the space and duplicates/orphans records against the persisted offset cursors).
+    #[arg(long, value_name = "N")]
     pub shards: usize,
     /// Max seed items in flight across all shards (concurrency cap).
     #[arg(long, value_name = "N", default_value_t = 4)]
