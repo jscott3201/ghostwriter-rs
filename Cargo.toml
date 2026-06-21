@@ -43,6 +43,9 @@ governor = "0.10.4"
 # rustls-only TLS posture (native-tls / openssl are banned by deny.toml).
 async-openai = { version = "0.41.1", default-features = false, features = ["rustls"] }
 ratatui = "0.30.2"
+# crossterm is ratatui 0.30.2's resolved backend (verified `cargo tree -p crossterm` -> v0.29.0); the
+# `event-stream` feature exposes the async `EventStream` the TUI's `tokio::select!` loop multiplexes.
+crossterm = { version = "0.29", features = ["event-stream"] }
 tui-input = "0.15.3"
 tui-logger = "0.18.2"
 throbber-widgets-tui = "0.11.1"
