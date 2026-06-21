@@ -226,6 +226,7 @@ mod tests {
                 git_commit: None,
             },
             generation: Generation::default(),
+            verification_contract: None,
             verification: Verification::default(),
             judging: Judging {
                 aggregate: Some(agg),

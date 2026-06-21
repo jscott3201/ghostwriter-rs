@@ -14,6 +14,7 @@ use crate::message::Message;
 use crate::provenance::Provenance;
 use crate::reasoning_quality::ReasoningQuality;
 use crate::verification::Verification;
+use crate::verification_contract::VerificationContract;
 
 /// The canonical training-record envelope. Required fields (JSON-Schema §1.12): `record_id`,
 /// `schema_version`, `training_area`, `messages`, `provenance`, `generation`, `lifecycle`.
@@ -39,6 +40,13 @@ pub struct TrainingRecord {
 
     pub provenance: Provenance,
     pub generation: Generation,
+    /// The deterministic-verifier contract (kind + oracle) carried from the user-turn candidate so the
+    /// Verify rail's answer-correctness check (NumericMatch / RefusalExpected / SqlResultMatch / …) can
+    /// run on the engine's `assistant_generated → verified` edge AND on a crash-resume of that edge.
+    /// `None` ⇒ no deterministic oracle for this record (judge-only admission); the reasoning-present
+    /// hard gate still applies regardless. Additive + optional: absent on records that carry no contract.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification_contract: Option<VerificationContract>,
     #[serde(default)]
     pub verification: Verification,
     #[serde(default)]

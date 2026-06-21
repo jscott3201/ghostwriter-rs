@@ -222,6 +222,7 @@ mod tests {
                 reasoning_effort: Some(ReasoningEffort::Xhigh),
                 ..Default::default()
             },
+            verification_contract: None,
             verification: Verification::default(),
             judging: Judging::default(),
             reasoning_quality: None,

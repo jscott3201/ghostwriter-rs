@@ -83,6 +83,7 @@ fn record(
             reasoning_effort: Some(ReasoningEffort::Xhigh),
             ..Default::default()
         },
+        verification_contract: None,
         verification: Default::default(),
         judging,
         reasoning_quality: None,
