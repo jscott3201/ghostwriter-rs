@@ -15,7 +15,7 @@
 //! is pinned, so the deny posture rides EVERY teacher request and the captured traces stay legally
 //! redistributable (ARCHITECTURE D5 line 646 / §3.2 line 304 / OSS-hygiene line 720).
 //! `reasoning_effort` / `temperature` / `top_p` from the routing are surfaced as a
-//! [`ReasoningPolicy`] + [`SamplingPreset`] for the [`TeacherCall`] builder.
+//! [`ReasoningPolicy`] + [`SamplingPreset`] for the `TeacherCall` builder.
 
 use gw_providers::ProviderRouting;
 use gw_schema::{TeacherRef, TeacherRouting};

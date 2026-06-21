@@ -6,7 +6,7 @@
 //!
 //! ## INVARIANT-a — reasoning is a sibling of content, never inlined
 //!
-//! The streamed `content` is run through `gw-format`'s [`ingest_openrouter`] so any channel tokens
+//! The streamed `content` is run through `gw-format`'s [`ingest_openrouter`](gw_format::ingest_openrouter) so any channel tokens
 //! a provider inlined (`<think>…</think>`, Gemma-4 `<|channel>thought…`, Harmony) are stripped OUT
 //! of `content` INTO `reasoning`, and a control token surviving in the clean content fails loud
 //! (the ingest crate owns this). We reuse that path rather than re-deriving reasoning extraction.
@@ -116,7 +116,7 @@ pub struct AssistantTurn {
 impl AccumulatedStream {
     /// Convert the accumulated stream into a clean [`AssistantTurn`].
     ///
-    /// Runs the streamed `content` through `gw-format`'s [`ingest_openrouter`] to strip any inlined
+    /// Runs the streamed `content` through `gw-format`'s [`ingest_openrouter`](gw_format::ingest_openrouter) to strip any inlined
     /// channel tokens into reasoning (INVARIANT-a) and to fail loud on a control-token leak. The
     /// provider's directly-streamed flat `reasoning` and structured `reasoning_details` take
     /// precedence over anything peeled from content (they are the higher-fidelity capture).

@@ -22,20 +22,20 @@
 //!                                       └─ false ▶ blocked       └─ best-of-k fan-out (sibling)
 //! ```
 //!
-//! - **USER synthesis + QC gate** ([`user_synth`]). A candidate USER turn is gated on four bools
+//! - **USER synthesis + QC gate** (`user_synth`). A candidate USER turn is gated on four bools
 //!   (`answerable`, `difficulty_targeted`, `diverse`, `in_scope_safe`) BEFORE any teacher tokens
 //!   are spent (the spend guard). `diverse` is an embedding cosine-dedup via the injected
 //!   [`Embedder`] seam (no ML dep here). `in_scope_safe` is forced true for
 //!   adversarial-by-construction (RefusalExpected) prompts.
-//! - **Teacher request building** ([`request`]). The [`TeacherCall`] builder ALWAYS sets
+//! - **Teacher request building** (`request`). The [`TeacherCall`] builder ALWAYS sets
 //!   `max_tokens`, requests usage accounting, and emits reasoning as exactly one of
 //!   effort (`xhigh`, never `max`) / a reasoning-token budget (mutually exclusive).
-//! - **ASSISTANT generation** ([`assistant`]). Streams the teacher via the [`Provider`], ingests
+//! - **ASSISTANT generation** (`assistant`). Streams the teacher via the [`Provider`], ingests
 //!   the response through `gw-format` so reasoning stays a sibling of clean content (INVARIANT-a),
 //!   and FAILS LOUD on the `<|channel>thought` truncation hazard (`finish_reason == "length"` mid-CoT).
-//! - **best-of-k** ([`sibling`]). Fans one prompt into `k` siblings with `completion_index` `0..k`,
+//! - **best-of-k** (`sibling`). Fans one prompt into `k` siblings with `completion_index` `0..k`,
 //!   `n_completions = k`, and DISTINCT per-sibling seeds (never `k` identical greedy samples).
-//! - **Assembly** ([`assemble`]). Folds everything into a `TrainingRecord` at `assistant_generated`.
+//! - **Assembly** (`assemble`). Folds everything into a `TrainingRecord` at `assistant_generated`.
 //!
 //! ## Invariants enforced in code (see the cited `file.rs:fn`)
 //!
@@ -104,7 +104,7 @@ pub fn synthesize_user_turn<E: Embedder + ?Sized>(
 ///
 /// On success it builds the request (enforcing INVARIANT-g via [`TeacherCall::build`]), streams the
 /// teacher (capturing CoT as a sibling of content via [`generate_turn`]), and returns the clean
-/// [`AssistantTurn`] for [`assemble`] to fold into a record.
+/// [`AssistantTurn`] for `assemble` to fold into a record.
 ///
 /// # Errors
 /// - [`GenerateError::Invariant`] if the gate was not passed, or `max_tokens` is unset.

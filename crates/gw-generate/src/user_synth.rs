@@ -8,7 +8,7 @@
 //! ## The gate (USER-SYNTHESIS §9) — enforced in code
 //!
 //! [`UserTurnVerdict`] (owned by `gw-schema`) carries `answerable`, `difficulty_targeted`,
-//! `diverse`, `in_scope_safe`. [`evaluate`] computes the verdict; [`GatedUserTurn::passed`] is the
+//! `diverse`, `in_scope_safe`. `evaluate` computes the verdict; [`GatedUserTurn::passed`] is the
 //! single predicate the orchestrator MUST consult — [`crate::synthesize_user_turn`] returns the
 //! candidate gated, and [`crate::generate_assistant`] refuses to run on a failed candidate, so
 //! there is NO path that spends teacher tokens on a turn that did not pass (the load-bearing
@@ -104,7 +104,7 @@ pub struct UserSeed {
 }
 
 /// A candidate USER turn paired with the QC inputs needed to gate it (USER-SYNTHESIS §9). The
-/// synthesizer fills these; [`evaluate`] turns them into a [`UserTurnVerdict`].
+/// synthesizer fills these; `evaluate` turns them into a [`UserTurnVerdict`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct UserTurnCandidate {
     /// The synthesized USER message (clean text; user turns carry no reasoning).
@@ -251,7 +251,7 @@ pub fn evaluate<E: Embedder + ?Sized>(
 }
 
 /// Gate a candidate at the default cosine threshold ([`DEFAULT_COSINE_THRESHOLD`]). Convenience
-/// over [`evaluate`] that pairs the candidate with its verdict into a [`GatedUserTurn`].
+/// over `evaluate` that pairs the candidate with its verdict into a [`GatedUserTurn`].
 ///
 /// # Errors
 /// Returns [`GenerateError::Embed`] if the embedder fails.
