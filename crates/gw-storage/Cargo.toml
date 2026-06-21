@@ -17,8 +17,24 @@ serde.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true
 tokio.workspace = true
+# `futures` (existing workspace dep) backs the streaming `Store::scan` (a `Stream` of records).
+futures.workspace = true
 arrow.workspace = true
 parquet.workspace = true
 blake3.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+# Integration tests (tests/store.rs) are a separate crate, so they redeclare the deps they name.
+# All but `bytes` are existing workspace deps. `bytes` (already in Cargo.lock as a transitive dep
+# of parquet/tokio) is dev-only: it provides the `ChunkReader for bytes::Bytes` impl that lets the
+# parquet reader round-trip an in-memory buffer without a temp file. NOT a library dependency.
+gw-schema.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+futures.workspace = true
+arrow.workspace = true
+parquet.workspace = true
+semver.workspace = true
+bytes = "1"
