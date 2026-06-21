@@ -66,6 +66,7 @@
 mod budget;
 mod checkpoint;
 mod clients;
+mod control;
 mod error;
 mod event;
 mod executor;
@@ -78,6 +79,7 @@ mod step;
 pub use budget::BudgetMeter;
 pub use checkpoint::{ShardCursor, commit_cursor, load_cursor};
 pub use clients::{AreaConfig, Clients, DEFAULT_CORRELATION_RHO, DEFAULT_K, DEFAULT_MAX_TOKENS};
+pub use control::RunControl;
 pub use error::{EngineError, Result};
 pub use event::{DEFAULT_EVENT_CAPACITY, EngineEvent, EventSink};
 pub use executor::{Engine, ExportSpec, RunReport};

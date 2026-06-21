@@ -25,6 +25,7 @@ pub async fn replay(args: ReplayArgs) -> anyhow::Result<()> {
     if let Some(db) = &args.db {
         config.db = db.clone();
     }
+    config.validate_run_control()?;
     let source = FileSeedSource::from_prompts_file(&args.prompts, args.shards)?;
 
     let (engine, _store) = build_engine(&config, EventSink::disconnected(), args.max_in_flight)

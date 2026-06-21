@@ -128,11 +128,16 @@ pub async fn build_engine(
     let provider = build_provider(config)?;
     let clients = build_clients(store.clone(), provider, events, config.budget_usd);
     let area: AreaConfig = config.area_config();
-    let mut engine = Engine::new(clients, area, max_in_flight);
+    let engine = configure_engine(Engine::new(clients, area, max_in_flight), config);
+    Ok((engine, store))
+}
+
+fn configure_engine(mut engine: Engine, config: &Config) -> Engine {
+    engine = engine.with_on_breach(config.on_breach);
     if let Some(spec) = export_spec(config) {
         engine = engine.with_export(spec);
     }
-    Ok((engine, store))
+    engine
 }
 
 fn export_spec(config: &Config) -> Option<ExportSpec> {
@@ -222,5 +227,24 @@ mod tests {
         assert_eq!(spec.target, gw_schema::TrlFormat::ChatML);
         assert_eq!(spec.cot, gw_schema::CotPolicy::Masked);
         assert_eq!(spec.dataset_version, Some(semver::Version::new(1, 2, 3)));
+    }
+
+    #[tokio::test]
+    async fn on_breach_config_maps_to_engine_policy() {
+        let provider: Arc<dyn Provider> = Arc::new(
+            OpenRouterProvider::builder()
+                .build_with_key("DUMMY-TEST-KEY-NOT-A-CREDENTIAL")
+                .expect("provider builds with an explicit test key"),
+        );
+        let store = Store::open_in_memory().await.expect("in-memory store");
+        let clients = build_clients(store, provider, EventSink::disconnected(), 1.0);
+        let config = Config {
+            on_breach: gw_schema::BudgetBreach::Abort,
+            ..Config::default()
+        };
+
+        let engine = configure_engine(Engine::new(clients, config.area_config(), 1), &config);
+
+        assert_eq!(engine.on_breach(), gw_schema::BudgetBreach::Abort);
     }
 }

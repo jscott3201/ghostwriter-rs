@@ -33,7 +33,7 @@ use serde::{Deserialize, Serialize};
 
 use gw_engine::AreaConfig;
 use gw_judge::{AreaThresholds, PanelJudge};
-use gw_schema::{CotPolicy, TrlFormat};
+use gw_schema::{BudgetBreach, CotPolicy, TrlFormat};
 
 /// The default SQLite store path when none is configured.
 pub const DEFAULT_DB_PATH: &str = "gw-run.sqlite";
@@ -46,6 +46,9 @@ pub struct Config {
     pub db: PathBuf,
     /// The run-wide budget cap in USD (the primary spend guard).
     pub budget_usd: f64,
+    /// What the engine does when the budget cap is reached.
+    #[serde(default)]
+    pub on_breach: BudgetBreach,
     /// The OpenAI-compatible provider base URL (default OpenRouter). The API KEY is NOT here.
     pub provider_base_url: String,
     /// The per-lane requests-per-minute budget for the provider rate limiter.
@@ -65,6 +68,7 @@ impl Default for Config {
         Self {
             db: PathBuf::from(DEFAULT_DB_PATH),
             budget_usd: 5.0,
+            on_breach: BudgetBreach::Drain,
             provider_base_url: gw_providers::DEFAULT_BASE_URL.to_string(),
             provider_rpm: 60,
             tick_ms: 250,
@@ -208,7 +212,23 @@ impl Config {
             fig = fig.merge(Toml::file(path));
         }
         fig = fig.merge(Env::prefixed("GW_").split("__"));
-        Ok(fig.extract()?)
+        let config: Self = fig.extract()?;
+        config.validate_run_control()?;
+        Ok(config)
+    }
+
+    /// Validate run-control settings that deserialize but are not implemented yet.
+    ///
+    /// # Errors
+    /// Returns an error if `on_breach = "pause"` is configured. Pause remains a schema variant, but
+    /// the engine has not implemented parking semantics yet.
+    pub fn validate_run_control(&self) -> anyhow::Result<()> {
+        if self.on_breach == BudgetBreach::Pause {
+            anyhow::bail!(
+                "on_breach = \"pause\" is not yet supported (tracked as a follow-up); use \"drain\" or \"abort\""
+            );
+        }
+        Ok(())
     }
 
     /// Map the configured area into the engine's [`AreaConfig`].
@@ -240,6 +260,7 @@ mod tests {
         let cfg = Config::load(None).expect("defaults load");
         assert_eq!(cfg.db, PathBuf::from(DEFAULT_DB_PATH));
         assert_eq!(cfg.provider_base_url, gw_providers::DEFAULT_BASE_URL);
+        assert_eq!(cfg.on_breach, BudgetBreach::Drain);
         assert_eq!(cfg.area.k, gw_engine::DEFAULT_K);
         assert!(cfg.export.is_none());
     }

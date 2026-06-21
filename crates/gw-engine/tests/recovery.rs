@@ -86,7 +86,9 @@ async fn crash_resume_reenters_at_last_persisted_state() {
     );
 
     // Driving it the rest of the way reaches Exported with NO second teacher call.
-    let done = drive(stepped, &cl, &area).await.unwrap();
+    let done = drive(stepped, &cl, &area, &CancellationToken::new())
+        .await
+        .unwrap();
     assert_eq!(done.lifecycle.state, LifecycleState::Exported);
     assert_eq!(
         teacher.call_count(),
@@ -237,7 +239,9 @@ async fn step_replay_is_deterministic() {
             EventSink::disconnected(),
         );
         let area = area_k1(one_judge(), lenient_thresholds());
-        let done = drive(rec, &cl, &area).await.unwrap();
+        let done = drive(rec, &cl, &area, &CancellationToken::new())
+            .await
+            .unwrap();
         (
             done.lifecycle.state,
             done.judging.aggregate,

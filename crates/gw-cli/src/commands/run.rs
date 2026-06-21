@@ -29,9 +29,13 @@ pub fn effective_config(args: &RunArgs) -> anyhow::Result<Config> {
     if let Some(budget) = args.budget_usd {
         config.budget_usd = budget;
     }
+    if let Some(policy) = args.on_breach {
+        config.on_breach = policy.into();
+    }
     if let Some(k) = args.k {
         config.area.k = k;
     }
+    config.validate_run_control()?;
     Ok(config)
 }
 
@@ -90,6 +94,7 @@ mod tests {
             prompts: PathBuf::from("/tmp/prompts.txt"),
             shards: 1,
             budget_usd: Some(9.5),
+            on_breach: Some(crate::cli::OnBreach::Abort),
             k: Some(4),
             max_in_flight: 4,
         }
@@ -101,6 +106,7 @@ mod tests {
         // The clap flags layer over the defaults (no file, no env).
         assert_eq!(cfg.db, PathBuf::from("/tmp/override.sqlite"));
         assert!((cfg.budget_usd - 9.5).abs() < 1e-12);
+        assert_eq!(cfg.on_breach, gw_schema::BudgetBreach::Abort);
         assert_eq!(cfg.area.k, 4);
     }
 
@@ -109,11 +115,13 @@ mod tests {
         let mut args = run_args();
         args.db = None;
         args.budget_usd = None;
+        args.on_breach = None;
         args.k = None;
         let cfg = effective_config(&args).expect("config");
         // Falls back to the built-in defaults when no override and no file.
         assert_eq!(cfg.db, Config::default().db);
         assert!((cfg.budget_usd - Config::default().budget_usd).abs() < 1e-12);
+        assert_eq!(cfg.on_breach, Config::default().on_breach);
         assert_eq!(cfg.area.k, Config::default().area.k);
     }
 }

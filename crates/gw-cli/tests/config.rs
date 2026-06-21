@@ -22,6 +22,7 @@ fn toml_file_overrides_defaults() {
             "gw.toml",
             r#"
                 budget_usd = 42.0
+                on_breach = "abort"
                 provider_rpm = 120
 
                 [area]
@@ -42,6 +43,7 @@ fn toml_file_overrides_defaults() {
         )?;
         let cfg = Config::load(Some(Path::new("gw.toml"))).expect("loads the TOML fixture");
         assert!((cfg.budget_usd - 42.0).abs() < 1e-12);
+        assert_eq!(cfg.on_breach, gw_schema::BudgetBreach::Abort);
         assert_eq!(cfg.provider_rpm, 120);
         assert_eq!(cfg.area.training_area, "rust-async");
         assert_eq!(cfg.area.k, 3);
@@ -52,6 +54,20 @@ fn toml_file_overrides_defaults() {
         assert_eq!(export.format, gw_schema::TrlFormat::ChatML);
         assert_eq!(export.cot, gw_schema::CotPolicy::Masked);
         assert_eq!(export.dataset_version, Some(semver::Version::new(1, 2, 3)));
+        Ok(())
+    });
+}
+
+#[test]
+fn on_breach_pause_is_rejected() {
+    Jail::expect_with(|jail| {
+        jail.create_file("gw.toml", "on_breach = \"pause\"\n")?;
+        let err = Config::load(Some(Path::new("gw.toml"))).expect_err("pause rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("on_breach = \"pause\" is not yet supported"),
+            "got: {msg}"
+        );
         Ok(())
     });
 }
