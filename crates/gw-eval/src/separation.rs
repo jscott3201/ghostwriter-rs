@@ -121,6 +121,14 @@ pub struct SeparationReport {
     pub low_data: bool,
 }
 
+impl SeparationReport {
+    /// `audit-separation --check` gate verdict: adequate data plus a real selector-vs-random signal.
+    #[must_use]
+    pub fn passed(&self) -> bool {
+        !self.low_data && self.n_selector_eligible > 0 && self.selector_mean_gap > 0.0
+    }
+}
+
 /// One sibling group's per-sibling facts, reduced from the raw records.
 struct Group {
     /// `verification.all_passed` for each sibling in the group.
@@ -473,5 +481,49 @@ mod tests {
             "only 1 finite score ⇒ ineligible"
         );
         assert!(rep.selector_mean.is_finite());
+    }
+
+    fn report_for_verdict(
+        low_data: bool,
+        n_selector_eligible: usize,
+        selector_mean_gap: f64,
+    ) -> SeparationReport {
+        SeparationReport {
+            n_groups: 1,
+            n_singletons: 0,
+            n_allpass: 1,
+            n_allfail: 0,
+            n_mixed: 1,
+            n_decidable: 1,
+            decidable_fraction: 1.0,
+            n_selector_eligible,
+            selector_winrate: 1.0,
+            selector_mean_gap,
+            control_per_prompt_mean: 0.5,
+            control_k_overall_mean: 0.5,
+            selector_mean: 0.9,
+            n_nonfinite_aggregates: 0,
+            low_data,
+        }
+    }
+
+    #[test]
+    fn passed_requires_data_eligible_groups_and_positive_gap() {
+        assert!(
+            !report_for_verdict(true, 1, 0.2).passed(),
+            "low_data fails the check gate"
+        );
+        assert!(
+            !report_for_verdict(false, 0, 0.2).passed(),
+            "no selector-eligible groups fails the check gate"
+        );
+        assert!(
+            !report_for_verdict(false, 1, 0.0).passed(),
+            "a zero selector gap fails the check gate"
+        );
+        assert!(
+            report_for_verdict(false, 1, 0.2).passed(),
+            "adequate data plus positive selector gap passes"
+        );
     }
 }

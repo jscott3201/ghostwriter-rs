@@ -12,6 +12,7 @@ use gw_eval::{
 };
 use gw_storage::{RecordFilter, Store};
 
+use crate::CommandOutcome;
 use crate::cli::{AuditSeparationArgs, PromoteArgs};
 
 /// Run the selector-vs-random separation diagnostic over the store at `args.db`, optionally filtered
@@ -19,7 +20,7 @@ use crate::cli::{AuditSeparationArgs, PromoteArgs};
 ///
 /// # Errors
 /// Propagates a store-open / scan failure or a JSON serialization failure.
-pub async fn audit_separation(args: AuditSeparationArgs) -> anyhow::Result<()> {
+pub async fn audit_separation(args: AuditSeparationArgs) -> anyhow::Result<CommandOutcome> {
     let store = Store::open(&args.db)
         .await
         .with_context(|| format!("opening the store at {}", args.db.display()))?;
@@ -43,7 +44,11 @@ pub async fn audit_separation(args: AuditSeparationArgs) -> anyhow::Result<()> {
     let json =
         serde_json::to_string_pretty(&report).context("serializing the separation report")?;
     println!("{json}");
-    Ok(())
+    if args.check && !report.passed() {
+        Ok(CommandOutcome::GateRejected)
+    } else {
+        Ok(CommandOutcome::Success)
+    }
 }
 
 /// Run the variance-aware promotion gate over the two `eval_results.json` files in `args` and the
@@ -54,7 +59,7 @@ pub async fn audit_separation(args: AuditSeparationArgs) -> anyhow::Result<()> {
 ///
 /// # Errors
 /// Propagates a file-read, JSON-parse, config-parse, or serialization failure.
-pub async fn promote_cmd(args: PromoteArgs) -> anyhow::Result<()> {
+pub async fn promote_cmd(args: PromoteArgs) -> anyhow::Result<CommandOutcome> {
     let baseline_bytes = std::fs::read(&args.baseline)
         .with_context(|| format!("reading baseline {}", args.baseline.display()))?;
     let candidate_bytes = std::fs::read(&args.candidate)
@@ -70,7 +75,11 @@ pub async fn promote_cmd(args: PromoteArgs) -> anyhow::Result<()> {
     let report = promote(&baseline, &candidate, args.drift_exit, &cfg);
     let json = serde_json::to_string_pretty(&report).context("serializing the promotion report")?;
     println!("{json}");
-    Ok(())
+    if args.check && !report.promote {
+        Ok(CommandOutcome::GateRejected)
+    } else {
+        Ok(CommandOutcome::Success)
+    }
 }
 
 /// Load a [`PromoteConfig`] from an optional TOML file (a `[promote]` table, falling back to the

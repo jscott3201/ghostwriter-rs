@@ -152,6 +152,9 @@ pub struct AuditSeparationArgs {
     /// Floor on `decidable_fraction` below which the corpus is treated as a data ceiling.
     #[arg(long, value_name = "F")]
     pub min_decidable_fraction: Option<f64>,
+    /// Opt into decision-bearing process exits: 0 = pass, 1 = operational error, 2 = gate rejects.
+    #[arg(long, default_value_t = false)]
+    pub check: bool,
 }
 
 /// `eval promote` flags (pure: two JSON artifacts + a drift exit code → a binary decision).
@@ -169,6 +172,9 @@ pub struct PromoteArgs {
     /// Optional path to a TOML `[promote]` config (else the A3 defaults).
     #[arg(long, value_name = "FILE")]
     pub config: Option<PathBuf>,
+    /// Opt into decision-bearing process exits: 0 = promote, 1 = operational error, 2 = gate rejects.
+    #[arg(long, default_value_t = false)]
+    pub check: bool,
 }
 
 /// The TRL export target, mapped to [`gw_schema::TrlFormat`].
