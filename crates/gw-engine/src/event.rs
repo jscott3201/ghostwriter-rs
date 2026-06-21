@@ -17,7 +17,7 @@
 //! cheapest backpressure policy for a v1 lifecycle-transition stream that is far lower-rate than the
 //! per-token delta stream the TUI sources separately.)
 
-use gw_schema::LifecycleState;
+use gw_schema::{ExportManifest, LifecycleState};
 use tokio::sync::mpsc::{Receiver, Sender, error::TrySendError};
 
 /// The default bounded capacity of the event channel. Lifecycle transitions are low-rate (a handful
@@ -86,6 +86,20 @@ pub enum EngineEvent {
         run_id: String,
         /// The 0-based shard index.
         shard: i64,
+    },
+    /// The completed run wrote its configured Parquet shard and manifest sidecar.
+    ShardExported {
+        /// The run id.
+        run_id: String,
+        /// The manifest returned by the shard export.
+        manifest: ExportManifest,
+    },
+    /// The configured end-of-run shard export failed; the run itself still stands.
+    ShardExportFailed {
+        /// The run id.
+        run_id: String,
+        /// A human-readable export failure message.
+        error: String,
     },
     /// The run finished (all shards drained, or the run halted on budget/cancellation).
     RunFinished {

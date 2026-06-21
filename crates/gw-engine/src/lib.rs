@@ -80,7 +80,7 @@ pub use checkpoint::{ShardCursor, commit_cursor, load_cursor};
 pub use clients::{AreaConfig, Clients, DEFAULT_CORRELATION_RHO, DEFAULT_K, DEFAULT_MAX_TOKENS};
 pub use error::{EngineError, Result};
 pub use event::{DEFAULT_EVENT_CAPACITY, EngineEvent, EventSink};
-pub use executor::{Engine, RunReport};
+pub use executor::{Engine, ExportSpec, RunReport};
 pub use grade::{correlation_prior, decision_from_judging, verifier_grade_from_verification};
 pub use seed::{InMemorySeedSource, SeedItem, SeedSource, record_id};
 pub use sibling::{GroupOutcome, run_group};

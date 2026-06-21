@@ -231,6 +231,12 @@ impl App {
             Action::ShardFinished { .. } => {
                 self.header.shards_finished += 1;
             }
+            Action::ShardExported { n_admitted } => {
+                self.push_log(format!("SHARD EXPORTED — {n_admitted} admitted records"));
+            }
+            Action::ShardExportFailed { error } => {
+                self.push_log(format!("EXPORT FAILED: {error}"));
+            }
             Action::RunFinished { completed } => {
                 self.header.finished = Some(completed);
             }

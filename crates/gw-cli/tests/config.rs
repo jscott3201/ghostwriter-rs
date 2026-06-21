@@ -29,6 +29,12 @@ fn toml_file_overrides_defaults() {
                 teacher_slug = "z-ai/glm-5.2"
                 k = 3
 
+                [export]
+                out = "auto.parquet"
+                format = "chatml"
+                cot = "masked"
+                dataset_version = "1.2.3"
+
                 [[area.judges]]
                 slug = "deepseek/deepseek-v4-pro"
                 family = "deepseek"
@@ -41,6 +47,30 @@ fn toml_file_overrides_defaults() {
         assert_eq!(cfg.area.k, 3);
         assert_eq!(cfg.area.judges.len(), 1);
         assert_eq!(cfg.area.judges[0].family, "deepseek");
+        let export = cfg.export.expect("export section parsed");
+        assert_eq!(export.out, Path::new("auto.parquet"));
+        assert_eq!(export.format, gw_schema::TrlFormat::ChatML);
+        assert_eq!(export.cot, gw_schema::CotPolicy::Masked);
+        assert_eq!(export.dataset_version, Some(semver::Version::new(1, 2, 3)));
+        Ok(())
+    });
+}
+
+#[test]
+fn export_cot_defaults_to_supervised() {
+    Jail::expect_with(|jail| {
+        jail.create_file(
+            "gw.toml",
+            r#"
+                [export]
+                out = "auto.parquet"
+                format = "chatml"
+            "#,
+        )?;
+        let cfg = Config::load(Some(Path::new("gw.toml"))).expect("loads the TOML fixture");
+        let export = cfg.export.expect("export section parsed");
+        assert_eq!(export.cot, gw_schema::CotPolicy::Supervised);
+        assert!(export.dataset_version.is_none());
         Ok(())
     });
 }

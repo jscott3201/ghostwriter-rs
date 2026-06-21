@@ -33,6 +33,7 @@ use serde::{Deserialize, Serialize};
 
 use gw_engine::AreaConfig;
 use gw_judge::{AreaThresholds, PanelJudge};
+use gw_schema::{CotPolicy, TrlFormat};
 
 /// The default SQLite store path when none is configured.
 pub const DEFAULT_DB_PATH: &str = "gw-run.sqlite";
@@ -55,6 +56,8 @@ pub struct Config {
     pub frame_ms: u64,
     /// The per-area generation + grading configuration.
     pub area: AreaSettings,
+    /// Optional end-of-run Parquet shard export configuration.
+    pub export: Option<ExportSettings>,
 }
 
 impl Default for Config {
@@ -67,8 +70,24 @@ impl Default for Config {
             tick_ms: 250,
             frame_ms: 33,
             area: AreaSettings::default(),
+            export: None,
         }
     }
+}
+
+/// Optional end-of-run Parquet shard export settings.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExportSettings {
+    /// Destination Parquet shard path.
+    pub out: PathBuf,
+    /// The TRL export target template recorded in the manifest.
+    pub format: TrlFormat,
+    /// Whether reasoning enters the supervised loss region on export.
+    #[serde(default)]
+    pub cot: CotPolicy,
+    /// Optional dataset version recorded in the sidecar manifest.
+    #[serde(default)]
+    pub dataset_version: Option<semver::Version>,
 }
 
 /// The per-area settings, mirroring the engine's [`AreaConfig`] with serde-deriving fields.
@@ -222,6 +241,7 @@ mod tests {
         assert_eq!(cfg.db, PathBuf::from(DEFAULT_DB_PATH));
         assert_eq!(cfg.provider_base_url, gw_providers::DEFAULT_BASE_URL);
         assert_eq!(cfg.area.k, gw_engine::DEFAULT_K);
+        assert!(cfg.export.is_none());
     }
 
     #[test]

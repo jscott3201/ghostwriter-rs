@@ -21,14 +21,15 @@
 //! shards at once. The [`Store`](gw_storage::Store) is `Clone` (shared pool), the `Clients` bundle is
 //! `Clone`, so each shard task owns its own handle.
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
-use gw_schema::LifecycleState;
-use gw_storage::RunStatus;
+use gw_schema::{CotPolicy, ExportManifest, LifecycleState, TrlFormat};
+use gw_storage::{RecordFilter, RunStatus, export_parquet};
 
 use crate::checkpoint::{commit_cursor, load_cursor};
 use crate::clients::{AreaConfig, Clients};
@@ -51,6 +52,7 @@ pub struct Engine {
     clients: Clients,
     area: AreaConfig,
     max_in_flight: u32,
+    export: Option<ExportSpec>,
 }
 
 /// Whether a processed seed item is fully settled (safe to commit the cursor past) or still has
@@ -141,6 +143,19 @@ pub struct RunReport {
     pub completed: bool,
 }
 
+/// Optional end-of-run Parquet shard export configuration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExportSpec {
+    /// Destination Parquet shard path.
+    pub dst: PathBuf,
+    /// The target training-data template recorded in the export manifest.
+    pub target: TrlFormat,
+    /// Whether reasoning enters the supervised loss region for this export.
+    pub cot: CotPolicy,
+    /// Optional dataset version recorded in the sidecar manifest.
+    pub dataset_version: Option<semver::Version>,
+}
+
 impl Engine {
     /// Build an engine over the injected clients + area config, with the `max_in_flight` concurrency
     /// cap (clamped to ≥ 1).
@@ -150,7 +165,22 @@ impl Engine {
             clients,
             area,
             max_in_flight: max_in_flight.max(1),
+            export: None,
         }
+    }
+
+    /// Enable an end-of-run Parquet shard export. Without this builder, [`Self::run`] skips the export
+    /// step entirely.
+    #[must_use]
+    pub fn with_export(mut self, spec: ExportSpec) -> Self {
+        self.export = Some(spec);
+        self
+    }
+
+    /// Return the configured end-of-run export spec, if one was installed.
+    #[must_use]
+    pub fn export_spec(&self) -> Option<&ExportSpec> {
+        self.export.as_ref()
     }
 
     /// Run `source`'s seed space end-to-end under `run_id`, honoring `cancel`. Creates/loads the run
@@ -253,6 +283,24 @@ impl Engine {
 
         let mut report = self.tally(run_id).await?;
         report.completed = !halted;
+        if !halted
+            && report.admitted > 0
+            && let Some(spec) = &self.export
+        {
+            match self.export_shard(run_id, spec).await {
+                Ok(manifest) => self.clients.events.emit(EngineEvent::ShardExported {
+                    run_id: run_id.to_string(),
+                    manifest,
+                }),
+                Err(err) => {
+                    tracing::warn!(run_id, error = %err, "end-of-run shard export failed");
+                    self.clients.events.emit(EngineEvent::ShardExportFailed {
+                        run_id: run_id.to_string(),
+                        error: err.to_string(),
+                    })
+                }
+            };
+        }
         self.clients.events.emit(EngineEvent::RunFinished {
             run_id: run_id.to_string(),
             completed: report.completed,
@@ -512,7 +560,6 @@ impl Engine {
     /// generation, so this recovers the exact spend a prior launch incurred. Non-finite/negative costs
     /// are treated as 0 (mirroring the meter's charge clamp), so a garbled row never corrupts the total.
     async fn persisted_spend(&self, run_id: &str) -> Result<f64> {
-        use gw_storage::RecordFilter;
         let records = self
             .clients
             .store
@@ -526,9 +573,34 @@ impl Engine {
         Ok(total)
     }
 
+    /// Export this run's records to the configured Parquet shard and write the adjacent manifest
+    /// sidecar.
+    ///
+    /// The Parquet exporter filters to admitted records; this method scans the whole run so the returned
+    /// manifest records both `n_records` and `n_admitted`. The configured `dataset_version` is set only
+    /// on the sidecar manifest, not on record rows.
+    ///
+    /// # Errors
+    /// Returns an engine error if scanning records, writing the Parquet shard, serializing the manifest,
+    /// or writing the manifest sidecar fails.
+    pub async fn export_shard(&self, run_id: &str, spec: &ExportSpec) -> Result<ExportManifest> {
+        let records = self
+            .clients
+            .store
+            .scan(&RecordFilter::new().run_id(run_id))
+            .await?;
+        let mut manifest = export_parquet(&records, spec.target, spec.cot, &spec.dst).await?;
+        manifest.dataset_version = spec.dataset_version.clone();
+        let sidecar = manifest_sidecar_path(&spec.dst);
+        let body = serde_json::to_vec_pretty(&manifest)?;
+        tokio::fs::write(&sidecar, body)
+            .await
+            .map_err(gw_storage::StorageError::from)?;
+        Ok(manifest)
+    }
+
     /// Tally the run's records by terminal lifecycle state for the [`RunReport`].
     async fn tally(&self, run_id: &str) -> Result<RunReport> {
-        use gw_storage::RecordFilter;
         let mut report = RunReport::default();
         let count = |state| {
             let store = &self.clients.store;
@@ -552,6 +624,12 @@ impl Engine {
         report.errored = count(LifecycleState::Error).await?;
         Ok(report)
     }
+}
+
+fn manifest_sidecar_path(dst: &Path) -> PathBuf {
+    let mut path = dst.as_os_str().to_owned();
+    path.push(".manifest.json");
+    PathBuf::from(path)
 }
 
 /// `true` when a record at `state` is at a DECIDED outcome a fault must NEVER overwrite (NO-CLOBBER): a
