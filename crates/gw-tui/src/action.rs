@@ -69,6 +69,16 @@ pub enum Action {
         /// The 0-based shard index.
         shard: i64,
     },
+    /// The configured end-of-run Parquet shard export succeeded.
+    ShardExported {
+        /// Number of admitted records written to the shard.
+        n_admitted: u64,
+    },
+    /// The configured end-of-run Parquet shard export failed.
+    ShardExportFailed {
+        /// A human-readable export failure message.
+        error: String,
+    },
     /// The run finished; `completed` is `true` only if every shard drained cleanly.
     RunFinished {
         /// `true` if the run drained cleanly; `false` if it halted on budget/cancellation.
@@ -133,6 +143,10 @@ impl Action {
                 Action::RecordErrored { record_id, error }
             }
             EngineEvent::ShardFinished { shard, .. } => Action::ShardFinished { shard },
+            EngineEvent::ShardExported { manifest, .. } => Action::ShardExported {
+                n_admitted: manifest.n_admitted,
+            },
+            EngineEvent::ShardExportFailed { error, .. } => Action::ShardExportFailed { error },
             EngineEvent::RunFinished { completed, .. } => Action::RunFinished { completed },
         }
     }
@@ -211,6 +225,33 @@ mod tests {
                     shard: 2,
                 },
                 Action::ShardFinished { shard: 2 },
+            ),
+            (
+                EngineEvent::ShardExported {
+                    run_id: "r".into(),
+                    manifest: gw_schema::ExportManifest {
+                        target: gw_schema::TrlFormat::ChatML,
+                        cot_policy: gw_schema::CotPolicy::Supervised,
+                        dataset_version: None,
+                        hub_commit_sha: None,
+                        n_records: 2,
+                        n_admitted: 1,
+                        decontam_index_id: None,
+                        build_inputs_hash: "hash".into(),
+                        multi_turn_loss: gw_schema::MultiTurnLoss::AllAssistant,
+                        diversity: None,
+                    },
+                },
+                Action::ShardExported { n_admitted: 1 },
+            ),
+            (
+                EngineEvent::ShardExportFailed {
+                    run_id: "r".into(),
+                    error: "disk full".into(),
+                },
+                Action::ShardExportFailed {
+                    error: "disk full".into(),
+                },
             ),
             (
                 EngineEvent::RunFinished {

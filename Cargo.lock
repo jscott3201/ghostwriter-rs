@@ -1329,6 +1329,7 @@ dependencies = [
 name = "gw-engine"
 version = "0.1.0"
 dependencies = [
+ "arrow",
  "futures",
  "gw-format",
  "gw-generate",
@@ -1336,6 +1337,7 @@ dependencies = [
  "gw-providers",
  "gw-schema",
  "gw-storage",
+ "parquet",
  "semver",
  "serde",
  "serde_json",

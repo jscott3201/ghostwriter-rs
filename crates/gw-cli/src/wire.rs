@@ -39,7 +39,7 @@ use std::sync::Arc;
 use anyhow::Context;
 use tokio_util::sync::CancellationToken;
 
-use gw_engine::{AreaConfig, BudgetMeter, Clients, Engine, EventSink};
+use gw_engine::{AreaConfig, BudgetMeter, Clients, Engine, EventSink, ExportSpec};
 use gw_generate::NullEmbedder;
 use gw_judge::NullSandboxOracle;
 use gw_providers::{OpenRouterProvider, Provider};
@@ -128,8 +128,20 @@ pub async fn build_engine(
     let provider = build_provider(config)?;
     let clients = build_clients(store.clone(), provider, events, config.budget_usd);
     let area: AreaConfig = config.area_config();
-    let engine = Engine::new(clients, area, max_in_flight);
+    let mut engine = Engine::new(clients, area, max_in_flight);
+    if let Some(spec) = export_spec(config) {
+        engine = engine.with_export(spec);
+    }
     Ok((engine, store))
+}
+
+fn export_spec(config: &Config) -> Option<ExportSpec> {
+    config.export.as_ref().map(|export| ExportSpec {
+        dst: export.out.clone(),
+        target: export.format,
+        cot: export.cot,
+        dataset_version: export.dataset_version.clone(),
+    })
 }
 
 /// A fresh [`CancellationToken`] for a run. Factored out so `gen run` and `gen tui` mint it the same
@@ -142,6 +154,7 @@ pub fn new_cancel_token() -> CancellationToken {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ExportSettings;
 
     #[tokio::test]
     async fn build_clients_wires_shared_provider_into_both_rails() {
@@ -190,5 +203,24 @@ mod tests {
                 assert!(msg.contains("OPENROUTER_API_KEY"), "got: {msg}");
             }
         }
+    }
+
+    #[test]
+    fn export_config_maps_to_engine_spec() {
+        let config = Config {
+            export: Some(ExportSettings {
+                out: "auto.parquet".into(),
+                format: gw_schema::TrlFormat::ChatML,
+                cot: gw_schema::CotPolicy::Masked,
+                dataset_version: Some(semver::Version::new(1, 2, 3)),
+            }),
+            ..Config::default()
+        };
+
+        let spec = export_spec(&config).expect("export spec is built");
+        assert_eq!(spec.dst, std::path::PathBuf::from("auto.parquet"));
+        assert_eq!(spec.target, gw_schema::TrlFormat::ChatML);
+        assert_eq!(spec.cot, gw_schema::CotPolicy::Masked);
+        assert_eq!(spec.dataset_version, Some(semver::Version::new(1, 2, 3)));
     }
 }
