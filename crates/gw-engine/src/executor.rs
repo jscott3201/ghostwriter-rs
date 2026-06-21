@@ -283,6 +283,8 @@ impl Engine {
 
         let mut report = self.tally(run_id).await?;
         report.completed = !halted;
+        // The gate and export filter both use lifecycle-admitted records, so an exported shard agrees
+        // with the run report and best-of-k retained siblings remain excluded.
         if !halted
             && report.admitted > 0
             && let Some(spec) = &self.export
@@ -576,19 +578,25 @@ impl Engine {
     /// Export this run's records to the configured Parquet shard and write the adjacent manifest
     /// sidecar.
     ///
-    /// The Parquet exporter filters to admitted records; this method scans the whole run so the returned
-    /// manifest records both `n_records` and `n_admitted`. The configured `dataset_version` is set only
-    /// on the sidecar manifest, not on record rows.
+    /// The shared Parquet exporter filters by judge verdict; end-of-run export narrows that input to
+    /// lifecycle-admitted records first so the shard agrees with [`RunReport::admitted`]. The configured
+    /// `dataset_version` is set only on the sidecar manifest, not on record rows.
     ///
     /// # Errors
     /// Returns an engine error if scanning records, writing the Parquet shard, serializing the manifest,
     /// or writing the manifest sidecar fails.
     pub async fn export_shard(&self, run_id: &str, spec: &ExportSpec) -> Result<ExportManifest> {
-        let records = self
+        let mut records = self
             .clients
             .store
             .scan(&RecordFilter::new().run_id(run_id))
             .await?;
+        records.retain(|record| {
+            matches!(
+                record.lifecycle.state,
+                LifecycleState::Admitted | LifecycleState::Formatted | LifecycleState::Exported
+            )
+        });
         let mut manifest = export_parquet(&records, spec.target, spec.cot, &spec.dst).await?;
         manifest.dataset_version = spec.dataset_version.clone();
         let sidecar = manifest_sidecar_path(&spec.dst);
