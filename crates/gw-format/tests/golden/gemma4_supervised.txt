@@ -1,0 +1,8 @@
+<bos><|turn>user
+You are a precise math tutor.
+
+What is 12 * 8, and why?<turn|>
+<|turn>model
+<|channel>thought
+12 * 8: 10*8=80, 2*8=16, 80+16=96.
+<channel|>96. Break it into 10*8=80 and 2*8=16, then add.<turn|>

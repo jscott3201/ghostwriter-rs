@@ -1,0 +1,17 @@
+{
+  "conversations": [
+    {
+      "from": "system",
+      "value": "You are a precise math tutor."
+    },
+    {
+      "from": "human",
+      "value": "What is 12 * 8, and why?"
+    },
+    {
+      "from": "gpt",
+      "reasoning": "12 * 8: 10*8=80, 2*8=16, 80+16=96.",
+      "value": "96. Break it into 10*8=80 and 2*8=16, then add."
+    }
+  ]
+}

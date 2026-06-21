@@ -1,0 +1,12 @@
+<bos><|turn>user
+Hi<turn|>
+<|turn>model
+<|channel>thought
+Greet the user.
+<channel|>Hello! How can I help?<turn|>
+<|turn>user
+What is 2+2?<turn|>
+<|turn>model
+<|channel>thought
+2+2=4.
+<channel|>4<turn|>

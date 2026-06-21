@@ -13,6 +13,10 @@ workspace = true
 
 [dependencies]
 gw-schema.workspace = true
-serde.workspace = true
+serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 minijinja.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+semver.workspace = true

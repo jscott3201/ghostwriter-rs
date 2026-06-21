@@ -1,0 +1,1 @@
+<|start|>system<|message|>You are a precise math tutor.<|end|><|start|>user<|message|>What is 12 * 8, and why?<|end|><|start|>assistant<|channel|>analysis<|message|>12 * 8: 10*8=80, 2*8=16, 80+16=96.<|end|><|start|>assistant<|channel|>final<|message|>96. Break it into 10*8=80 and 2*8=16, then add.<|return|>

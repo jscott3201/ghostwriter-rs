@@ -1,0 +1,50 @@
+{#-
+  gemma4.jinja — byte-exact Gemma-4 turn renderer for ghostwriter-rs.
+
+  ============================ TOKEN-BYTE PROVENANCE ============================
+  The literal token bytes below are transcribed from _research/07 §2.4 and
+  _research/05 §2 (per the pinned `google/gemma-4-12B-it` chat_template.jinja):
+
+    turn  OPEN  : "<|turn>" ~ role ~ "\n"     (ASYMMETRIC pipe — NOT <start_of_turn>)
+    turn  CLOSE : "<turn|>\n"                  (ASYMMETRIC pipe — NOT <end_of_turn>)
+    thought OPEN: "<|channel>thought\n"        (ASYMMETRIC — NOT symmetric <|channel|>)
+    thought CLOSE: "<channel|>"                (ASYMMETRIC)
+    BOS         : emitted by the template as the literal "<bos>" first byte.
+
+  A `model` turn ALWAYS carries a thought wrapper: it holds the reasoning when
+  supervised/masked, or is EMPTY ("<|channel>thought\n<channel|>") when stripped.
+  The model turn render is therefore byte-exact:
+    "<|turn>model\n<|channel>thought\n{reasoning}\n<channel|>{answer}<turn|>\n"
+  (supervised) or
+    "<|turn>model\n<|channel>thought\n<channel|>{answer}<turn|>\n"  (stripped).
+
+  Roles map to `user` and `model` only (assistant -> model). There is NO system
+  role: system content is folded into the NEXT user turn by the Rust caller before
+  this template runs (see render::gemma4). The upstream `<|think|>` thinking-enable
+  marker is NOT emitted (the system turn is folded away). This is the harness
+  simplification of the upstream conditional-system-turn behavior, documented there.
+
+  TODO(gemma4-verify): these bytes are per the _research spec. Before production
+  SFT they MUST be diff-verified byte-for-byte against the official pinned
+  `google/gemma-4-12B-it` chat_template.jinja (do NOT fetch at runtime / in tests),
+  including the omitted `<|think|>` system-turn marker.
+  ==============================================================================
+
+  Context shape (provided by render::gemma4):
+    turns : [ { role: "user" | "model",
+                content: str,
+                reasoning: str | None } ]   # None => empty thought wrapper (stripped)
+-#}
+{{- "<bos>" -}}
+{%- for turn in turns -%}
+{{- "<|turn>" ~ turn.role ~ "\n" -}}
+{%- if turn.role == "model" -%}
+{{- "<|channel>thought\n" -}}
+{%- if turn.reasoning is not none -%}
+{{- turn.reasoning ~ "\n" -}}
+{%- endif -%}
+{{- "<channel|>" -}}
+{%- endif -%}
+{{- turn.content -}}
+{{- "<turn|>\n" -}}
+{%- endfor -%}
