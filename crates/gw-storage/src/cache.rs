@@ -141,6 +141,22 @@ pub fn prompt_hash(messages: &[Message]) -> Result<String> {
     Ok(blake3_hex(&canonical_bytes(&Value::Array(projected))?))
 }
 
+/// BLAKE3 of the ordered prompt list that defines a run's seed partition manifest.
+///
+/// Each string is one post-filter user prompt in file/source order. Array order is deliberately
+/// preserved by `serde_json`, so reordering prompts changes the hash while object-key
+/// canonicalization remains available if a richer prompt source later stores structured entries.
+///
+/// # Errors
+/// Returns [`StorageError::Serde`](crate::StorageError::Serde) on a serialization failure.
+pub fn prompts_hash(prompts: &[String]) -> Result<String> {
+    let projected = prompts
+        .iter()
+        .map(|prompt| Value::String(prompt.clone()))
+        .collect();
+    Ok(blake3_hex(&canonical_bytes(&Value::Array(projected))?))
+}
+
 /// BLAKE3 of the assistant `content` only ([`gw_schema::Hashes::completion_hash`]).
 ///
 /// Deliberately EXCLUDES `reasoning`, so the same final answer reached via different CoT

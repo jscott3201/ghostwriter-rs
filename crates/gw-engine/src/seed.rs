@@ -26,6 +26,9 @@
 //! path.
 
 use gw_generate::UserTurnCandidate;
+use gw_schema::Content;
+
+use crate::Result;
 
 /// One unit of seed work for a shard: an already-elicited candidate USER turn plus its
 /// reproducibility seed and shard offset. The [`SeedSource`] yields these in order; the engine gates,
@@ -53,6 +56,17 @@ pub struct SeedItem {
 pub trait SeedSource: Send + Sync {
     /// The number of shards the seed space is partitioned into (stable for the life of the run).
     fn shard_count(&self) -> usize;
+
+    /// A stable hash of the ordered prompt list whose indices define shard assignment.
+    ///
+    /// Implementations must hash the same post-filter prompt sequence that
+    /// [`items_for_shard`](Self::items_for_shard) partitions. The shard count is intentionally not
+    /// folded into this hash; the run ledger persists it in its own column.
+    ///
+    /// # Errors
+    /// Returns [`EngineError`](crate::EngineError) if the source cannot derive or serialize the
+    /// manifest hash.
+    fn prompts_hash(&self) -> Result<String>;
 
     /// The ordered [`SeedItem`]s belonging to `shard` (0-based). MUST be deterministic — the same
     /// shard yields the same items in the same order on every call, so resume-by-offset is sound.
@@ -104,6 +118,15 @@ impl SeedSource for InMemorySeedSource {
         self.shard_count
     }
 
+    fn prompts_hash(&self) -> Result<String> {
+        let prompts = self
+            .items
+            .iter()
+            .map(candidate_prompt_text)
+            .collect::<Result<Vec<_>>>()?;
+        Ok(gw_storage::prompts_hash(&prompts)?)
+    }
+
     fn items_for_shard(&self, shard: i64) -> Vec<SeedItem> {
         let n = self.shard_count as i64;
         // Partition by `global_index % shard_count`; the per-shard offset is the position within the
@@ -119,6 +142,13 @@ impl SeedSource for InMemorySeedSource {
                 candidate: candidate.clone(),
             })
             .collect()
+    }
+}
+
+fn candidate_prompt_text(candidate: &UserTurnCandidate) -> Result<String> {
+    match &candidate.message.content {
+        Content::Text(text) => Ok(text.trim().to_string()),
+        Content::Parts(_) => Ok(serde_json::to_string(&candidate.message.content)?),
     }
 }
 
@@ -143,7 +173,7 @@ pub fn record_id(
 mod tests {
     use super::*;
     use gw_generate::{UserSeed, user_message};
-    use gw_schema::{Oracle, VerificationContract, VerificationKind};
+    use gw_schema::{ContentPart, Oracle, VerificationContract, VerificationKind};
 
     fn candidate(text: &str) -> UserTurnCandidate {
         UserTurnCandidate {
@@ -158,6 +188,12 @@ mod tests {
             difficulty_targeted: true,
             in_scope: true,
         }
+    }
+
+    fn candidate_with_content(content: Content) -> UserTurnCandidate {
+        let mut candidate = candidate("");
+        candidate.message.content = content;
+        candidate
     }
 
     #[test]
@@ -212,6 +248,51 @@ mod tests {
         let src = InMemorySeedSource::new(vec![candidate("q")], 0);
         assert_eq!(src.shard_count(), 1);
         assert_eq!(src.items_for_shard(0).len(), 1);
+    }
+
+    #[test]
+    fn prompts_hash_tracks_ordered_prompt_text() {
+        let a = InMemorySeedSource::new(vec![candidate("q1"), candidate("q2")], 1);
+        let b = InMemorySeedSource::new(vec![candidate(" q1 "), candidate("q2")], 1);
+        let c = InMemorySeedSource::new(vec![candidate("q2"), candidate("q1")], 1);
+        assert_eq!(a.prompts_hash().unwrap(), b.prompts_hash().unwrap());
+        assert_ne!(a.prompts_hash().unwrap(), c.prompts_hash().unwrap());
+    }
+
+    #[test]
+    fn prompts_hash_distinguishes_part_boundaries_and_non_text_parts() {
+        let joined = InMemorySeedSource::new(
+            vec![candidate_with_content(Content::Parts(vec![
+                ContentPart::Text { text: "ab".into() },
+            ]))],
+            1,
+        );
+        let split = InMemorySeedSource::new(
+            vec![candidate_with_content(Content::Parts(vec![
+                ContentPart::Text { text: "a".into() },
+                ContentPart::Text { text: "b".into() },
+            ]))],
+            1,
+        );
+        let image_only = InMemorySeedSource::new(
+            vec![candidate_with_content(Content::Parts(vec![
+                ContentPart::ImageUrl {
+                    image_url: "https://example.test/image.png".into(),
+                },
+            ]))],
+            1,
+        );
+        let empty_parts =
+            InMemorySeedSource::new(vec![candidate_with_content(Content::Parts(vec![]))], 1);
+
+        let joined_hash = joined.prompts_hash().unwrap();
+        let split_hash = split.prompts_hash().unwrap();
+        let image_hash = image_only.prompts_hash().unwrap();
+        let empty_hash = empty_parts.prompts_hash().unwrap();
+
+        assert_ne!(joined_hash, split_hash);
+        assert_ne!(image_hash, empty_hash);
+        assert_ne!(split_hash, image_hash);
     }
 
     #[test]
