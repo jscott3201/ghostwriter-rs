@@ -109,6 +109,11 @@ pub struct SeparationReport {
     pub control_k_overall_mean: f64,
     /// Mean selector argmax across eligible groups — the level the controls are measured against.
     pub selector_mean: f64,
+    /// Count of NON-FINITE `judging.aggregate` values (NaN/±inf) dropped before any selector/
+    /// control computation. Such a value can never reach an argmax/mean/winrate (which would
+    /// silently poison the headline numbers), so it is excluded and counted HERE — a `> 0` value
+    /// flags an upstream data-hygiene problem WITHOUT corrupting the reported levels.
+    pub n_nonfinite_aggregates: usize,
     /// WARN flag: too little decidable data to trust the selector signal. Set iff
     /// `n_decidable < cfg.min_decidable_groups` OR
     /// `decidable_fraction < cfg.min_decidable_fraction`. A low gap UNDER this flag is a DATA
@@ -137,8 +142,16 @@ impl Group {
 }
 
 /// Group a slice of records by `prompt_hash` into [`Group`]s, in a deterministic key order.
-fn group_records(records: &[TrainingRecord]) -> Vec<Group> {
+///
+/// Returns the groups plus the count of NON-FINITE `judging.aggregate` values dropped (NaN/±inf).
+/// A non-finite aggregate is excluded from the group's score vector so it can never reach an
+/// argmax/mean/winrate and silently poison the headline numbers; the dropped count is surfaced in
+/// [`SeparationReport::n_nonfinite_aggregates`] so the corruption is VISIBLE, not absorbed. The
+/// verifier classification (`passed`) is unaffected — every sibling still counts toward all-pass /
+/// all-fail / mixed and `decidable_fraction`.
+fn group_records(records: &[TrainingRecord]) -> (Vec<Group>, usize) {
     let mut by_hash: BTreeMap<&str, Group> = BTreeMap::new();
+    let mut n_nonfinite = 0usize;
     for rec in records {
         let key = rec.hashes.prompt_hash.as_str();
         let g = by_hash.entry(key).or_insert_with(|| Group {
@@ -147,10 +160,14 @@ fn group_records(records: &[TrainingRecord]) -> Vec<Group> {
         });
         g.passed.push(rec.verification.all_passed);
         if let Some(agg) = rec.judging.aggregate {
-            g.aggregates.push(agg);
+            if agg.is_finite() {
+                g.aggregates.push(agg);
+            } else {
+                n_nonfinite += 1;
+            }
         }
     }
-    by_hash.into_values().collect()
+    (by_hash.into_values().collect(), n_nonfinite)
 }
 
 /// Mean of a non-empty slice; `0.0` for an empty slice (callers guard emptiness where it matters).
@@ -170,7 +187,7 @@ fn mean(xs: &[f64]) -> f64 {
 /// that scan a real [`Store`] never see empty hashes because [`Store::put`] recomputes them.
 #[must_use]
 pub fn analyze(records: &[TrainingRecord], cfg: &SeparationConfig) -> SeparationReport {
-    let groups = group_records(records);
+    let (groups, n_nonfinite_aggregates) = group_records(records);
     let n_groups = groups.len();
 
     let mut n_singletons = 0usize;
@@ -256,6 +273,7 @@ pub fn analyze(records: &[TrainingRecord], cfg: &SeparationConfig) -> Separation
         control_per_prompt_mean,
         control_k_overall_mean,
         selector_mean,
+        n_nonfinite_aggregates,
         low_data,
     }
 }
@@ -398,5 +416,62 @@ mod tests {
             rep.low_data,
             "a low decidable_fraction is a data ceiling and must WARN"
         );
+    }
+
+    /// SEP-2 regression: a non-finite `judging.aggregate` (NaN/±inf) is DROPPED before any
+    /// selector/control math, so it can never poison the headline numbers; it is counted in
+    /// `n_nonfinite_aggregates` instead, and the clean group's signal is untouched.
+    #[test]
+    fn nonfinite_aggregates_are_dropped_not_propagated() {
+        let mut recs = Vec::new();
+        // A clean all-pass group: argmax 0.9, mean 0.5 (selector wins by 0.4).
+        recs.extend(group("clean", true, &[0.9, 0.5, 0.1]));
+        // An all-pass group polluted with NaN and +inf among two finite scores.
+        recs.push(scored_sibling("dirty", true, Some(0.8)));
+        recs.push(scored_sibling("dirty", true, Some(f64::NAN)));
+        recs.push(scored_sibling("dirty", true, Some(f64::INFINITY)));
+        recs.push(scored_sibling("dirty", true, Some(0.4)));
+        let rep = analyze(&recs, &SeparationConfig::default());
+
+        // Two non-finite values were dropped and surfaced — not silently absorbed.
+        assert_eq!(rep.n_nonfinite_aggregates, 2);
+        // Every headline number stays finite (no NaN/inf leaked through).
+        for v in [
+            rep.selector_winrate,
+            rep.selector_mean_gap,
+            rep.selector_mean,
+            rep.control_per_prompt_mean,
+            rep.control_k_overall_mean,
+        ] {
+            assert!(v.is_finite(), "no non-finite value may reach the report");
+        }
+        // The documented invariant holds, and both all-pass groups stay eligible + winning.
+        assert!(rep.selector_mean_gap >= 0.0, "gap is >= 0 always");
+        assert_eq!(
+            rep.n_selector_eligible, 2,
+            "both all-pass groups keep >= 2 finite scores"
+        );
+        assert!((rep.selector_winrate - 1.0).abs() < 1e-12);
+    }
+
+    /// SEP-2 regression: dropping a non-finite score can pull a group below 2 finite aggregates,
+    /// making it (correctly) NOT selector-eligible — without changing its verifier classification.
+    #[test]
+    fn nonfinite_can_make_a_group_ineligible_without_changing_classification() {
+        let recs = vec![
+            scored_sibling("ap", true, Some(0.9)),
+            scored_sibling("ap", true, Some(f64::NAN)), // dropped ⇒ only 1 finite score left
+        ];
+        let rep = analyze(&recs, &SeparationConfig::default());
+        assert_eq!(rep.n_nonfinite_aggregates, 1);
+        assert_eq!(
+            rep.n_allpass, 1,
+            "still an all-pass group (verifier unaffected)"
+        );
+        assert_eq!(
+            rep.n_selector_eligible, 0,
+            "only 1 finite score ⇒ ineligible"
+        );
+        assert!(rep.selector_mean.is_finite());
     }
 }

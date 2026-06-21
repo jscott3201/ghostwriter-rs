@@ -123,10 +123,15 @@ impl PromoteConfig {
     /// The measured-σ override (`ab_avg_n >= 3`) is a documented v1 follow-up; see the field docs.
     #[must_use]
     fn sigma_for(&self, benchmark: &str) -> f64 {
+        // A σ is a standard deviation: clamp to a FINITE, NON-NEGATIVE value so a malformed prior
+        // (negative or NaN/inf) can never invert the noise band. An inverted (negative) band would
+        // classify a benchmark as BOTH a win and a regress at once — a self-contradictory verdict
+        // (PROM-3). An un-prior'd or non-finite entry collapses to `0.0` (band == `ab_min_delta`).
         self.ab_benchmark_sigma
             .get(benchmark)
             .copied()
-            .unwrap_or(0.0)
+            .filter(|s| s.is_finite())
+            .map_or(0.0, |s| s.max(0.0))
     }
 }
 
@@ -186,7 +191,8 @@ impl PromotionReport {
         let mut any_win = false;
         let mut any_regress = false;
         for b in &self.benchmarks {
-            let band = ab_min_delta + ab_sigma_k * b.sigma;
+            // Same non-negative clamp as `promote`, so re-derivation stays faithful (PROM-3).
+            let band = (ab_min_delta + ab_sigma_k * b.sigma).max(0.0);
             if b.delta > band {
                 any_win = true;
             } else if b.delta < -band {
@@ -228,7 +234,9 @@ pub fn promote(
         };
         let delta = c - b;
         let sigma = cfg.sigma_for(&name);
-        let noise_band = cfg.ab_min_delta + cfg.ab_sigma_k * sigma;
+        // Clamp the band non-negative so `win` (delta > band) and `regress` (delta < -band) are
+        // ALWAYS mutually exclusive, even under a degenerate `ab_min_delta`/`ab_sigma_k` (PROM-3).
+        let noise_band = (cfg.ab_min_delta + cfg.ab_sigma_k * sigma).max(0.0);
         benchmarks.push(BenchmarkOutcome {
             name,
             baseline: b,
@@ -409,5 +417,48 @@ mod tests {
         let r = EvalResults::from_json(json).unwrap();
         assert!((r.aggregate - 0.66).abs() < 1e-12);
         assert_eq!(r.benchmarks.get("gsm8k"), Some(&0.71));
+    }
+
+    /// PROM-3 regression: a NEGATIVE σ prior must NOT invert the noise band. The band is clamped
+    /// non-negative, so `win` and `regress` stay mutually exclusive and a zero delta is neither.
+    #[test]
+    fn negative_sigma_prior_does_not_invert_the_band() {
+        let mut c = PromoteConfig::default();
+        c.ab_benchmark_sigma.insert("gsm8k".to_string(), -0.5);
+        let base = results(0.50, &[("gsm8k", 0.50)]);
+        let cand = results(0.50, &[("gsm8k", 0.50)]); // zero delta everywhere
+        let rep = promote(&base, &cand, 0, &c);
+        let gsm = rep.benchmarks.iter().find(|b| b.name == "gsm8k").unwrap();
+        assert!(gsm.sigma >= 0.0, "sigma clamped non-negative");
+        assert!(gsm.noise_band >= 0.0, "band never inverts");
+        assert!(
+            !(gsm.win && gsm.regress),
+            "win and regress must be mutually exclusive"
+        );
+        assert!(
+            !gsm.win && !gsm.regress,
+            "a zero delta is noise, not a win or a regress"
+        );
+    }
+
+    /// PROM-3 regression: a NON-FINITE σ prior (NaN/inf) collapses to `0.0` rather than poisoning
+    /// the band, keeping every per-benchmark verdict finite.
+    #[test]
+    fn nonfinite_sigma_prior_collapses_to_zero() {
+        let mut c = PromoteConfig::default();
+        c.ab_benchmark_sigma.insert("gsm8k".to_string(), f64::NAN);
+        c.ab_benchmark_sigma
+            .insert("ifeval".to_string(), f64::INFINITY);
+        let base = results(0.50, &[("gsm8k", 0.50), ("ifeval", 0.50)]);
+        let cand = results(0.50, &[("gsm8k", 0.60), ("ifeval", 0.60)]);
+        let rep = promote(&base, &cand, 0, &c);
+        for b in &rep.benchmarks {
+            assert!(
+                b.sigma.is_finite() && b.sigma >= 0.0,
+                "{}: sigma must be finite and non-negative",
+                b.name
+            );
+            assert!(b.noise_band.is_finite(), "{}: band must be finite", b.name);
+        }
     }
 }
