@@ -1,0 +1,6 @@
+<|im_start|>system
+You are a precise math tutor.<|im_end|>
+<|im_start|>user
+What is 12 * 8, and why?<|im_end|>
+<|im_start|>assistant
+<think>12 * 8: 10*8=80, 2*8=16, 80+16=96.</think>96. Break it into 10*8=80 and 2*8=16, then add.<|im_end|>
