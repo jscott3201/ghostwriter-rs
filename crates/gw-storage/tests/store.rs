@@ -8,7 +8,7 @@ use std::sync::Arc;
 use arrow::array::{Array, StringArray};
 use gw_schema::{
     Content, Generation, Hashes, JudgeVote, Judging, Lifecycle, LifecycleState, Message,
-    Provenance, ReasoningEffort, TeacherRef, TrainingRecord, TrlFormat, Verdict,
+    Provenance, ReasoningDetail, ReasoningEffort, TeacherRef, TrainingRecord, TrlFormat, Verdict,
 };
 use gw_storage::{RecordFilter, ResumePoint, RunStatus, Store};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -255,6 +255,34 @@ async fn scan_filters_by_verdict_and_min_aggregate() {
 }
 
 #[tokio::test]
+async fn min_aggregate_excludes_null_aggregate_records() {
+    // E: an Admit record whose judging.aggregate is None (NULL column) must be EXCLUDED by
+    // min_judge_aggregate — locks in the NULL-safe `judge_aggregate >= ?` contract.
+    let store = seeded_store().await;
+    store
+        .put(&record("admit-null", "run-1", Some(Verdict::Admit), None))
+        .await
+        .unwrap();
+    store
+        .put(&record(
+            "admit-scored",
+            "run-1",
+            Some(Verdict::Admit),
+            Some(0.5),
+        ))
+        .await
+        .unwrap();
+
+    let filtered = store
+        .scan(&RecordFilter::new().min_judge_aggregate(0.0))
+        .await
+        .unwrap();
+    // Only the scored record qualifies; the NULL-aggregate one is excluded even at floor 0.0.
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].record_id, "admit-scored");
+}
+
+#[tokio::test]
 async fn scan_filters_by_run() {
     let store = seeded_store().await;
     store.create_run("run-2", "{}", None).await.unwrap();
@@ -382,6 +410,94 @@ async fn record_hash_is_content_only_allowlist() {
         gw_storage::completion_hash(&base.messages).unwrap(),
         gw_storage::completion_hash(&diff_reasoning.messages).unwrap(),
     );
+}
+
+#[tokio::test]
+async fn record_hash_distinguishes_reasoning_details_text() {
+    // reasoning_details is VERBATIM CoT content: a record carrying its whole CoT in
+    // reasoning_details[].text with flat reasoning=None must NOT collide with a different one.
+    let mut a = record("rd-a", "run-1", Some(Verdict::Admit), Some(0.9));
+    if let Some(m) = a.messages.last_mut() {
+        m.reasoning = None;
+        m.reasoning_details = Some(vec![ReasoningDetail::Text {
+            text: "first structured chain of thought".into(),
+            signature: None,
+            id: Some("id-1".into()),
+            format: Some("anthropic-claude-v1".into()),
+            index: 0,
+        }]);
+    }
+    let mut b = a.clone();
+    if let Some(m) = b.messages.last_mut() {
+        m.reasoning_details = Some(vec![ReasoningDetail::Text {
+            text: "an ENTIRELY DIFFERENT structured chain of thought".into(),
+            signature: None,
+            id: Some("id-1".into()),
+            format: Some("anthropic-claude-v1".into()),
+            index: 0,
+        }]);
+    }
+    assert_ne!(
+        gw_storage::record_hash(&a).unwrap(),
+        gw_storage::record_hash(&b).unwrap(),
+        "different reasoning_details[].text must change record_hash"
+    );
+
+    // But the volatile per-detail id/index/signature/format must NOT change the hash.
+    let mut c = a.clone();
+    if let Some(m) = c.messages.last_mut() {
+        m.reasoning_details = Some(vec![ReasoningDetail::Text {
+            text: "first structured chain of thought".into(),
+            signature: Some("sig-xyz".into()),
+            id: Some("id-99".into()),
+            format: Some("openai-o1".into()),
+            index: 7,
+        }]);
+    }
+    assert_eq!(
+        gw_storage::record_hash(&a).unwrap(),
+        gw_storage::record_hash(&c).unwrap(),
+        "volatile reasoning_details ids/index/signature/format must not move the hash"
+    );
+}
+
+#[tokio::test]
+async fn record_hash_distinguishes_message_name() {
+    // name = speaker / tool name; it is content. Distinct names must not collide.
+    let a = record("nm-a", "run-1", Some(Verdict::Admit), Some(0.9));
+    let mut b = a.clone();
+    if let Some(m) = b.messages.last_mut() {
+        m.name = Some("alice".into());
+    }
+    assert_ne!(
+        gw_storage::record_hash(&a).unwrap(),
+        gw_storage::record_hash(&b).unwrap(),
+        "a differing message name must change record_hash"
+    );
+}
+
+#[tokio::test]
+async fn put_recomputes_and_overwrites_wrong_caller_hash() {
+    // B: the store is authoritative — a deliberately WRONG non-empty caller hash is overwritten
+    // by the content hash in BOTH the stored envelope and the indexed column.
+    let store = seeded_store().await;
+    let mut rec = record("rec-w", "run-1", Some(Verdict::Admit), Some(0.9));
+    rec.hashes.record_hash = "deadbeefwronghash".into();
+    rec.hashes.prompt_hash = "alsowrong".into();
+    rec.hashes.completion_hash = "stillwrong".into();
+    let truth = gw_storage::record_hash(&rec).unwrap();
+    assert_ne!(truth, "deadbeefwronghash");
+
+    store.put(&rec).await.unwrap();
+    let got = store.get("rec-w").await.unwrap();
+    assert_eq!(
+        got.hashes.record_hash, truth,
+        "envelope hash must be recomputed"
+    );
+    assert_ne!(got.hashes.record_hash, "deadbeefwronghash");
+
+    let col: (String,) = sqlx_query_record_hash(&store, "rec-w").await;
+    assert_eq!(col.0, truth, "indexed column must be recomputed too");
 }
 
 #[tokio::test]

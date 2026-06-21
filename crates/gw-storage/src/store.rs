@@ -35,8 +35,10 @@ static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 /// Cheap to clone — internally an `Arc`-backed [`sqlx::SqlitePool`] — so the handle can be shared
 /// across spawned generation workers. **Concurrency model:** SQLite in WAL mode allows many
 /// concurrent readers but only ONE writer at a time; the pool serializes write transactions and a
-/// blocked writer waits up to a 5-second busy timeout for the lock before surfacing
-/// `SQLITE_BUSY`.
+/// blocked writer waits up to a 5-second busy timeout for the lock before surfacing `SQLITE_BUSY`.
+/// Read-modify-write transactions ([`advance_lifecycle`](Store::advance_lifecycle)) take an
+/// IMMEDIATE write lock at the start of the transaction, so a competing writer queues on the busy
+/// timeout instead of failing with `SQLITE_BUSY_SNAPSHOT` partway through.
 /// Cloning the handle shares the same pool — it does not grant additional write parallelism.
 /// The full operation set is implemented across the crate's modules (records, cache, run-ledger)
 /// but presents as inherent methods on this one type.

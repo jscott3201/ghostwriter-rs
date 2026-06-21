@@ -15,7 +15,7 @@
 //!    so teacher/verify/judge reruns and crash-restarts never re-spend tokens.
 
 use blake3::Hasher;
-use gw_schema::{Content, Message, TrainingRecord};
+use gw_schema::{Content, Message, ReasoningDetail, TrainingRecord};
 use serde_json::Value;
 
 use crate::error::Result;
@@ -39,20 +39,25 @@ fn canonical_bytes(value: &Value) -> Result<Vec<u8>> {
 /// [`gw_schema::Hashes::record_hash`]).
 ///
 /// The hash is built ONLY from content-bearing fields — `schema_version`, `training_area`,
-/// sorted `tags`, the per-turn `(role, content, reasoning, tool_calls)`, and `tools` — and
-/// EXCLUDES every non-content field: `record_id`, `provenance`, `generation`, `verification`,
-/// `judging`, `reasoning_quality`, `lifecycle` (including the mutating `state`), `hashes`,
-/// `cost`, and `dataset_version`. So two byte-identical regenerations hash equal regardless of
-/// run/teacher/served-by/cost/judge votes, and a record's hash does not change as its lifecycle
-/// advances. The flat `reasoning` text IS content (different CoT → different hash); the
-/// structured `reasoning_details` ids are volatile and are deliberately not included.
+/// sorted `tags`, the per-turn `(role, content, reasoning, reasoning_details, tool_calls, name)`,
+/// and `tools` — and EXCLUDES every non-content field: `record_id`, `provenance`, `generation`,
+/// `verification`, `judging`, `reasoning_quality`, `lifecycle` (including the mutating `state`),
+/// `hashes`, `cost`, and `dataset_version`. So two byte-identical regenerations hash equal
+/// regardless of run/teacher/served-by/cost/judge votes, and a record's hash does not change as
+/// its lifecycle advances. Both the flat `reasoning` text AND the `reasoning_details` content
+/// payloads ARE content (different CoT → different hash); only the volatile per-detail
+/// `id` / `index` / `signature` / `format` are excluded.
 ///
 /// # Errors
 /// Returns [`StorageError::Serde`](crate::StorageError::Serde) if the record fails to serialize.
 pub fn record_hash(rec: &TrainingRecord) -> Result<String> {
     let mut tags = rec.tags.clone();
     tags.sort();
-    let messages: Vec<Value> = rec.messages.iter().map(message_content_value).collect();
+    let messages: Vec<Value> = rec
+        .messages
+        .iter()
+        .map(message_content_value)
+        .collect::<Result<_>>()?;
     let mut projection = serde_json::Map::new();
     projection.insert(
         "schema_version".into(),
@@ -71,15 +76,48 @@ pub fn record_hash(rec: &TrainingRecord) -> Result<String> {
 }
 
 /// The content projection of one message used by [`record_hash`]: role + clean content + flat
-/// reasoning text + tool calls. Excludes `name` and the structured `reasoning_details` (whose
-/// provider-native ids are volatile).
-fn message_content_value(m: &Message) -> Value {
-    serde_json::json!({
+/// reasoning text + a CONTENT-ONLY projection of `reasoning_details` + `tool_calls` + `name`.
+///
+/// `reasoning_details` is verbatim CoT content (the Verify-gate substrate) — a record can carry
+/// its whole chain-of-thought in `reasoning_details[].text` with flat `reasoning = None`, so it
+/// MUST contribute to the hash, but only its content payload (`text` / `summary` / `data`) plus
+/// the variant discriminant — the volatile `id` / `index` / `signature` / `format` are excluded.
+/// `name` (speaker / tool name) is content too: distinct speakers / tool names must not collide.
+///
+/// # Errors
+/// Returns [`StorageError::Serde`](crate::StorageError::Serde) if a content part fails to
+/// serialize.
+fn message_content_value(m: &Message) -> Result<Value> {
+    let reasoning_details = m.reasoning_details.as_ref().map(|details| {
+        details
+            .iter()
+            .map(reasoning_detail_value)
+            .collect::<Vec<_>>()
+    });
+    Ok(serde_json::json!({
         "role": m.role,
-        "content": content_value(&m.content),
+        "content": content_value(&m.content)?,
         "reasoning": m.reasoning,
+        "reasoning_details": reasoning_details,
         "tool_calls": m.tool_calls,
-    })
+        "name": m.name,
+    }))
+}
+
+/// Project one [`gw_schema::ReasoningDetail`] to its content payload + variant discriminant,
+/// EXCLUDING the volatile `id` / `index` / `signature` / `format` fields.
+fn reasoning_detail_value(d: &ReasoningDetail) -> Value {
+    match d {
+        ReasoningDetail::Text { text, .. } => {
+            serde_json::json!({ "type": "reasoning.text", "text": text })
+        }
+        ReasoningDetail::Summary { summary, .. } => {
+            serde_json::json!({ "type": "reasoning.summary", "summary": summary })
+        }
+        ReasoningDetail::Encrypted { data, .. } => {
+            serde_json::json!({ "type": "reasoning.encrypted", "data": data })
+        }
+    }
 }
 
 /// BLAKE3 of the canonicalized prompt (every non-assistant message's role + clean `content`).
@@ -94,12 +132,12 @@ pub fn prompt_hash(messages: &[Message]) -> Result<String> {
         .iter()
         .filter(|m| m.role != gw_schema::Role::Assistant)
         .map(|m| {
-            serde_json::json!({
+            Ok(serde_json::json!({
                 "role": m.role,
-                "content": content_value(&m.content),
-            })
+                "content": content_value(&m.content)?,
+            }))
         })
-        .collect();
+        .collect::<Result<_>>()?;
     Ok(blake3_hex(&canonical_bytes(&Value::Array(projected))?))
 }
 
@@ -115,17 +153,21 @@ pub fn completion_hash(messages: &[Message]) -> Result<String> {
         .iter()
         .filter(|m| m.role == gw_schema::Role::Assistant)
         .map(|m| content_value(&m.content))
-        .collect();
+        .collect::<Result<_>>()?;
     Ok(blake3_hex(&canonical_bytes(&Value::Array(answers))?))
 }
 
 /// Project a [`Content`] to a canonical JSON value for hashing. Plain text becomes a JSON
 /// string; multimodal `Parts` route through `serde_json::to_value` so they pick up the same
 /// sorted-key canonicalization as the rest of the projection (image/audio refs still contribute).
-fn content_value(c: &Content) -> Value {
+///
+/// # Errors
+/// Returns [`StorageError::Serde`](crate::StorageError::Serde) if a multimodal part fails to
+/// serialize — propagated rather than masked, so distinct payloads can never collapse to `null`.
+fn content_value(c: &Content) -> Result<Value> {
     match c {
-        Content::Text(t) => Value::String(t.clone()),
-        Content::Parts(parts) => serde_json::to_value(parts).unwrap_or(Value::Null),
+        Content::Text(t) => Ok(Value::String(t.clone())),
+        Content::Parts(parts) => Ok(serde_json::to_value(parts)?),
     }
 }
 

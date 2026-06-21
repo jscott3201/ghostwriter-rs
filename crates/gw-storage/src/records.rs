@@ -88,28 +88,24 @@ impl Store {
     ///
     /// The full envelope is stored as JSON in `record_json`; `lifecycle_state`, `verdict`,
     /// `judge_aggregate`, `record_hash`, and `prompt_hash` are projected out for indexed
-    /// filtering and dedup. Hashes (`record_hash` / `prompt_hash` / `completion_hash`) are read
-    /// from the record's own [`gw_schema::Hashes`] when set, else computed from the envelope.
-    /// The computed hashes are written BACK into the stored `record_json` so the persisted
-    /// envelope and the indexed projection columns agree (a later `get`/`scan`/export sees a
-    /// populated `hashes.record_hash`). Re-`put`-ting the same id overwrites the row — one row.
+    /// filtering and dedup. The store is AUTHORITATIVE for content hashes: `record_hash` /
+    /// `prompt_hash` / `completion_hash` are UNCONDITIONALLY recomputed from the record's content
+    /// here (a caller-supplied hash — even a non-empty, wrong one — is never trusted, so it can
+    /// never corrupt the dedup key). The recomputed hashes are written BACK into the stored
+    /// `record_json` so the persisted envelope and the indexed projection columns agree. Re-`put`-
+    /// ting the same id overwrites the row — one row.
     ///
     /// # Errors
     /// Returns [`StorageError`] on a SQL fault, a serialization failure, or
     /// if the record's `provenance.run_id` does not reference an existing run (foreign key).
     pub async fn put(&self, rec: &TrainingRecord) -> Result<()> {
-        // Compute-if-empty, then persist the hashes inside the stored envelope so the JSON and
-        // the indexed columns never disagree.
+        // The store is the source of truth for content hashes: recompute them from content
+        // unconditionally and overwrite whatever the caller supplied, so the JSON, the indexed
+        // columns, and the dedup key always reflect the actual content.
         let mut stored = rec.clone();
-        if stored.hashes.record_hash.is_empty() {
-            stored.hashes.record_hash = crate::cache::record_hash(rec)?;
-        }
-        if stored.hashes.prompt_hash.is_empty() {
-            stored.hashes.prompt_hash = crate::cache::prompt_hash(&rec.messages)?;
-        }
-        if stored.hashes.completion_hash.is_empty() {
-            stored.hashes.completion_hash = crate::cache::completion_hash(&rec.messages)?;
-        }
+        stored.hashes.record_hash = crate::cache::record_hash(rec)?;
+        stored.hashes.prompt_hash = crate::cache::prompt_hash(&rec.messages)?;
+        stored.hashes.completion_hash = crate::cache::completion_hash(&rec.messages)?;
         let record_hash = stored.hashes.record_hash.clone();
         let prompt_hash = stored.hashes.prompt_hash.clone();
         let record_json = serde_json::to_string(&stored)?;
@@ -242,6 +238,10 @@ impl Store {
     /// legal. Enforcing the legal state-machine edges is the orchestrator's job; this method just
     /// records whatever transition it is told to.
     ///
+    /// The transaction starts with `BEGIN IMMEDIATE` so the read-modify-write of `record_json`
+    /// acquires the write lock up front: under file-backed concurrency a second writer waits on
+    /// the busy timeout rather than failing with `SQLITE_BUSY_SNAPSHOT` mid-transaction.
+    ///
     /// # Errors
     /// Returns [`StorageError::NotFound`] if `record_id` does not exist; a SQL or serde error
     /// rolls the transaction back.
@@ -253,7 +253,8 @@ impl Store {
     ) -> Result<()> {
         let state = state_str(new_state);
         let at = now_rfc3339();
-        let mut tx = self.pool().begin().await?;
+        // Acquire the write lock immediately (avoids SQLITE_BUSY_SNAPSHOT on the read-then-write).
+        let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
 
         // Read the envelope inside the txn so the JSON we rewrite reflects the current row.
         let row: Option<(String,)> =
