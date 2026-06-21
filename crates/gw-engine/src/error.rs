@@ -10,10 +10,10 @@
 //!
 //! `gw-engine` IS the unhappy path of the system. Every transition that could fail surfaces a
 //! variant here rather than swallowing the fault: a budget breach
-//! ([`BudgetExceeded`](EngineError::BudgetExceeded)), a cancellation
-//! ([`Cancelled`](EngineError::Cancelled)), and a violated orchestration invariant
+//! ([`BudgetExceeded`](EngineError::BudgetExceeded)) and a violated orchestration invariant
 //! ([`Invariant`](EngineError::Invariant), e.g. an identity correlation matrix handed to a `k > 1`
-//! panel grade, which is fail-loud by contract) are all explicit, catchable errors.
+//! panel grade, which is fail-loud by contract) are explicit, catchable errors. Cancellation is normal
+//! run-control and returns `Ok(RunReport { completed: false, .. })`.
 
 use thiserror::Error;
 
@@ -66,12 +66,6 @@ pub enum EngineError {
         cap: f64,
     },
 
-    /// The job's [`CancellationToken`](tokio_util::sync::CancellationToken) was cancelled (Ctrl-C, an
-    /// `Abort` budget breach, or operator stop). The record's last persisted state stands; on
-    /// relaunch it re-enters from there (crash-resume).
-    #[error("cancelled: {0}")]
-    Cancelled(String),
-
     /// An orchestration INVARIANT was violated — a programmer/config fault surfaced LOUD at the seam
     /// rather than silently corrupting a record. The load-bearing cases: an identity correlation
     /// matrix handed to a `k > 1` panel grade (which would degrade the correlation guard to
@@ -108,7 +102,7 @@ impl EngineError {
     ///
     /// NOT record-level (INFRASTRUCTURE — fatal to the run): `Storage` (the data plane is down — every
     /// record would fail the same way), `Serde` (an engine-owned envelope is corrupt), `BudgetExceeded`
-    /// / `Cancelled` (run-level control flow, handled separately), and `Invariant` (a programmer/config
+    /// (run-level control flow, handled separately), and `Invariant` (a programmer/config
     /// bug — fail loud rather than silently park record after record).
     ///
     /// SYSTEMIC PROVIDER FAULTS are the subtle case (F2/H-B). A `Generate`/`Judge` error WRAPS a
@@ -134,7 +128,6 @@ impl EngineError {
             EngineError::Storage(_)
             | EngineError::Serde(_)
             | EngineError::BudgetExceeded { .. }
-            | EngineError::Cancelled(_)
             | EngineError::Invariant(_) => false,
         }
     }
@@ -326,7 +319,6 @@ mod tests {
             }
             .is_record_level()
         );
-        assert!(!EngineError::Cancelled("ctrl-c".into()).is_record_level());
     }
 
     #[test]

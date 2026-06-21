@@ -27,10 +27,11 @@ use gw_generate::{
     GatedUserTurn, RecordContext, SamplingPreset, TeacherCall, assemble, generate_assistant,
     plan_group, synthesize_user_turn,
 };
-use gw_schema::{LifecycleState, TeacherRef, TrainingRecord};
+use gw_schema::{BudgetBreach, LifecycleState, TeacherRef, TrainingRecord};
 use gw_storage::{Store, now_rfc3339, prompt_hash};
 
 use crate::clients::{AreaConfig, Clients};
+use crate::control::RunControl;
 use crate::error::{EngineError, Result};
 use crate::event::EngineEvent;
 use crate::seed::{SeedItem, record_id};
@@ -54,11 +55,25 @@ pub async fn run_group(
     seed: &SeedItem,
     clients: &Clients,
     area: &AreaConfig,
+    control: RunControl<'_>,
 ) -> Result<GroupOutcome> {
     let plans = plan_group(SamplingPreset::official().with_seed(seed.seed), area.k);
     let mut siblings: Vec<TrainingRecord> = Vec::with_capacity(plans.len());
+    let mut interrupted = false;
+    let ctx = GroupDrive {
+        run_id,
+        shard,
+        seed,
+        clients,
+        area,
+        control,
+    };
 
     for plan in &plans {
+        if control.is_cancelled() {
+            interrupted = true;
+            break;
+        }
         let rid = record_id(run_id, shard, seed.seed, 0, plan.completion_index);
 
         // F1: drive THIS sibling, ISOLATING a record-level fault to THIS sibling. The group drives
@@ -68,8 +83,11 @@ pub async fn run_group(
         // CONTINUES; `select_and_finalize` then elects a winner among the healthy survivors. An
         // INFRASTRUCTURE fault (systemic — it would fail every sibling identically) still propagates
         // out to abort the run, attributed to this sibling for the audit trail.
-        match drive_sibling(run_id, &rid, shard, seed, plan, clients, area).await {
-            Ok(driven) => siblings.push(driven),
+        match drive_sibling(&ctx, &rid, plan).await {
+            Ok(driven) => {
+                interrupted |= control.is_cancelled();
+                siblings.push(driven);
+            }
             // The budget gate tripped before this sibling could generate (Drain): stop fanning out.
             Err(SiblingOutcome::BudgetGated) => break,
             // This sibling faulted at the record level: it is parked at `Error`; keep its (now terminal)
@@ -80,18 +98,32 @@ pub async fn run_group(
         }
     }
 
-    let best = select_and_finalize(&mut siblings, clients, area).await?;
-    Ok(GroupOutcome { siblings, best })
+    if control.is_cancelled() {
+        interrupted = true;
+    }
+    let best = if interrupted {
+        None
+    } else {
+        select_and_finalize(&mut siblings, clients, area, control).await?
+    };
+    interrupted |= control.is_cancelled();
+    Ok(GroupOutcome {
+        siblings,
+        best,
+        interrupted,
+    })
 }
 
 /// The outcome of running one best-of-k group: every sibling (driven to terminal) and the admitted
 /// member's record id (`None` if none was admitted — every sibling was rejected/escalated).
 #[derive(Debug, Clone, PartialEq)]
 pub struct GroupOutcome {
-    /// All siblings in the group, each at its terminal lifecycle state.
+    /// All siblings reached so far, each at its latest persisted lifecycle state.
     pub siblings: Vec<TrainingRecord>,
     /// The record id of the admitted (best) sibling, if any.
     pub best: Option<String>,
+    /// `true` when cancellation stopped this group at a persisted transition boundary.
+    pub interrupted: bool,
 }
 
 /// The control-flow outcome of generating + driving ONE best-of-k sibling (the `Err` arms of
@@ -109,6 +141,15 @@ enum SiblingOutcome {
     Fatal(EngineError),
 }
 
+struct GroupDrive<'a> {
+    run_id: &'a str,
+    shard: i64,
+    seed: &'a SeedItem,
+    clients: &'a Clients,
+    area: &'a AreaConfig,
+    control: RunControl<'a>,
+}
+
 /// Generate (if needed) and drive ONE best-of-k sibling to `Judged`, ISOLATING its faults (F1).
 ///
 /// Returns the sibling driven to `Judged` (or its persisted state on crash-resume) on success. On
@@ -118,36 +159,44 @@ enum SiblingOutcome {
 /// for the audit trail) to abort the run. A budget-gated pre-generation stop returns
 /// [`SiblingOutcome::BudgetGated`].
 async fn drive_sibling(
-    run_id: &str,
+    ctx: &GroupDrive<'_>,
     rid: &str,
-    shard: i64,
-    seed: &SeedItem,
     plan: &gw_generate::SiblingPlan,
-    clients: &Clients,
-    area: &AreaConfig,
 ) -> std::result::Result<TrainingRecord, SiblingOutcome> {
     // Crash-resume + never-re-spend: if this sibling is already persisted, drive it from its last state
     // rather than re-generating (the teacher is never re-spent for an already-generated id). A sibling
     // already parked at `Error` (a prior pass isolated it) is terminal — `drive_to_judged` returns it
     // unchanged, so a resume neither re-spends nor re-faults it.
-    let rec = match clients.store.get(rid).await {
+    let rec = match ctx.clients.store.get(rid).await {
         Ok(existing) => existing,
         Err(gw_storage::StorageError::NotFound(_)) => {
             // Budget gate: stop dispatching NEW teacher work once the cap is reached (Drain).
-            if !clients.budget.may_dispatch() {
+            if !ctx.clients.budget.may_dispatch() {
+                if ctx.control.on_breach() == BudgetBreach::Abort {
+                    ctx.control.cancel();
+                }
                 return Err(SiblingOutcome::BudgetGated);
             }
-            match generate_and_persist(run_id, rid, shard, seed, plan.sampling, clients, area).await
+            match generate_and_persist(
+                ctx.run_id,
+                rid,
+                ctx.shard,
+                ctx.seed,
+                plan.sampling,
+                ctx.clients,
+                ctx.area,
+            )
+            .await
             {
                 Ok(rec) => rec,
                 Err(e) => {
                     return Err(classify_sibling_fault(
                         e.attribute_to(rid),
                         rid,
-                        seed,
-                        run_id,
-                        clients,
-                        area,
+                        ctx.seed,
+                        ctx.run_id,
+                        ctx.clients,
+                        ctx.area,
                     )
                     .await);
                 }
@@ -161,11 +210,17 @@ async fn drive_sibling(
         }
     };
 
-    match drive_to_judged(rec, clients, area).await {
+    match drive_to_judged(rec, ctx.clients, ctx.area, ctx.control.token()).await {
         Ok(driven) => Ok(driven),
-        Err(e) => {
-            Err(classify_sibling_fault(e.attribute_to(rid), rid, seed, run_id, clients, area).await)
-        }
+        Err(e) => Err(classify_sibling_fault(
+            e.attribute_to(rid),
+            rid,
+            ctx.seed,
+            ctx.run_id,
+            ctx.clients,
+            ctx.area,
+        )
+        .await),
     }
 }
 
@@ -364,8 +419,7 @@ fn plan_for(seed: &SeedItem, sampling: SamplingPreset, k: u32) -> gw_generate::S
 }
 
 /// `true` when a sibling's state is in the admitted set (it passed admission): `Admitted`,
-/// `Formatted`, or `Exported`. A sibling in this set is an ESTABLISHED winner — the group already
-/// admitted it on a prior (pre-crash) pass.
+/// `Formatted`, or `Exported`.
 fn is_admitted_state(state: LifecycleState) -> bool {
     matches!(
         state,
@@ -373,16 +427,24 @@ fn is_admitted_state(state: LifecycleState) -> bool {
     )
 }
 
+/// `true` when a sibling is the established group winner from a prior pass.
+///
+/// An established winner is one already admitted or one driven to the `Revising` handoff. Retained
+/// non-winners are forced to `Rejected`, so a sibling at `Revising` can only be the elected winner.
+fn is_established_winner(state: LifecycleState) -> bool {
+    is_admitted_state(state) || state == LifecycleState::Revising
+}
+
 /// Finalize a group of siblings: admit ONLY the single best, RETAIN the rest (INVARIANT 11), and stay
 /// CRASH-IDEMPOTENT (E1) — never elect a SECOND winner when one was already admitted on a prior pass.
 ///
-/// CRASH-RESUME GUARD (E1): a crash can land AFTER the best sibling reached `Admitted`/`Exported` but
-/// BEFORE the shard cursor committed, so on relaunch this re-runs over the SAME group. It first scans
-/// ALL siblings for one already in the admitted set ([`is_admitted_state`]). If one exists, THAT is the
-/// established winner: every other still-`Judged` sibling is driven to a retained `Rejected` and NO
-/// second winner is elected (the established winner's id is returned). Only when NO sibling is yet
-/// admitted does it elect a fresh winner: the highest-`judging.aggregate` sibling among those whose
-/// verifier hard-gate passed AND whose re-derived decision is admissible (`Accept`/`Revise`). The
+/// CRASH-RESUME GUARD (E1): a crash can land AFTER the best sibling reached `Admitted`/`Exported` or
+/// the `Revising` handoff but BEFORE the shard cursor committed, so on relaunch this re-runs over the
+/// SAME group. It first scans ALL siblings for an established winner ([`is_established_winner`]). If
+/// one exists, THAT is the established winner: every other still-`Judged` sibling is driven to a
+/// retained `Rejected` and NO second winner is elected (the established winner's id is returned). Only
+/// when NO sibling is yet established does it elect a fresh winner: the highest-`judging.aggregate`
+/// sibling among those whose verifier hard-gate passed AND whose re-derived decision is admissible. The
 /// elected best is reconciled NATURALLY (`Judged → Admitted → … → Exported`, or `Judged → Revising`);
 /// every OTHER `Judged` sibling whose own decision would ADMIT/revise is OVERRIDDEN to a retained
 /// `Rejected`, and one whose natural outcome is Reject/Escalate reconciles to it (retained / parked).
@@ -392,21 +454,22 @@ async fn select_and_finalize(
     siblings: &mut [TrainingRecord],
     clients: &Clients,
     area: &AreaConfig,
+    control: RunControl<'_>,
 ) -> Result<Option<String>> {
-    // E1 crash-idempotency: if a sibling is ALREADY admitted (a prior pass admitted it before the crash),
-    // it is the established winner — do NOT re-elect. Retain every still-Judged sibling and return it.
+    // E1 crash-idempotency: if a sibling is ALREADY established as the winner from a prior pass, do NOT
+    // re-elect. Retain every still-Judged sibling and return it.
     if let Some(winner_idx) = siblings
         .iter()
-        .position(|s| is_admitted_state(s.lifecycle.state))
+        .position(|s| is_established_winner(s.lifecycle.state))
     {
         // F3 (H-A): DRIVE the established winner before returning. A crash can land with the winner at
         // `Admitted`/`Formatted` (admitted but not yet exported); without this it would be stranded at
         // that state across resumes — an honest lifecycle requires it reach `Exported`. `drive` is
         // idempotent: a winner already at `Exported` returns immediately (no re-work, no re-spend).
-        let finalized = drive(siblings[winner_idx].clone(), clients, area).await?;
+        let finalized = drive(siblings[winner_idx].clone(), clients, area, control.token()).await?;
         let winner_id = finalized.record_id.clone();
         siblings[winner_idx] = finalized;
-        retain_remaining_judged(siblings, Some(winner_idx), clients, area).await?;
+        retain_remaining_judged(siblings, Some(winner_idx), clients, area, control.token()).await?;
         return Ok(Some(winner_id));
     }
 
@@ -433,11 +496,11 @@ async fn select_and_finalize(
     // Reconcile the elected best naturally; retain every other still-Judged sibling.
     let mut best_id = None;
     if let Some(i) = best_idx {
-        let finalized = drive(siblings[i].clone(), clients, area).await?;
+        let finalized = drive(siblings[i].clone(), clients, area, control.token()).await?;
         best_id = Some(finalized.record_id.clone());
         siblings[i] = finalized;
     }
-    retain_remaining_judged(siblings, best_idx, clients, area).await?;
+    retain_remaining_judged(siblings, best_idx, clients, area, control.token()).await?;
     Ok(best_id)
 }
 
@@ -450,6 +513,7 @@ async fn retain_remaining_judged(
     keep_idx: Option<usize>,
     clients: &Clients,
     area: &AreaConfig,
+    cancel: &tokio_util::sync::CancellationToken,
 ) -> Result<()> {
     for (i, sib) in siblings.iter_mut().enumerate() {
         if Some(i) == keep_idx {
@@ -475,7 +539,7 @@ async fn retain_remaining_judged(
             *sib = clients.store.get(&sib.record_id).await?;
         } else {
             // Natural non-admitted outcome (Reject / Escalate→NeedsReview): reconcile + drive normally.
-            *sib = drive(sib.clone(), clients, area).await?;
+            *sib = drive(sib.clone(), clients, area, cancel).await?;
         }
     }
     Ok(())

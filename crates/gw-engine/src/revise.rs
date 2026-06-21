@@ -24,10 +24,11 @@ use gw_generate::{
     GatedUserTurn, RecordContext, SamplingPreset, TeacherCall, assemble, generate_assistant,
     synthesize_user_turn,
 };
-use gw_schema::{LifecycleState, TeacherRef, TrainingRecord};
+use gw_schema::{BudgetBreach, LifecycleState, TeacherRef, TrainingRecord};
 use gw_storage::{StorageError, now_rfc3339, prompt_hash};
 
 use crate::clients::{AreaConfig, Clients};
+use crate::control::RunControl;
 use crate::error::{EngineError, Result};
 use crate::event::EngineEvent;
 use crate::seed::{SeedItem, record_id};
@@ -53,8 +54,12 @@ pub async fn revise_once(
     original: &TrainingRecord,
     clients: &Clients,
     area: &AreaConfig,
+    control: RunControl<'_>,
 ) -> Result<TrainingRecord> {
     if original.lifecycle.state != LifecycleState::Revising {
+        return Ok(original.clone());
+    }
+    if control.is_cancelled() {
         return Ok(original.clone());
     }
 
@@ -67,6 +72,9 @@ pub async fn revise_once(
         Ok(existing) => existing,
         Err(StorageError::NotFound(_)) => {
             if !clients.budget.may_dispatch() {
+                if control.on_breach() == BudgetBreach::Abort {
+                    control.cancel();
+                }
                 // Budget exhausted: do not start the retry; the original stays at Revising.
                 return Ok(original.clone());
             }
@@ -93,15 +101,18 @@ pub async fn revise_once(
     // INSIDE reconcile and the retry can therefore NEVER land back at `Revising`. We assert that here
     // rather than re-implementing the downgrade (which would be unreachable defense-in-depth that a
     // future change could mistake for a live second guard).
-    let driven = drive(retry, clients, area)
+    let driven = drive(retry, clients, area, control.token())
         .await
         .map_err(|e| e.attribute_to(&retry_id))?;
-    debug_assert!(
-        is_terminal(driven.lifecycle.state) && driven.lifecycle.state != LifecycleState::Revising,
-        "the revise retry must terminate without a second Revising (the tag-in-reconcile bound); \
-         got {:?}",
-        driven.lifecycle.state
-    );
+    if !control.is_cancelled() {
+        debug_assert!(
+            is_terminal(driven.lifecycle.state)
+                && driven.lifecycle.state != LifecycleState::Revising,
+            "the revise retry must terminate without a second Revising (the tag-in-reconcile bound); \
+             got {:?}",
+            driven.lifecycle.state
+        );
+    }
     Ok(driven)
 }
 

@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use gw_cli::cli::{Cli, Command, EvalCommand, ExportCot, ExportFormat, GenCommand};
+use gw_cli::cli::{Cli, Command, EvalCommand, ExportCot, ExportFormat, GenCommand, OnBreach};
 
 #[test]
 fn gen_run_parses_required_and_default_args() {
@@ -29,6 +29,7 @@ fn gen_run_parses_required_and_default_args() {
     assert!(args.config.is_none());
     assert!(args.db.is_none());
     assert!(args.budget_usd.is_none());
+    assert!(args.on_breach.is_none());
     assert!(args.k.is_none());
 }
 
@@ -50,6 +51,8 @@ fn gen_run_accepts_all_overrides() {
         "3",
         "--budget-usd",
         "12.5",
+        "--on-breach",
+        "abort",
         "--k",
         "4",
         "--max-in-flight",
@@ -63,8 +66,25 @@ fn gen_run_accepts_all_overrides() {
     assert_eq!(args.db, Some(PathBuf::from("store.sqlite")));
     assert_eq!(args.shards, 3);
     assert_eq!(args.budget_usd, Some(12.5));
+    assert_eq!(args.on_breach, Some(OnBreach::Abort));
     assert_eq!(args.k, Some(4));
     assert_eq!(args.max_in_flight, 8);
+}
+
+#[test]
+fn gen_run_on_breach_rejects_pause() {
+    let err = Cli::try_parse_from([
+        "gw",
+        "gen",
+        "run",
+        "--run-id",
+        "r1",
+        "--prompts",
+        "p.txt",
+        "--on-breach",
+        "pause",
+    ]);
+    assert!(err.is_err(), "--on-breach exposes only drain|abort");
 }
 
 #[test]

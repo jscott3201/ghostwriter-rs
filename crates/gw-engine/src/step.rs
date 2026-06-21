@@ -45,6 +45,7 @@ use gw_judge::{
 };
 use gw_schema::{CotPolicy, LifecycleState, TrainingRecord, TrlFormat};
 use gw_storage::record_hash;
+use tokio_util::sync::CancellationToken;
 
 use crate::clients::{AreaConfig, Clients};
 use crate::error::{EngineError, Result};
@@ -106,7 +107,8 @@ pub fn is_terminal(state: LifecycleState) -> bool {
 }
 
 /// Drive `rec` through `step` repeatedly until it reaches a state where `is_terminal` holds,
-/// persisting after every transition. Returns the record at its terminal state. This is the
+/// persisting after every transition. Returns the record at its terminal state, or at its last
+/// persisted non-terminal boundary if `cancel` is set before the next transition starts. This is the
 /// per-record driver the executor calls; the bounded revise re-entry is layered on top by
 /// `crate::revise`.
 ///
@@ -117,11 +119,15 @@ pub async fn drive(
     mut rec: TrainingRecord,
     clients: &Clients,
     area: &AreaConfig,
+    cancel: &CancellationToken,
 ) -> Result<TrainingRecord> {
     // A hard cap on transitions defends against a logic bug that fails to advance (it would otherwise
     // spin). The pipeline is at most ~6 forward edges from AssistantGenerated to Exported.
     for _ in 0..16 {
         if is_terminal(rec.lifecycle.state) {
+            return Ok(rec);
+        }
+        if cancel.is_cancelled() {
             return Ok(rec);
         }
         let before = rec.lifecycle.state;
@@ -153,8 +159,12 @@ pub async fn drive_to_judged(
     mut rec: TrainingRecord,
     clients: &Clients,
     area: &AreaConfig,
+    cancel: &CancellationToken,
 ) -> Result<TrainingRecord> {
     for _ in 0..8 {
+        if cancel.is_cancelled() {
+            return Ok(rec);
+        }
         match rec.lifecycle.state {
             // Only the pre-judgment edges advance here; stop the moment Judged (or beyond) is reached.
             LifecycleState::AssistantGenerated | LifecycleState::Verified => {

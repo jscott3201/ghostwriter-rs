@@ -28,15 +28,17 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
-use gw_schema::{CotPolicy, ExportManifest, LifecycleState, TrlFormat};
+use gw_schema::{BudgetBreach, CotPolicy, ExportManifest, LifecycleState, TrlFormat};
 use gw_storage::{RecordFilter, RunStatus, export_parquet};
 
 use crate::checkpoint::{commit_cursor, load_cursor};
 use crate::clients::{AreaConfig, Clients};
+use crate::control::RunControl;
 use crate::error::{EngineError, Result};
 use crate::event::EngineEvent;
 use crate::seed::SeedSource;
 use crate::sibling::run_group;
+use crate::step::is_terminal;
 
 /// Default circuit-breaker threshold (F2): if the first `CIRCUIT_BREAKER_PARKS` items in a run ALL
 /// park at `Error` with ZERO successes, the run aborts as infrastructure-fatal regardless of the error
@@ -52,6 +54,7 @@ pub struct Engine {
     clients: Clients,
     area: AreaConfig,
     max_in_flight: u32,
+    on_breach: BudgetBreach,
     export: Option<ExportSpec>,
 }
 
@@ -64,6 +67,9 @@ enum ItemOutcome {
     /// A member is parked at `Revising` because the budget was exhausted before its retry could run.
     /// The cursor MUST NOT advance past this item; a relaunch under fresh budget completes the retry.
     PendingRevise,
+    /// Cancellation stopped this item at a persisted transition boundary. The cursor MUST NOT advance
+    /// past it; a relaunch resumes from the persisted record state without re-spending.
+    Interrupted,
 }
 
 /// Whether a processed item produced ANY healthy/decided record, for the circuit-breaker (F2). An
@@ -165,8 +171,22 @@ impl Engine {
             clients,
             area,
             max_in_flight: max_in_flight.max(1),
+            on_breach: BudgetBreach::Drain,
             export: None,
         }
+    }
+
+    /// Set the run-control policy for a budget breach. The default is [`BudgetBreach::Drain`].
+    #[must_use]
+    pub fn with_on_breach(mut self, policy: BudgetBreach) -> Self {
+        self.on_breach = policy;
+        self
+    }
+
+    /// Return the configured budget-breach policy.
+    #[must_use]
+    pub fn on_breach(&self) -> BudgetBreach {
+        self.on_breach
     }
 
     /// Enable an end-of-run Parquet shard export. Without this builder, [`Self::run`] skips the export
@@ -189,7 +209,8 @@ impl Engine {
     /// CRASH-RECOVERY: re-running the SAME `run_id` over the SAME `source` resumes — each shard skips
     /// its committed seed items, and any mid-flight record re-enters at its last persisted state (the
     /// teacher is never re-spent). BUDGET: once the cap is reached, no new teacher work is dispatched
-    /// (Drain). CANCELLATION: a cancelled token stops dispatching new work and lets in-flight finish.
+    /// (Drain) or cancels in-flight items at transition boundaries (Abort). CANCELLATION: a cancelled
+    /// token stops dispatching new work and leaves in-flight items at their last persisted boundary.
     ///
     /// # Errors
     /// Propagates the first [`EngineError`] from any shard. A shard error halts the run (status
@@ -334,7 +355,7 @@ impl Engine {
             if item.offset < cursor.next_offset {
                 continue;
             }
-            // Stop dispatching new work on cancellation or budget exhaustion (Drain).
+            // Stop dispatching new work on cancellation or budget exhaustion.
             if cancel.is_cancelled() {
                 break;
             }
@@ -344,6 +365,9 @@ impl Engine {
                     spent: self.clients.budget.spent(),
                     cap: self.clients.budget.cap(),
                 });
+                if self.on_breach == BudgetBreach::Abort {
+                    cancel.cancel();
+                }
                 break;
             }
 
@@ -355,7 +379,8 @@ impl Engine {
                 .await
                 .map_err(|e| EngineError::Invariant(format!("semaphore closed: {e}")))?;
 
-            let processed = self.process_item(run_id, shard, &item).await;
+            let control = RunControl::new(cancel, self.on_breach);
+            let processed = self.process_item(run_id, shard, &item, control).await;
             drop(permit);
 
             let (item_outcome, health) = match processed {
@@ -408,6 +433,9 @@ impl Engine {
                     });
                     break;
                 }
+                // A cancellation/Abort interrupted this item at a persisted boundary. Do not commit the
+                // cursor past it; a relaunch re-drives from the record state and never re-spends.
+                ItemOutcome::Interrupted => break,
             }
         }
 
@@ -503,14 +531,21 @@ impl Engine {
         run_id: &str,
         shard: i64,
         item: &crate::seed::SeedItem,
+        control: RunControl<'_>,
     ) -> Result<(ItemOutcome, Option<ItemHealth>)> {
-        let outcome = run_group(run_id, shard, item, &self.clients, &self.area).await?;
+        let outcome = run_group(run_id, shard, item, &self.clients, &self.area, control).await?;
         // F2: the group's circuit-breaker health — did this item produce ANY non-`Error` record? Computed
         // from the group's terminal siblings (an empty group is a budget-Drain skip → neutral `None`).
         let health = group_health(&outcome.siblings);
+        if outcome.interrupted {
+            return Ok((ItemOutcome::Interrupted, None));
+        }
         // The bounded single revise: re-enter generation for any member at `Revising`.
         for sibling in &outcome.siblings {
             if sibling.lifecycle.state == LifecycleState::Revising {
+                if control.is_cancelled() {
+                    return Ok((ItemOutcome::Interrupted, None));
+                }
                 match crate::revise::revise_once(
                     run_id,
                     shard,
@@ -518,6 +553,7 @@ impl Engine {
                     sibling,
                     &self.clients,
                     &self.area,
+                    control,
                 )
                 .await
                 {
@@ -525,7 +561,13 @@ impl Engine {
                         // E2: if the revise could not run (budget-gated), the ORIGINAL is still at
                         // `Revising` and the retry was never generated/terminated. The item is NOT
                         // settled — do not commit past it, so a relaunch under fresh budget completes it.
+                        if control.is_cancelled() && !is_terminal(retry.lifecycle.state) {
+                            return Ok((ItemOutcome::Interrupted, None));
+                        }
                         if retry.lifecycle.state == LifecycleState::Revising {
+                            if control.is_cancelled() {
+                                return Ok((ItemOutcome::Interrupted, None));
+                            }
                             return Ok((ItemOutcome::PendingRevise, health));
                         }
                     }
@@ -550,6 +592,7 @@ impl Engine {
     fn budget_snapshot(&self) -> serde_json::Value {
         serde_json::json!({
             "cap_usd": self.clients.budget.cap(),
+            "on_breach": self.on_breach,
             "max_in_flight": self.max_in_flight,
             "training_area": self.area.training_area,
             "teacher_slug": self.area.teacher_slug,

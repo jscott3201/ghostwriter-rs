@@ -79,6 +79,9 @@ pub struct RunArgs {
     /// Override the run-wide budget cap in USD (else the config's `budget_usd`).
     #[arg(long, value_name = "USD")]
     pub budget_usd: Option<f64>,
+    /// Budget-breach behavior: drain lets in-flight work finish; abort stops at transition boundaries.
+    #[arg(long, value_enum, value_name = "MODE")]
+    pub on_breach: Option<OnBreach>,
     /// Override the per-area best-of-k fan-out (else the config's `area.k`).
     #[arg(long, value_name = "K")]
     pub k: Option<u32>,
@@ -224,6 +227,24 @@ impl From<ExportCot> for gw_schema::CotPolicy {
             ExportCot::Supervised => Self::Supervised,
             ExportCot::Masked => Self::Masked,
             ExportCot::Stripped => Self::Stripped,
+        }
+    }
+}
+
+/// The supported run-control budget breach modes, mapped to [`gw_schema::BudgetBreach`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum OnBreach {
+    /// Stop dispatching new work and let already-started items finish.
+    Drain,
+    /// Stop dispatching new work and halt in-flight items at transition boundaries.
+    Abort,
+}
+
+impl From<OnBreach> for gw_schema::BudgetBreach {
+    fn from(policy: OnBreach) -> Self {
+        match policy {
+            OnBreach::Drain => Self::Drain,
+            OnBreach::Abort => Self::Abort,
         }
     }
 }

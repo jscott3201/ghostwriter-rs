@@ -9,9 +9,18 @@ mod common;
 use std::sync::Arc;
 
 use common::*;
-use gw_engine::{EventSink, InMemorySeedSource, SeedSource, run_group};
-use gw_schema::LifecycleState;
+use gw_engine::{EventSink, InMemorySeedSource, RunControl, SeedSource, run_group};
+use gw_schema::{BudgetBreach, LifecycleState};
 use gw_storage::{RecordFilter, Store};
+use tokio_util::sync::CancellationToken;
+
+fn no_cancel() -> CancellationToken {
+    CancellationToken::new()
+}
+
+fn control(cancel: &CancellationToken) -> RunControl<'_> {
+    RunControl::new(cancel, BudgetBreach::Drain)
+}
 
 /// A k=2 group is driven once (sibling0 admitted→Exported, sibling1 retained→Rejected). We then force
 /// the precise crash window — reset sibling1 back to `Judged` — and re-run the group. The E1 guard must
@@ -45,7 +54,10 @@ async fn best_of_k_resume_does_not_double_admit() {
     let item = source.items_for_shard(0).remove(0);
 
     // First pass: drives the group. Exactly one admit (sibling0 → Exported), one retained (sibling1).
-    let out1 = run_group("run-e1", 0, &item, &cl, &area).await.unwrap();
+    let cancel = no_cancel();
+    let out1 = run_group("run-e1", 0, &item, &cl, &area, control(&cancel))
+        .await
+        .unwrap();
     let winner1 = out1
         .best
         .clone()
@@ -84,7 +96,9 @@ async fn best_of_k_resume_does_not_double_admit() {
     // RESUME: re-run the group. The teacher must NOT be called again (siblings already persisted;
     // ScriptedTeacher max_calls=2 would panic on a 3rd call). The E1 guard recognizes sibling0 is
     // already Exported → it is the established winner; sibling1 is driven to Rejected, NOT admitted.
-    let out2 = run_group("run-e1", 0, &item, &cl, &area).await.unwrap();
+    let out2 = run_group("run-e1", 0, &item, &cl, &area, control(&cancel))
+        .await
+        .unwrap();
     assert_eq!(
         out2.best.as_deref(),
         Some(winner1.as_str()),
@@ -139,7 +153,10 @@ async fn later_sibling_fault_does_not_clobber_healthy_sibling() {
     let source = InMemorySeedSource::new(vec![good_candidate("What is 12*8?")], 1);
     let item = source.items_for_shard(0).remove(0);
 
-    let out = run_group("run-f1", 0, &item, &cl, &area).await.unwrap();
+    let cancel = no_cancel();
+    let out = run_group("run-f1", 0, &item, &cl, &area, control(&cancel))
+        .await
+        .unwrap();
     let winner = out.best.expect("the healthy survivor c0 is admitted");
 
     let all = store
@@ -206,7 +223,10 @@ async fn resume_drives_established_winner_to_exported() {
     let source = InMemorySeedSource::new(vec![good_candidate("What is 12*8?")], 1);
     let item = source.items_for_shard(0).remove(0);
 
-    let out1 = run_group("run-f3", 0, &item, &cl, &area).await.unwrap();
+    let cancel = no_cancel();
+    let out1 = run_group("run-f3", 0, &item, &cl, &area, control(&cancel))
+        .await
+        .unwrap();
     let winner = out1.best.expect("a winner is admitted on the first pass");
 
     // Force the winner back to `Admitted` — the crash window AFTER admission but BEFORE export.
@@ -221,7 +241,9 @@ async fn resume_drives_established_winner_to_exported() {
 
     // RESUME: the F3 guard recognizes the established winner and DRIVES it forward to Exported (the
     // teacher is NOT re-spent — ScriptedTeacher max_calls=2 would panic on a 3rd call).
-    let out2 = run_group("run-f3", 0, &item, &cl, &area).await.unwrap();
+    let out2 = run_group("run-f3", 0, &item, &cl, &area, control(&cancel))
+        .await
+        .unwrap();
     assert_eq!(
         out2.best.as_deref(),
         Some(winner.as_str()),
