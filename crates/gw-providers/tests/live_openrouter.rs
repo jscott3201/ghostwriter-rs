@@ -59,7 +59,10 @@ async fn minimax_m3_via_novita_streams_reasoning() {
     .with_provider(ProviderRouting::pin(PROVIDER_SLUG))
     .with_usage_accounting();
 
-    let mut stream = provider.stream_chat(req).await.expect("open the streamed response");
+    let mut stream = provider
+        .stream_chat(req)
+        .await
+        .expect("open the streamed response");
 
     let mut content = String::new();
     let mut reasoning = String::new();
