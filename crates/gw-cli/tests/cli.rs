@@ -205,6 +205,7 @@ fn eval_audit_separation_parses() {
         "5",
         "--min-decidable-fraction",
         "0.1",
+        "--check",
     ])
     .expect("eval audit-separation parses");
     let Command::Eval(EvalCommand::AuditSeparation(args)) = cli.command else {
@@ -214,6 +215,17 @@ fn eval_audit_separation_parses() {
     assert_eq!(args.run_id, Some("r1".to_string()));
     assert_eq!(args.min_decidable_groups, Some(5));
     assert_eq!(args.min_decidable_fraction, Some(0.1));
+    assert!(args.check);
+}
+
+#[test]
+fn eval_audit_separation_check_defaults_to_false() {
+    let cli = Cli::try_parse_from(["gw", "eval", "audit-separation", "--db", "store.sqlite"])
+        .expect("eval audit-separation defaults");
+    let Command::Eval(EvalCommand::AuditSeparation(args)) = cli.command else {
+        panic!("expected eval audit-separation");
+    };
+    assert!(!args.check);
 }
 
 #[test]
@@ -230,6 +242,7 @@ fn eval_promote_parses_with_drift_exit() {
         "1",
         "--config",
         "promote.toml",
+        "--check",
     ])
     .expect("eval promote parses");
     let Command::Eval(EvalCommand::Promote(args)) = cli.command else {
@@ -239,6 +252,7 @@ fn eval_promote_parses_with_drift_exit() {
     assert_eq!(args.candidate, PathBuf::from("cand.json"));
     assert_eq!(args.drift_exit, 1);
     assert_eq!(args.config, Some(PathBuf::from("promote.toml")));
+    assert!(args.check);
 }
 
 #[test]
@@ -257,6 +271,7 @@ fn eval_promote_drift_exit_defaults_to_zero() {
         panic!("expected eval promote");
     };
     assert_eq!(args.drift_exit, 0);
+    assert!(!args.check);
 }
 
 #[test]

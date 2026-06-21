@@ -7,6 +7,7 @@ mod common;
 
 use std::io::Write;
 
+use gw_cli::CommandOutcome;
 use gw_cli::cli::{AuditSeparationArgs, PromoteArgs};
 use gw_cli::commands::eval::{audit_separation, promote_cmd};
 use gw_eval::{SeparationConfig, promote::EvalResults, promote::promote, separation};
@@ -86,10 +87,45 @@ async fn audit_separation_handler_runs_and_signal_matches() {
         run_id: Some("run-1".into()),
         min_decidable_groups: Some(1),
         min_decidable_fraction: Some(0.0),
+        check: false,
     };
-    audit_separation(args)
+    let outcome = audit_separation(args)
         .await
         .expect("audit-separation handler runs");
+    assert_eq!(outcome, CommandOutcome::Success);
+
+    cleanup_db(&db);
+}
+
+#[tokio::test]
+async fn audit_separation_check_rejects_on_low_data_and_passes_on_signal() {
+    let db = unique_temp_path("sep-check.sqlite");
+    let store = seed_separation_store(&db).await;
+    drop(store);
+
+    let reject = AuditSeparationArgs {
+        db: db.clone(),
+        run_id: Some("run-1".into()),
+        min_decidable_groups: None,
+        min_decidable_fraction: None,
+        check: true,
+    };
+    let outcome = audit_separation(reject)
+        .await
+        .expect("audit-separation check reject runs");
+    assert_eq!(outcome, CommandOutcome::GateRejected);
+
+    let pass = AuditSeparationArgs {
+        db: db.clone(),
+        run_id: Some("run-1".into()),
+        min_decidable_groups: Some(1),
+        min_decidable_fraction: Some(0.0),
+        check: true,
+    };
+    let outcome = audit_separation(pass)
+        .await
+        .expect("audit-separation check pass runs");
+    assert_eq!(outcome, CommandOutcome::Success);
 
     cleanup_db(&db);
 }
@@ -124,8 +160,31 @@ async fn promote_handler_runs_and_decision_matches() {
         candidate: candidate.clone(),
         drift_exit: 0,
         config: None,
+        check: false,
     };
-    promote_cmd(args).await.expect("promote handler runs");
+    let outcome = promote_cmd(args).await.expect("promote handler runs");
+    assert_eq!(outcome, CommandOutcome::Success);
+
+    let _ = std::fs::remove_file(&baseline);
+    let _ = std::fs::remove_file(&candidate);
+}
+
+#[tokio::test]
+async fn promote_check_promote_returns_success() {
+    let baseline = write_eval_results("base-check-pass.json", 0.50, 0.60);
+    let candidate = write_eval_results("cand-check-pass.json", 0.70, 0.80);
+
+    let args = PromoteArgs {
+        baseline: baseline.clone(),
+        candidate: candidate.clone(),
+        drift_exit: 0,
+        config: None,
+        check: true,
+    };
+    let outcome = promote_cmd(args)
+        .await
+        .expect("promote check succeeds on a promote decision");
+    assert_eq!(outcome, CommandOutcome::Success);
 
     let _ = std::fs::remove_file(&baseline);
     let _ = std::fs::remove_file(&candidate);
@@ -148,10 +207,37 @@ async fn promote_handler_rejects_on_nonzero_drift() {
         candidate: candidate.clone(),
         drift_exit: 1,
         config: None,
+        check: false,
     };
-    promote_cmd(args)
+    let outcome = promote_cmd(args)
         .await
         .expect("promote handler runs even on a reject decision");
+    assert_eq!(
+        outcome,
+        CommandOutcome::Success,
+        "default-off check preserves Ok-on-reject behavior"
+    );
+
+    let _ = std::fs::remove_file(&baseline);
+    let _ = std::fs::remove_file(&candidate);
+}
+
+#[tokio::test]
+async fn promote_check_reject_returns_gate_rejected() {
+    let baseline = write_eval_results("base-check-reject.json", 0.50, 0.60);
+    let candidate = write_eval_results("cand-check-reject.json", 0.90, 0.95);
+
+    let args = PromoteArgs {
+        baseline: baseline.clone(),
+        candidate: candidate.clone(),
+        drift_exit: 1,
+        config: None,
+        check: true,
+    };
+    let outcome = promote_cmd(args)
+        .await
+        .expect("promote check reject still runs");
+    assert_eq!(outcome, CommandOutcome::GateRejected);
 
     let _ = std::fs::remove_file(&baseline);
     let _ = std::fs::remove_file(&candidate);
@@ -164,6 +250,7 @@ async fn promote_handler_errors_on_missing_file() {
         candidate: unique_temp_path("does-not-exist-cand.json"),
         drift_exit: 0,
         config: None,
+        check: true,
     };
     let err = promote_cmd(args)
         .await

@@ -5,8 +5,10 @@
 //! integration testable. See [`gw_cli`] for the full command surface and the security posture
 //! (`OPENROUTER_API_KEY` is read from the environment ONLY).
 
-/// Build the multi-threaded tokio runtime and drive [`gw_cli::run`] to completion, exiting non-zero on
-/// an error (printing the full error chain to stderr — never the API key, which is never in scope).
+/// Build the multi-threaded tokio runtime and drive [`gw_cli::run`] to completion.
+///
+/// Exit codes: `0` for success, `1` for an operational error, and `2` when an opt-in check gate ran
+/// successfully but rejected.
 fn main() -> std::process::ExitCode {
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
@@ -16,7 +18,8 @@ fn main() -> std::process::ExitCode {
         }
     };
     match runtime.block_on(gw_cli::run()) {
-        Ok(()) => std::process::ExitCode::SUCCESS,
+        Ok(gw_cli::CommandOutcome::Success) => std::process::ExitCode::SUCCESS,
+        Ok(gw_cli::CommandOutcome::GateRejected) => std::process::ExitCode::from(2),
         Err(e) => {
             eprintln!("error: {e:#}");
             std::process::ExitCode::FAILURE

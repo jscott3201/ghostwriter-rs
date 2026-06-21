@@ -34,6 +34,18 @@ use clap::Parser;
 
 use crate::cli::{Cli, Command, EvalCommand, GenCommand};
 
+/// The process-level outcome of a successfully-run command.
+///
+/// Operational failures still return `Err`; this enum represents commands that ran to completion but
+/// may have produced a gate decision intended for CI-style checks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandOutcome {
+    /// The command completed successfully, or a gate command rejected while `--check` was off.
+    Success,
+    /// The command ran successfully and an opt-in `--check` gate rejected.
+    GateRejected,
+}
+
 /// Initialize `tracing-subscriber` from the `RUST_LOG` env filter (defaulting to `info`). Idempotent
 /// across the process: a second call is a no-op (the global subscriber is set once). NEVER logs the
 /// API key (it is not in scope of any traced value).
@@ -52,7 +64,7 @@ pub fn init_tracing() {
 /// # Errors
 /// Returns the first error from the dispatched handler (config-load, store/provider construction,
 /// engine run, export, eval, or I/O), as `anyhow::Error` (the binary boundary).
-pub async fn run() -> anyhow::Result<()> {
+pub async fn run() -> anyhow::Result<CommandOutcome> {
     init_tracing();
     dispatch(Cli::parse()).await
 }
@@ -63,13 +75,21 @@ pub async fn run() -> anyhow::Result<()> {
 ///
 /// # Errors
 /// Propagates the dispatched handler's error.
-pub async fn dispatch(cli: Cli) -> anyhow::Result<()> {
+pub async fn dispatch(cli: Cli) -> anyhow::Result<CommandOutcome> {
     match cli.command {
         Command::Gen(gen_cmd) => match gen_cmd {
-            GenCommand::Run(args) => commands::run::run(args).await,
-            GenCommand::Tui(args) => commands::tui::tui(args).await,
-            GenCommand::Export(args) => commands::export::export(args).await,
-            GenCommand::Replay(args) => commands::replay::replay(args).await,
+            GenCommand::Run(args) => commands::run::run(args)
+                .await
+                .map(|()| CommandOutcome::Success),
+            GenCommand::Tui(args) => commands::tui::tui(args)
+                .await
+                .map(|()| CommandOutcome::Success),
+            GenCommand::Export(args) => commands::export::export(args)
+                .await
+                .map(|()| CommandOutcome::Success),
+            GenCommand::Replay(args) => commands::replay::replay(args)
+                .await
+                .map(|()| CommandOutcome::Success),
         },
         Command::Eval(eval_cmd) => match eval_cmd {
             EvalCommand::AuditSeparation(args) => commands::eval::audit_separation(args).await,
