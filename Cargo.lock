@@ -1376,10 +1376,11 @@ version = "0.1.0"
 dependencies = [
  "gw-schema",
  "gw-storage",
+ "semver",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
- "tracing",
+ "tokio",
 ]
 
 [[package]]

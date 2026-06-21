@@ -16,5 +16,12 @@ gw-schema.workspace = true
 gw-storage.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tracing.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+# The async Store-reading wrapper test (tests/separation_store.rs) needs a runtime + the
+# in-memory Store + `semver::Version` to build synthetic records. All are existing workspace deps.
+gw-schema.workspace = true
+gw-storage.workspace = true
+tokio.workspace = true
+semver.workspace = true
