@@ -17,9 +17,16 @@ serde.workspace = true
 serde_json.workspace = true
 reqwest.workspace = true
 tokio.workspace = true
-tokio-util.workspace = true
 futures.workspace = true
 governor.workspace = true
-async-openai.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+# For the integration tests (tests/live_openrouter.rs live smoke + tests/provider_fixtures.rs
+# offline replay of real captured SSE). Integration tests are separate crates, so they redeclare
+# the deps they name directly. All are existing workspace deps — no new external dependency.
+gw-schema.workspace = true
+tokio.workspace = true
+futures.workspace = true
+reqwest.workspace = true
