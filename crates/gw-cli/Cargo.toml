@@ -8,6 +8,10 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+[lib]
+name = "gw_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "gw"
 path = "src/main.rs"
@@ -20,9 +24,24 @@ gw-schema.workspace = true
 gw-engine.workspace = true
 gw-eval.workspace = true
 gw-tui.workspace = true
+gw-providers.workspace = true
+gw-storage.workspace = true
+gw-generate.workspace = true
+gw-judge.workspace = true
 clap.workspace = true
 tokio.workspace = true
+tokio-util.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 figment.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }
+# The `test` feature enables `figment::Jail`, the sandbox used to test env-layered config WITHOUT
+# touching the process environment (which would require `unsafe std::env::set_var`, forbidden here).
+figment = { workspace = true, features = ["test"] }
+# Only for building `TrainingRecord` fixtures (its `schema_version: semver::Version` field) in tests.
+semver.workspace = true
