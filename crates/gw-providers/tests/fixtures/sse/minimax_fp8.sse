@@ -1,0 +1,60 @@
+: OPENROUTER PROCESSING
+
+: OPENROUTER PROCESSING
+
+: OPENROUTER PROCESSING
+
+: OPENROUTER PROCESSING
+
+: OPENROUTER PROCESSING
+
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1782017238-uCIE1jR7lGNrEJsAzO4j","object":"chat.completion.chunk","created":1782017238,"model":"minimax/minimax-m3-20260531","provider":"Minimax","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"The","reasoning_details":[{"type":"reasoning.text","text":"The","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1782017238-uCIE1jR7lGNrEJsAzO4j","object":"chat.completion.chunk","created":1782017238,"model":"minimax/minimax-m3-20260531","provider":"Minimax","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" user wants me to calculate 17 * 23 and show step-by-step","reasoning_details":[{"type":"reasoning.text","text":" user wants me to calculate 17 * 23 and show step-by-step","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1782017238-uCIE1jR7lGNrEJsAzO4j","object":"chat.completion.chunk","created":1782017238,"model":"minimax/minimax-m3-20260531","provider":"Minimax","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" reasoning.\n\n17 × 23\n= 17","reasoning_details":[{"type":"reasoning.text","text":" reasoning.\n\n17 × 23\n= 17","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1782017238-uCIE1jR7lGNrEJsAzO4j","object":"chat.completion.chunk","created":1782017238,"model":"minimax/minimax-m3-20260531","provider":"Minimax","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" × (20 + 3)\n= 17 × 20 + 17 × ","reasoning_details":[{"type":"reasoning.text","text":" × (20 + 3)\n= 17 × 20 + 17 × ","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1782017238-uCIE1jR7lGNrEJsAzO4j","object":"chat.completion.chunk","created":1782017238,"model":"minimax/minimax-m3-20260531","provider":"Minimax","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"3\n= 340 + 51\n","reasoning_details":[{"type":"reasoning.text","text":"3\n= 340 + 51\n","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1782017238-uCIE1jR7lGNrEJsAzO4j","object":"chat.completion.chunk","created":1782017238,"model":"minimax/minimax-m3-20260531","provider":"Minimax","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"= 391\n\nLet me verify: 17 × 23\n17 × 23 =","reasoning_details":[{"type":"reasoning.text","text":"= 391\n\nLet me verify: 17 × 23\n17 × 23 =","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1782017238-uCIE1jR7lGNrEJsAzO4j","object":"chat.completion.chunk","created":1782017238,"model":"minimax/minimax-m3-20260531","provider":"Minimax","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" 17 × 20 + 17 × 3\n17 × ","reasoning_details":[{"type":"reasoning.text","text":" 17 × 20 + 17 × 3\n17 × ","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1782017238-uCIE1jR7lGNrEJsAzO4j","object":"chat.completion.chunk","created":1782017238,"model":"minimax/minimax-m3-20260531","provider":"Minimax","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"20 = 340\n17 × 3 = 51\n340 + 51 =","reasoning_details":[{"type":"reasoning.text","text":"20 = 340\n17 × 3 = 51\n340 + 51 =","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1782017238-uCIE1jR7lGNrEJsAzO4j","object":"chat.completion.chunk","created":1782017238,"model":"minimax/minimax-m3-20260531","provider":"Minimax","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" 391\n\nCheck: 391 / ","reasoning_details":[{"type":"reasoning.text","text":" 391\n\nCheck: 391 / ","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1782017238-uCIE1jR7lGNrEJsAzO4j","object":"chat.completion.chunk","created":1782017238,"model":"minimax/minimax-m3-20260531","provider":"Minimax","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"17 = 23. 17 × 23 = 391.","reasoning_details":[{"type":"reasoning.text","text":"17 = 23. 17 × 23 = 391.","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1782017238-uCIE1jR7lGNrEJsAzO4j","object":"chat.completion.chunk","created":1782017238,"model":"minimax/minimax-m3-20260531","provider":"Minimax","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" ✓","reasoning_details":[{"type":"reasoning.text","text":" ✓","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1782017238-uCIE1jR7lGNrEJsAzO4j","object":"chat.completion.chunk","created":1782017238,"model":"minimax/minimax-m3-20260531","provider":"Minimax","choices":[{"index":0,"delta":{"content":"## Step-by-Step Reasoning\n\nTo compute","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1782017238-uCIE1jR7lGNrEJsAzO4j","object":"chat.completion.chunk","created":1782017238,"model":"minimax/minimax-m3-20260531","provider":"Minimax","choices":[{"index":0,"delta":{"content":" **17 × 23**, I'll break 23 into tens and","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1782017238-uCIE1jR7lGNrEJsAzO4j","object":"chat.completion.chunk","created":1782017238,"model":"minimax/minimax-m3-20260531","provider":"Minimax","choices":[{"index":0,"delta":{"content":" ones:\n\n**Step 1:** Split the second","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1782017238-uCIE1jR7lGNrEJsAzO4j","object":"chat.completion.chunk","created":1782017238,"model":"minimax/minimax-m3-20260531","provider":"Minimax","choices":[{"index":0,"delta":{"content":" number into parts\n$$17 \\times 23 = 17 \\times (20","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1782017238-uCIE1jR7lGNrEJsAzO4j","object":"chat.completion.chunk","created":1782017238,"model":"minimax/minimax-m3-20260531","provider":"Minimax","choices":[{"index":0,"delta":{"content":" + 3)$$\n\n**Step 2:** Apply the distributive property\n$$=","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1782017238-uCIE1jR7lGNrEJsAzO4j","object":"chat.completion.chunk","created":1782017238,"model":"minimax/minimax-m3-20260531","provider":"Minimax","choices":[{"index":0,"delta":{"content":" 17 \\times 20 + 17 \\times 3$$\n\n**Step 3","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1782017238-uCIE1jR7lGNrEJsAzO4j","object":"chat.completion.chunk","created":1782017238,"model":"minimax/minimax-m3-20260531","provider":"Minimax","choices":[{"index":0,"delta":{"content":":** Multiply each part\n- $17 \\times 20 =","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1782017238-uCIE1jR7lGNrEJsAzO4j","object":"chat.completion.chunk","created":1782017238,"model":"minimax/minimax-m3-20260531","provider":"Minimax","choices":[{"index":0,"delta":{"content":" 340$\n- $17 \\times 3 = 51$\n\n**Step 4","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1782017238-uCIE1jR7lGNrEJsAzO4j","object":"chat.completion.chunk","created":1782017238,"model":"minimax/minimax-m3-20260531","provider":"Minimax","choices":[{"index":0,"delta":{"content":":** Add the results\n$$340 + 51 = 391$$\n\n","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1782017238-uCIE1jR7lGNrEJsAzO4j","object":"chat.completion.chunk","created":1782017238,"model":"minimax/minimax-m3-20260531","provider":"Minimax","choices":[{"index":0,"delta":{"content":"## Final Answer\n\n**391**","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1782017238-uCIE1jR7lGNrEJsAzO4j","object":"chat.completion.chunk","created":1782017238,"model":"minimax/minimax-m3-20260531","provider":"Minimax","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":null},"finish_reason":"stop","native_finish_reason":"stop"}]}
+
+data: {"id":"gen-1782017238-uCIE1jR7lGNrEJsAzO4j","object":"chat.completion.chunk","created":1782017238,"model":"minimax/minimax-m3-20260531","provider":"Minimax","service_tier":null,"choices":[{"index":0,"delta":{"content":"","role":"assistant"},"finish_reason":"stop","native_finish_reason":"stop"}],"usage":{"prompt_tokens":195,"completion_tokens":268,"total_tokens":463,"cost":0.00034938,"is_byok":false,"prompt_tokens_details":{"cached_tokens":128,"cache_write_tokens":0,"audio_tokens":0,"video_tokens":0},"cost_details":{"upstream_inference_cost":0.00034938,"upstream_inference_prompt_cost":0.00002778,"upstream_inference_completions_cost":0.0003216},"completion_tokens_details":{"reasoning_tokens":86,"image_tokens":0,"audio_tokens":0}}}
+
+data: [DONE]
+

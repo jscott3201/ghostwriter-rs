@@ -1,0 +1,30 @@
+: OPENROUTER PROCESSING
+
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1782017227-2Cge5lMtkklHbUvXY4nk","object":"chat.completion.chunk","created":1782017227,"model":"minimax/minimax-m3-20260531","provider":"Novita","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"\nThe user is","reasoning_details":[{"type":"reasoning.text","text":"\nThe user is","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1782017227-2Cge5lMtkklHbUvXY4nk","object":"chat.completion.chunk","created":1782017227,"model":"minimax/minimax-m3-20260531","provider":"Novita","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" asking me to compute 17 * 23 and reason step by step. Let me do this carefully.\n\n17 * 23\n\nI'll use the standard multiplication approach:\n17 *","reasoning_details":[{"type":"reasoning.text","text":" asking me to compute 17 * 23 and reason step by step. Let me do this carefully.\n\n17 * 23\n\nI'll use the standard multiplication approach:\n17 *","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1782017227-2Cge5lMtkklHbUvXY4nk","object":"chat.completion.chunk","created":1782017227,"model":"minimax/minimax-m3-20260531","provider":"Novita","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" 23 = 17 * (20 + 3) = 17 * 20 + 17 * 3\n\n17 * 20 = 340\n17 * 3 = 51\n\n340 + 51 = 391\n\nLet me verify this another way:\n17 * 23\n","reasoning_details":[{"type":"reasoning.text","text":" 23 = 17 * (20 + 3) = 17 * 20 + 17 * 3\n\n17 * 20 = 340\n17 * 3 = 51\n\n340 + 51 = 391\n\nLet me verify this another way:\n17 * 23\n","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1782017227-2Cge5lMtkklHbUvXY4nk","object":"chat.completion.chunk","created":1782017227,"model":"minimax/minimax-m3-20260531","provider":"Novita","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"= (20 - 3) * 23\n= 20 * 23 - 3 * 23\n= 460 - 69\n= 391\n\nBoth methods give 391. The answer is 391.\n","reasoning_details":[{"type":"reasoning.text","text":"= (20 - 3) * 23\n= 20 * 23 - 3 * 23\n= 460 - 69\n= 391\n\nBoth methods give 391. The answer is 391.\n","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1782017227-2Cge5lMtkklHbUvXY4nk","object":"chat.completion.chunk","created":1782017227,"model":"minimax/minimax-m3-20260531","provider":"Novita","choices":[{"index":0,"delta":{"content":"## Step-by-Step Reasoning\n\n**Problem:** Compute 17 × 23\n\n","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1782017227-2Cge5lMtkklHbUvXY4nk","object":"chat.completion.chunk","created":1782017227,"model":"minimax/minimax-m3-20260531","provider":"Novita","choices":[{"index":0,"delta":{"content":"**Step 1: Break one factor into tens and ones.**\n- 23 = 20 + 3\n\n**Step 2: Distribute 17 across both parts.**\n- 17 × 23","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1782017227-2Cge5lMtkklHbUvXY4nk","object":"chat.completion.chunk","created":1782017227,"model":"minimax/minimax-m3-20260531","provider":"Novita","choices":[{"index":0,"delta":{"content":" = 17 × (20 + 3)\n- = (17 × 20) + (17 × 3)\n\n**Step 3: Compute each product.**\n- 17 × 20 = 340\n- 17 × 3 = 51\n\n**Step 4: Add the results.**\n- 340 + 51 =","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1782017227-2Cge5lMtkklHbUvXY4nk","object":"chat.completion.chunk","created":1782017227,"model":"minimax/minimax-m3-20260531","provider":"Novita","choices":[{"index":0,"delta":{"content":" 391\n\n**Verification (alternative method):**\n- 17 × 23 = (20 − 3) × 23 = 460 − 69 = 391 ✓\n\n## Final Answer\n\n**391**","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1782017227-2Cge5lMtkklHbUvXY4nk","object":"chat.completion.chunk","created":1782017227,"model":"minimax/minimax-m3-20260531","provider":"Novita","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":null},"finish_reason":"stop","native_finish_reason":"stop"}]}
+
+data: {"id":"gen-1782017227-2Cge5lMtkklHbUvXY4nk","object":"chat.completion.chunk","created":1782017227,"model":"minimax/minimax-m3-20260531","provider":"Novita","service_tier":null,"choices":[{"index":0,"delta":{"content":"","role":"assistant"},"finish_reason":"stop","native_finish_reason":"stop"}],"usage":{"prompt_tokens":195,"completion_tokens":320,"total_tokens":515,"cost":0.00041514,"is_byok":false,"prompt_tokens_details":{"cached_tokens":114,"cache_write_tokens":0,"audio_tokens":0,"video_tokens":0},"cost_details":{"upstream_inference_cost":0.00041514,"upstream_inference_prompt_cost":0.00003114,"upstream_inference_completions_cost":0.000384},"completion_tokens_details":{"reasoning_tokens":109,"image_tokens":0,"audio_tokens":0}}}
+
+data: [DONE]
+

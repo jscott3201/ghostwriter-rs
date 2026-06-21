@@ -23,8 +23,10 @@ tracing.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-# For the `#[ignore]`-gated live integration test (tests/live_openrouter.rs); the integration
-# test is a separate crate and needs these to construct messages and drive the async stream.
+# For the integration tests (tests/live_openrouter.rs live smoke + tests/provider_fixtures.rs
+# offline replay of real captured SSE). Integration tests are separate crates, so they redeclare
+# the deps they name directly. All are existing workspace deps — no new external dependency.
 gw-schema.workspace = true
 tokio.workspace = true
 futures.workspace = true
+reqwest.workspace = true
