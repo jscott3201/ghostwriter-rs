@@ -28,6 +28,7 @@ use gw_schema::{Oracle, VerificationContract, VerificationKind};
 #[derive(Debug, Clone)]
 pub struct FileSeedSource {
     candidates: Vec<UserTurnCandidate>,
+    prompts: Vec<String>,
     shard_count: usize,
     base_seed: i64,
 }
@@ -54,17 +55,19 @@ impl FileSeedSource {
     /// # Errors
     /// Returns an error if the blob yields zero usable prompts.
     pub fn from_prompts_str(text: &str, shard_count: usize) -> anyhow::Result<Self> {
-        let candidates: Vec<UserTurnCandidate> = text
+        let prompts: Vec<String> = text
             .lines()
             .map(str::trim)
             .filter(|l| !l.is_empty() && !l.starts_with('#'))
-            .map(judge_only_candidate)
+            .map(str::to_owned)
             .collect();
-        if candidates.is_empty() {
+        if prompts.is_empty() {
             anyhow::bail!("no usable prompts (all lines blank or comments)");
         }
+        let candidates = prompts.iter().map(|p| judge_only_candidate(p)).collect();
         Ok(Self {
             candidates,
+            prompts,
             shard_count: shard_count.max(1),
             base_seed: 0,
         })
@@ -104,6 +107,10 @@ fn judge_only_candidate(prompt: &str) -> UserTurnCandidate {
 impl SeedSource for FileSeedSource {
     fn shard_count(&self) -> usize {
         self.shard_count
+    }
+
+    fn prompts_hash(&self) -> gw_engine::Result<String> {
+        Ok(gw_storage::prompts_hash(&self.prompts)?)
     }
 
     fn items_for_shard(&self, shard: i64) -> Vec<SeedItem> {
@@ -159,5 +166,18 @@ mod tests {
         let src = FileSeedSource::from_prompts_str("q1\nq2", 0).expect("parses");
         assert_eq!(src.shard_count(), 1);
         assert_eq!(src.items_for_shard(0).len(), 2);
+    }
+
+    #[test]
+    fn prompts_hash_is_over_post_filter_trimmed_prompts() {
+        let a = FileSeedSource::from_prompts_str(" q1 \n# comment\nq2\n", 2).expect("parses");
+        let b = FileSeedSource::from_prompts_str("q1\n\n  # other comment\n q2  \n", 2)
+            .expect("parses");
+        let reordered = FileSeedSource::from_prompts_str("q2\nq1\n", 2).expect("parses");
+        let edited = FileSeedSource::from_prompts_str("q1\nq2 edited\n", 2).expect("parses");
+
+        assert_eq!(a.prompts_hash().unwrap(), b.prompts_hash().unwrap());
+        assert_ne!(a.prompts_hash().unwrap(), reordered.prompts_hash().unwrap());
+        assert_ne!(a.prompts_hash().unwrap(), edited.prompts_hash().unwrap());
     }
 }

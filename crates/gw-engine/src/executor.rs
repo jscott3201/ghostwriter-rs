@@ -170,7 +170,18 @@ impl Engine {
         source: &S,
         cancel: CancellationToken,
     ) -> Result<RunReport> {
-        let shard_count = source.shard_count();
+        let shard_count = source.shard_count().max(1);
+        let prompts_hash = source.prompts_hash()?;
+        self.clients
+            .store
+            .validate_or_record_run_partition(run_id, shard_count, &prompts_hash)
+            .await
+            .map_err(|err| match err {
+                gw_storage::StorageError::RunPartitionMismatch { .. } => {
+                    EngineError::Invariant(err.to_string())
+                }
+                other => other.into(),
+            })?;
         // Snapshot the config + budget cap into the run row (idempotent: re-creating resets to running).
         let config_json = serde_json::to_string(&self.budget_snapshot())?;
         self.clients

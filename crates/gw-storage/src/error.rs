@@ -2,8 +2,9 @@
 //!
 //! Variants distinguish the failure classes a caller must reason about: SQL/transport faults
 //! (`Sqlx`), migration failures (`Migrate`), JSON (de)serialization of the record envelope and
-//! cache payloads (`Serde`), the columnar export path (`Arrow` / `Parquet` / `Io`), and the
-//! lookup-miss sentinel (`NotFound`). No `anyhow` — this crate surfaces a typed error.
+//! cache payloads (`Serde`), the columnar export path (`Arrow` / `Parquet` / `Io`), run manifest
+//! mismatches (`RunPartitionMismatch`), and the lookup-miss sentinel (`NotFound`). No `anyhow` —
+//! this crate surfaces a typed error.
 
 use thiserror::Error;
 
@@ -45,6 +46,26 @@ pub enum StorageError {
     /// A lookup (`get` / `resume_cursor`) found no matching row where one was required.
     #[error("not found: {0}")]
     NotFound(String),
+
+    /// A run was relaunched with a different shard count or ordered prompts hash than the manifest
+    /// recorded on its first launch.
+    #[error(
+        "run partition mismatch for {run_id}: this run was created with \
+         shard_count={existing_shard_count}, prompts_hash={existing_prompts_hash}; \
+         got shard_count={actual_shard_count}, prompts_hash={actual_prompts_hash}"
+    )]
+    RunPartitionMismatch {
+        /// The run id being resumed.
+        run_id: String,
+        /// The shard count stored on the existing run row, or `<missing>` for legacy rows.
+        existing_shard_count: String,
+        /// The prompts hash stored on the existing run row, or `<missing>` for legacy rows.
+        existing_prompts_hash: String,
+        /// The effective shard count requested by the current launch.
+        actual_shard_count: i64,
+        /// The ordered prompts hash requested by the current launch.
+        actual_prompts_hash: String,
+    },
 }
 
 impl From<arrow::error::ArrowError> for StorageError {

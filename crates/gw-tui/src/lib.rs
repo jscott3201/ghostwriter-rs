@@ -48,7 +48,10 @@
 //! use gw_tui::{run, DEFAULT_TICK_RATE, DEFAULT_FRAME_RATE};
 //! use tokio_util::sync::CancellationToken;
 //!
-//! # async fn demo(engine: Engine, source: gw_engine::InMemorySeedSource) -> anyhow::Result<()> {
+//! # async fn demo(
+//! #     engine: Engine,
+//! #     source: gw_engine::InMemorySeedSource,
+//! # ) -> Result<(), Box<dyn std::error::Error>> {
 //! let (sink, rx) = EventSink::subscribe();
 //! let cancel = CancellationToken::new();
 //!

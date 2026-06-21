@@ -26,6 +26,9 @@
 //! path.
 
 use gw_generate::UserTurnCandidate;
+use gw_schema::{Content, ContentPart};
+
+use crate::Result;
 
 /// One unit of seed work for a shard: an already-elicited candidate USER turn plus its
 /// reproducibility seed and shard offset. The [`SeedSource`] yields these in order; the engine gates,
@@ -53,6 +56,17 @@ pub struct SeedItem {
 pub trait SeedSource: Send + Sync {
     /// The number of shards the seed space is partitioned into (stable for the life of the run).
     fn shard_count(&self) -> usize;
+
+    /// A stable hash of the ordered prompt list whose indices define shard assignment.
+    ///
+    /// Implementations must hash the same post-filter prompt sequence that
+    /// [`items_for_shard`](Self::items_for_shard) partitions. The shard count is intentionally not
+    /// folded into this hash; the run ledger persists it in its own column.
+    ///
+    /// # Errors
+    /// Returns [`EngineError`](crate::EngineError) if the source cannot derive or serialize the
+    /// manifest hash.
+    fn prompts_hash(&self) -> Result<String>;
 
     /// The ordered [`SeedItem`]s belonging to `shard` (0-based). MUST be deterministic — the same
     /// shard yields the same items in the same order on every call, so resume-by-offset is sound.
@@ -104,6 +118,15 @@ impl SeedSource for InMemorySeedSource {
         self.shard_count
     }
 
+    fn prompts_hash(&self) -> Result<String> {
+        let prompts = self
+            .items
+            .iter()
+            .map(candidate_prompt_text)
+            .collect::<Vec<_>>();
+        Ok(gw_storage::prompts_hash(&prompts)?)
+    }
+
     fn items_for_shard(&self, shard: i64) -> Vec<SeedItem> {
         let n = self.shard_count as i64;
         // Partition by `global_index % shard_count`; the per-shard offset is the position within the
@@ -119,6 +142,20 @@ impl SeedSource for InMemorySeedSource {
                 candidate: candidate.clone(),
             })
             .collect()
+    }
+}
+
+fn candidate_prompt_text(candidate: &UserTurnCandidate) -> String {
+    match &candidate.message.content {
+        Content::Text(text) => text.trim().to_string(),
+        Content::Parts(parts) => parts
+            .iter()
+            .filter_map(|part| match part {
+                ContentPart::Text { text } => Some(text.trim()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join(""),
     }
 }
 
@@ -212,6 +249,15 @@ mod tests {
         let src = InMemorySeedSource::new(vec![candidate("q")], 0);
         assert_eq!(src.shard_count(), 1);
         assert_eq!(src.items_for_shard(0).len(), 1);
+    }
+
+    #[test]
+    fn prompts_hash_tracks_ordered_prompt_text() {
+        let a = InMemorySeedSource::new(vec![candidate("q1"), candidate("q2")], 1);
+        let b = InMemorySeedSource::new(vec![candidate(" q1 "), candidate("q2")], 1);
+        let c = InMemorySeedSource::new(vec![candidate("q2"), candidate("q1")], 1);
+        assert_eq!(a.prompts_hash().unwrap(), b.prompts_hash().unwrap());
+        assert_ne!(a.prompts_hash().unwrap(), c.prompts_hash().unwrap());
     }
 
     #[test]

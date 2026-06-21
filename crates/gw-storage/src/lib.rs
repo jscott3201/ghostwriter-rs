@@ -19,9 +19,10 @@
 //! - **cache** — content hashing ([`record_hash`], [`prompt_hash`], [`completion_hash`]) and the
 //!   "never re-spend" call cache ([`cache_get`](Store::cache_get) /
 //!   [`cache_put`](Store::cache_put)).
-//! - **runledger** — [`create_run`](Store::create_run),
-//!   [`set_run_status`](Store::set_run_status), [`checkpoint`](Store::checkpoint), and
-//!   [`resume_cursor`](Store::resume_cursor) for crash recovery.
+//! - **runledger** — [`validate_or_record_run_partition`](Store::validate_or_record_run_partition),
+//!   [`create_run`](Store::create_run), [`set_run_status`](Store::set_run_status),
+//!   [`checkpoint`](Store::checkpoint), and [`resume_cursor`](Store::resume_cursor) for crash
+//!   recovery.
 //! - **export** — [`export_parquet`] / [`export_parquet_bytes`]: a columnar dump of admitted
 //!   records to Parquet, returning a [`gw_schema::ExportManifest`].
 //!
@@ -66,7 +67,7 @@ mod records;
 mod runledger;
 mod store;
 
-pub use cache::{completion_hash, prompt_hash, record_hash};
+pub use cache::{completion_hash, prompt_hash, prompts_hash, record_hash};
 pub use error::{Result, StorageError};
 pub use export::{clean_messages_json, export_parquet, export_parquet_bytes};
 pub use records::RecordFilter;
