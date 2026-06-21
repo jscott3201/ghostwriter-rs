@@ -16,7 +16,7 @@ use crate::limiter::RateLimiter;
 use crate::request::ChatRequest;
 use crate::retry::{RetryPolicy, retry};
 use crate::sse::decode_sse;
-use crate::{DeltaStream, Provider};
+use crate::{DeltaStream, Provider, StreamChatFuture};
 
 /// The default OpenRouter base URL.
 pub const DEFAULT_BASE_URL: &str = "https://openrouter.ai/api/v1";
@@ -209,10 +209,9 @@ impl OpenRouterProvider {
         let body = resp.text().await.ok().map(|b| truncate(&b, 512));
         Err(ProviderError::from_status(code, body))
     }
-}
 
-impl Provider for OpenRouterProvider {
-    async fn stream_chat(&self, req: ChatRequest) -> Result<DeltaStream, ProviderError> {
+    /// The async body of [`Provider::stream_chat`], factored out so the trait method can box it.
+    async fn stream_chat_impl(&self, req: ChatRequest) -> Result<DeltaStream, ProviderError> {
         // Retry the *connection* (governed + backed off); once a 2xx response is in hand, the
         // stream itself is decoded. A mid-stream reset surfaces as a terminal item to the
         // consumer (the engine decides whether to re-dispatch the whole job).
@@ -220,6 +219,12 @@ impl Provider for OpenRouterProvider {
         let byte_stream = response.bytes_stream();
         let decoded = decode_sse(byte_stream);
         Ok(Box::pin(decoded))
+    }
+}
+
+impl Provider for OpenRouterProvider {
+    fn stream_chat(&self, req: ChatRequest) -> StreamChatFuture<'_> {
+        Box::pin(self.stream_chat_impl(req))
     }
 }
 
@@ -246,6 +251,20 @@ fn truncate(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_is_dyn_compatible() {
+        // Coercing to `&dyn Provider` / `Box<dyn Provider>` only compiles if the trait is
+        // object-safe — the runtime witness for the compile-time assertion in lib.rs.
+        let p = OpenRouterProvider::builder()
+            .build_with_key("sk-test-not-a-real-key")
+            .expect("builds");
+        let boxed: Box<dyn Provider> = Box::new(p.clone());
+        let dynref: &dyn Provider = &p;
+        // Use both bindings so the coercions are load-bearing (and Debug stays redacted).
+        assert!(format!("{p:?}").contains("OpenRouterProvider"));
+        let _ = (boxed, dynref);
+    }
 
     #[test]
     fn missing_env_var_is_clean_error() {

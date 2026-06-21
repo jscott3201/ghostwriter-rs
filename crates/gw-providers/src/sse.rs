@@ -61,6 +61,8 @@ struct Decoder<S> {
     stream_ended: bool,
     /// Set once `[DONE]` was seen — a clean, expected end-of-stream.
     saw_done: bool,
+    /// Set once the post-stream terminal flush has run (so it runs exactly once).
+    flushed: bool,
     /// Set once this decoder must yield nothing further.
     finished: bool,
 }
@@ -77,6 +79,7 @@ where
             ready: VecDeque::new(),
             stream_ended: false,
             saw_done: false,
+            flushed: false,
             finished: false,
         }
     }
@@ -94,10 +97,22 @@ where
                 }
                 return Some(item);
             }
-            if self.stream_ended {
-                // No more bytes will arrive. Decide how to terminate.
+            // `[DONE]` is a clean end-of-stream: stop here without another upstream poll, and
+            // never yield any post-`[DONE]` data (drained above; the rest is discarded).
+            if self.saw_done {
                 self.finished = true;
-                return self.terminal_item();
+                return None;
+            }
+            if self.stream_ended {
+                if self.flushed {
+                    // Trailing flush already produced its item(s) and they have been drained.
+                    self.finished = true;
+                    return None;
+                }
+                // No more bytes will arrive. Flush any trailing item, else owe a StreamReset.
+                self.flush_terminal();
+                self.flushed = true;
+                continue; // re-enter the loop to drain `ready` / decide termination
             }
 
             // Pull the next byte chunk and turn its complete lines into ready items.
@@ -114,22 +129,30 @@ where
         }
     }
 
-    /// Decide the terminal item once the byte stream has fully ended with nothing queued.
-    fn terminal_item(&mut self) -> Option<Result<StreamDelta, ProviderError>> {
+    /// Once the byte stream has fully ended, queue the final owed item(s): a trailing
+    /// newline-less `data:` line (if any) AND, when no `[DONE]` was seen, a terminal
+    /// [`ProviderError::StreamReset`]. This is idempotent — it marks the buffer drained so a
+    /// re-entry does not re-queue. Critically, a flushed trailing delta does NOT suppress the
+    /// StreamReset: a partial response must still look incomplete to the retry layer.
+    fn flush_terminal(&mut self) {
         // Flush any trailing partial line that lacked a final `\n`.
         if !self.line_buf.is_empty() {
             let line = std::mem::take(&mut self.line_buf);
             if let Some(item) = self.process_line(&line) {
-                // A trailing complete `data:` line without newline; still honor DONE detection.
-                return Some(item);
+                let is_err = item.is_err();
+                self.ready.push_back(item);
+                if is_err {
+                    // A decode error is itself terminal; don't also append a StreamReset.
+                    return;
+                }
             }
         }
-        if self.saw_done {
-            None
-        } else {
-            Some(Err(ProviderError::StreamReset(
+        // `[DONE]` (possibly set by the trailing line just flushed) ⇒ clean end; otherwise the
+        // stream was cut short and the consumer must be told so it can re-dispatch.
+        if !self.saw_done {
+            self.ready.push_back(Err(ProviderError::StreamReset(
                 "byte stream ended before `[DONE]` sentinel".to_string(),
-            )))
+            )));
         }
     }
 
@@ -173,6 +196,11 @@ where
             Some(rest) => rest.trim_start(),
             None => return None, // unknown field line (id:, retry:, …) — ignore
         };
+        // An empty `data:` / `data: ` payload is a heartbeat, not JSON — ignore it BEFORE the
+        // DONE/parse path so it can never become a terminal Decode error.
+        if payload.is_empty() {
+            return None;
+        }
         if payload == DONE_SENTINEL {
             self.saw_done = true;
             return None;
@@ -339,5 +367,46 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert!(out[0].is_ok());
         assert!(matches!(out[1], Err(ProviderError::StreamReset(_))));
+    }
+
+    #[tokio::test]
+    async fn newline_less_complete_line_without_done_resets() {
+        // PRE-MERGE 2: a complete, valid-JSON `data:` line with NO trailing newline and NO
+        // `[DONE]`. The flushed trailing delta must NOT mask the truncation — the consumer must
+        // still see a terminal StreamReset so the retry layer re-dispatches.
+        let out = collect(vec![
+            "data: {\"choices\":[{\"delta\":{\"content\":\"a\"}}]}",
+        ])
+        .await;
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].as_ref().unwrap().content.as_deref(), Some("a"));
+        assert!(matches!(out[1], Err(ProviderError::StreamReset(_))));
+    }
+
+    #[tokio::test]
+    async fn data_after_done_is_not_yielded() {
+        // Folded followup: once `[DONE]` is seen the decoder stops; later data is discarded.
+        let out = collect(vec![
+            "data: {\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\n\n",
+            "data: [DONE]\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"ghost\"}}]}\n\n",
+        ])
+        .await;
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].as_ref().unwrap().content.as_deref(), Some("a"));
+    }
+
+    #[tokio::test]
+    async fn empty_data_heartbeat_is_ignored_not_decode_error() {
+        // Folded followup: empty `data:` / `data: ` payloads are heartbeats, not JSON.
+        let out = collect(vec![
+            "data:\n\n",
+            "data: \n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\n",
+            "data: [DONE]\n\n",
+        ])
+        .await;
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].as_ref().unwrap().content.as_deref(), Some("x"));
     }
 }

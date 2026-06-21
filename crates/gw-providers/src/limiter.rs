@@ -26,14 +26,19 @@ pub struct RateLimiter {
 
 impl RateLimiter {
     /// Build a limiter from a requests-per-minute budget. An `rpm` of `0` is clamped to `1`
-    /// (governor quotas require a non-zero burst), so the limiter never deadlocks.
+    /// (governor quotas require a non-zero burst), so the limiter never deadlocks; the clamp is
+    /// `warn`-logged so a misconfigured `rpm = 0` is not an indistinguishable ~1-req/min hang.
     #[must_use]
     pub fn per_minute(rpm: u32) -> Self {
-        let burst = NonZeroU32::new(rpm.max(1)).expect("clamped to >= 1");
+        let effective = rpm.max(1);
+        if rpm == 0 {
+            tracing::warn!("rate-limiter rpm was 0; clamped to 1 (check provider config)");
+        }
+        let burst = NonZeroU32::new(effective).expect("clamped to >= 1");
         let quota = Quota::per_minute(burst);
         Self {
             inner: GovLimiter::direct(quota),
-            rpm: rpm.max(1),
+            rpm: effective,
         }
     }
 

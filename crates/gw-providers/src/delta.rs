@@ -125,6 +125,11 @@ struct RawChoice {
 }
 
 /// The `choices[0].delta` object — where the CoT lives.
+///
+/// `reasoning_details` is deserialized as raw `serde_json::Value`s, **not** straight into the
+/// strict [`gw_schema::ReasoningDetail`], so one malformed/novel fragment cannot abort the
+/// whole chunk. Each fragment is then leniently re-parsed and converted per-fragment in
+/// [`parse_chunk`] (Postel's law: be liberal in what the wire decoder accepts).
 #[derive(Debug, Default, Deserialize)]
 struct RawDelta {
     #[serde(default)]
@@ -132,14 +137,131 @@ struct RawDelta {
     #[serde(default)]
     reasoning: Option<String>,
     #[serde(default)]
-    reasoning_details: Option<Vec<ReasoningDetail>>,
+    reasoning_details: Option<Vec<serde_json::Value>>,
+}
+
+/// A LENIENT wire view of one `reasoning_details[]` fragment.
+///
+/// Internally tagged on `type`, every payload field optional, so a fragment that omits `index`,
+/// sends a null/absent `text`, or carries a brand-new `type` still deserializes instead of
+/// killing the stream. Converted into the STRICT [`gw_schema::ReasoningDetail`] by
+/// [`WireReasoningDetail::into_strict`]; the [`WireReasoningDetail::Unknown`] catch-all (novel
+/// `type` tags) is dropped (the flat `reasoning` string still carries the human-readable CoT).
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type")]
+enum WireReasoningDetail {
+    #[serde(rename = "reasoning.text")]
+    Text {
+        #[serde(default)]
+        text: Option<String>,
+        #[serde(default)]
+        signature: Option<String>,
+        #[serde(default)]
+        id: Option<String>,
+        #[serde(default)]
+        format: Option<String>,
+        #[serde(default)]
+        index: Option<u32>,
+    },
+    #[serde(rename = "reasoning.summary")]
+    Summary {
+        #[serde(default)]
+        summary: Option<String>,
+        #[serde(default)]
+        id: Option<String>,
+        #[serde(default)]
+        format: Option<String>,
+        #[serde(default)]
+        index: Option<u32>,
+    },
+    #[serde(rename = "reasoning.encrypted")]
+    Encrypted {
+        #[serde(default)]
+        data: Option<String>,
+        #[serde(default)]
+        id: Option<String>,
+        #[serde(default)]
+        format: Option<String>,
+        #[serde(default)]
+        index: Option<u32>,
+    },
+    /// Any `type` the schema does not (yet) model. Dropped on conversion.
+    #[serde(other)]
+    Unknown,
+}
+
+impl WireReasoningDetail {
+    /// Convert into the strict stored type, filling absent `index` with `0` and absent
+    /// text/summary/data with `""`. Returns `None` for the [`WireReasoningDetail::Unknown`]
+    /// catch-all, which is dropped.
+    fn into_strict(self) -> Option<ReasoningDetail> {
+        match self {
+            WireReasoningDetail::Text {
+                text,
+                signature,
+                id,
+                format,
+                index,
+            } => Some(ReasoningDetail::Text {
+                text: text.unwrap_or_default(),
+                signature,
+                id,
+                format,
+                index: index.unwrap_or(0),
+            }),
+            WireReasoningDetail::Summary {
+                summary,
+                id,
+                format,
+                index,
+            } => Some(ReasoningDetail::Summary {
+                summary: summary.unwrap_or_default(),
+                id,
+                format,
+                index: index.unwrap_or(0),
+            }),
+            WireReasoningDetail::Encrypted {
+                data,
+                id,
+                format,
+                index,
+            } => Some(ReasoningDetail::Encrypted {
+                data: data.unwrap_or_default(),
+                id,
+                format,
+                index: index.unwrap_or(0),
+            }),
+            WireReasoningDetail::Unknown => None,
+        }
+    }
+}
+
+/// Leniently convert a vec of raw reasoning fragments into strict [`ReasoningDetail`]s,
+/// skipping (with a `debug` log) any fragment that fails to parse or is an unknown tag. Never
+/// errors — a bad fragment must not abort the chunk or drop the rest of the CoT.
+fn convert_reasoning_details(raw: Vec<serde_json::Value>) -> Option<Vec<ReasoningDetail>> {
+    let mut out = Vec::with_capacity(raw.len());
+    for value in raw {
+        match serde_json::from_value::<WireReasoningDetail>(value) {
+            Ok(wire) => match wire.into_strict() {
+                Some(detail) => out.push(detail),
+                None => tracing::debug!("skipping reasoning_details fragment with unknown type"),
+            },
+            Err(e) => {
+                tracing::debug!(error = %e, "skipping unparseable reasoning_details fragment")
+            }
+        }
+    }
+    if out.is_empty() { None } else { Some(out) }
 }
 
 /// Parse one OpenRouter SSE `data:` JSON payload into a [`StreamDelta`], flattening
 /// `choices[0].delta`, hoisting `finish_reason`, and capturing `model`/`provider`/`usage`.
+/// Reasoning fragments are converted leniently (see [`convert_reasoning_details`]).
 ///
 /// # Errors
-/// Returns the underlying `serde_json` error if the payload is not a valid chunk object.
+/// Returns the underlying `serde_json` error if the payload is not a valid chunk object. A
+/// malformed *reasoning fragment* never errors here — it is skipped, not propagated.
 pub(crate) fn parse_chunk(json: &str) -> Result<StreamDelta, serde_json::Error> {
     let raw: RawChunk = serde_json::from_str(json)?;
     let first = raw.choices.into_iter().next();
@@ -156,11 +278,12 @@ pub(crate) fn parse_chunk(json: &str) -> Result<StreamDelta, serde_json::Error> 
         if p.is_empty() { None } else { Some(p) }
     };
     let usage = raw.usage.filter(|u| !u.is_empty());
+    let reasoning_details = delta.reasoning_details.and_then(convert_reasoning_details);
 
     Ok(StreamDelta {
         content: delta.content,
         reasoning: delta.reasoning,
-        reasoning_details: delta.reasoning_details,
+        reasoning_details,
         finish_reason,
         provenance,
         usage,
@@ -243,5 +366,97 @@ mod tests {
         assert!(d.is_empty_payload());
         // model alone still produces provenance.
         assert_eq!(d.provenance.unwrap().model.as_deref(), Some("m"));
+    }
+
+    // --- lenient wire reasoning parse (Postel's law) ---------------------------------------
+
+    #[test]
+    fn reasoning_text_fragment_missing_index_still_decodes() {
+        // A spec-valid fragment that OMITS `index` must not abort the chunk; it fills index=0.
+        let j = r#"{"choices":[{"delta":{"content":"after",
+            "reasoning_details":[{"type":"reasoning.text","text":"no index here"}]}}]}"#;
+        let d = parse_chunk(j).unwrap();
+        // Subsequent content still streams in the SAME chunk.
+        assert_eq!(d.content.as_deref(), Some("after"));
+        let details = d.reasoning_details.expect("details present");
+        match &details[0] {
+            ReasoningDetail::Text { text, index, .. } => {
+                assert_eq!(text, "no index here");
+                assert_eq!(*index, 0);
+            }
+            other => panic!("expected reasoning.text, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unknown_reasoning_type_is_skipped_not_aborted() {
+        // A novel `type` ("reasoning.foo") is dropped, but the chunk (and other fields) survive.
+        let j = r#"{"choices":[{"delta":{"reasoning":"flat cot here",
+            "reasoning_details":[{"type":"reasoning.foo","blah":1,"index":0}]}}]}"#;
+        let d = parse_chunk(j).unwrap();
+        // Flat reasoning still carries the human-readable CoT.
+        assert_eq!(d.reasoning.as_deref(), Some("flat cot here"));
+        // The unknown fragment was dropped → no strict details.
+        assert!(d.reasoning_details.is_none());
+    }
+
+    #[test]
+    fn null_or_absent_text_does_not_abort() {
+        // Explicit null text → empty string, not a decode failure.
+        let j = r#"{"choices":[{"delta":{"reasoning_details":
+            [{"type":"reasoning.text","text":null,"index":2}]}}]}"#;
+        let d = parse_chunk(j).unwrap();
+        let details = d.reasoning_details.expect("details present");
+        match &details[0] {
+            ReasoningDetail::Text { text, index, .. } => {
+                assert_eq!(text, "");
+                assert_eq!(*index, 2);
+            }
+            other => panic!("expected reasoning.text, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn mixed_bad_and_good_fragment_keeps_the_good_one() {
+        // One unparseable/unknown fragment + one valid: keep the valid one, drop the bad.
+        let j = r#"{"choices":[{"delta":{"reasoning_details":[
+            {"type":"reasoning.weird","x":true},
+            {"type":"reasoning.text","text":"keep me","index":1}]}}]}"#;
+        let d = parse_chunk(j).unwrap();
+        let details = d.reasoning_details.expect("the good fragment survives");
+        assert_eq!(details.len(), 1);
+        match &details[0] {
+            ReasoningDetail::Text { text, index, .. } => {
+                assert_eq!(text, "keep me");
+                assert_eq!(*index, 1);
+            }
+            other => panic!("expected reasoning.text, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn summary_and_encrypted_fragments_decode_leniently() {
+        let j = r#"{"choices":[{"delta":{"reasoning_details":[
+            {"type":"reasoning.summary","summary":"sum"},
+            {"type":"reasoning.encrypted","data":"abc"}]}}]}"#;
+        let d = parse_chunk(j).unwrap();
+        let details = d.reasoning_details.expect("details present");
+        assert_eq!(details.len(), 2);
+        assert!(
+            matches!(&details[0], ReasoningDetail::Summary { summary, index, .. }
+            if summary == "sum" && *index == 0)
+        );
+        assert!(
+            matches!(&details[1], ReasoningDetail::Encrypted { data, index, .. }
+            if data == "abc" && *index == 0)
+        );
+    }
+
+    #[test]
+    fn all_fragments_bad_yields_none_not_error() {
+        let j = r#"{"choices":[{"delta":{"reasoning_details":[
+            {"type":"reasoning.foo"},{"type":"reasoning.bar"}]}}]}"#;
+        let d = parse_chunk(j).unwrap();
+        assert!(d.reasoning_details.is_none());
     }
 }

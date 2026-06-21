@@ -88,13 +88,20 @@ impl ProviderError {
         }
     }
 
-    /// Build a [`ProviderError::Status`], classifying 5xx as retryable and everything else
-    /// (4xx other than 429, which has its own variant) as terminal.
+    /// Build a [`ProviderError`] from an HTTP status:
+    /// - **429** maps to [`ProviderError::RateLimited`] (no `Retry-After` context here; the
+    ///   client path parses the header and constructs that variant directly when available).
+    /// - **408** (Request Timeout) and **5xx** are [`ProviderError::Status`] flagged retryable.
+    /// - everything else is a terminal [`ProviderError::Status`].
     #[must_use]
     pub fn from_status(status: u16, body: Option<String>) -> Self {
+        if status == 429 {
+            return ProviderError::RateLimited { retry_after: None };
+        }
+        let retryable = status == 408 || (500..600).contains(&status);
         ProviderError::Status {
             status,
-            retryable: (500..600).contains(&status),
+            retryable,
             body,
         }
     }
@@ -121,12 +128,25 @@ mod tests {
         assert!(ProviderError::StreamReset("x".into()).is_retryable());
         assert!(ProviderError::from_status(503, None).is_retryable());
         assert!(ProviderError::from_status(500, None).is_retryable());
+        // 408 Request Timeout is retryable.
+        assert!(ProviderError::from_status(408, None).is_retryable());
 
         assert!(!ProviderError::from_status(400, None).is_retryable());
         assert!(!ProviderError::from_status(404, None).is_retryable());
         assert!(!ProviderError::MissingApiKey("OPENROUTER_API_KEY".into()).is_retryable());
         assert!(!ProviderError::Decode("bad json".into()).is_retryable());
         assert!(!ProviderError::Config("bad url".into()).is_retryable());
+    }
+
+    #[test]
+    fn status_429_maps_to_rate_limited() {
+        // 429 is folded into the RateLimited variant (retryable), not a bare Status.
+        let e = ProviderError::from_status(429, Some("too many".into()));
+        assert!(matches!(
+            e,
+            ProviderError::RateLimited { retry_after: None }
+        ));
+        assert!(e.is_retryable());
     }
 
     #[test]

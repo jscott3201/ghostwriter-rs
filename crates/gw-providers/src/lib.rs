@@ -84,6 +84,11 @@ pub use sse::decode_sse;
 /// The boxed, `Send` stream of decoded deltas returned by [`Provider::stream_chat`].
 pub type DeltaStream = Pin<Box<dyn Stream<Item = Result<StreamDelta, ProviderError>> + Send>>;
 
+/// The boxed, `Send` future returned by [`Provider::stream_chat`]. Boxing (rather than RPITIT
+/// `impl Future`) keeps the trait **dyn-compatible** so it can be used as `&dyn Provider`.
+pub type StreamChatFuture<'a> =
+    Pin<Box<dyn std::future::Future<Output = Result<DeltaStream, ProviderError>> + Send + 'a>>;
+
 /// A streaming chat provider over an OpenAI-compatible `/chat/completions` endpoint.
 ///
 /// Implemented by [`OpenRouterProvider`]. The single method streams a chat completion as a
@@ -91,6 +96,10 @@ pub type DeltaStream = Pin<Box<dyn Stream<Item = Result<StreamDelta, ProviderErr
 /// `reasoning`/`reasoning_details` (the captured chain-of-thought). The returned future
 /// resolves once a response is in hand (after rate-limiting + retries); per-delta errors and a
 /// terminal [`ProviderError::StreamReset`] arrive on the stream itself.
+///
+/// The method returns a boxed future ([`StreamChatFuture`]) rather than RPITIT `impl Future`,
+/// so the trait is **dyn-compatible** — the engine can hold a `&dyn Provider` /
+/// `Box<dyn Provider>`.
 pub trait Provider {
     /// Stream a chat completion. The future completes once the (retried, rate-limited) HTTP
     /// response is established; the body is then decoded lazily as the returned stream is
@@ -100,8 +109,12 @@ pub trait Provider {
     /// Returns a [`ProviderError`] if the request cannot be established (config error, or all
     /// retries exhausted on a transient fault). Errors encountered *while streaming* are
     /// yielded as `Err` items on the returned [`DeltaStream`].
-    fn stream_chat(
-        &self,
-        req: ChatRequest,
-    ) -> impl std::future::Future<Output = Result<DeltaStream, ProviderError>> + Send;
+    fn stream_chat(&self, req: ChatRequest) -> StreamChatFuture<'_>;
+}
+
+/// Compile-time assertion that [`Provider`] is dyn-compatible (object-safe). If a future change
+/// reintroduces RPITIT, this stops compiling.
+#[allow(dead_code)]
+fn _assert_provider_dyn_compatible(p: &dyn Provider) -> &dyn Provider {
+    p
 }
