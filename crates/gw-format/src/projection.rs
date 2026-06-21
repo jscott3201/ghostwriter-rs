@@ -51,18 +51,38 @@ pub struct SftProjection {
 ///
 /// # Errors
 ///
-/// Propagates [`crate::render()`] errors, and returns [`FormatError::Projection`] if the record has
-/// no assistant turn to supervise (nothing to learn from).
+/// Propagates [`crate::render()`] errors (incl. the prompt-completion final-turn guard), and
+/// returns [`FormatError::Projection`] if:
+/// - the record has no assistant turn to supervise (nothing to learn from); or
+/// - `target` is [`TrlFormat::TrlPromptCompletion`] with `multi_turn_loss == AllAssistant` and the
+///   record has MORE THAN ONE assistant turn — prompt-completion can only supervise the FINAL
+///   assistant turn, so `AllAssistant` is unsatisfiable for that shape and intermediate assistant
+///   turns would silently fall outside loss. Use [`MultiTurnLoss::FinalTurnOnly`] instead.
 pub fn project_sft(
     record: &TrainingRecord,
     target: TrlFormat,
     cot: CotPolicy,
     multi_turn_loss: MultiTurnLoss,
 ) -> Result<SftProjection> {
-    if !record.messages.iter().any(|m| m.role == Role::Assistant) {
+    let assistant_turns = record
+        .messages
+        .iter()
+        .filter(|m| m.role == Role::Assistant)
+        .count();
+    if assistant_turns == 0 {
         return Err(FormatError::Projection(
             "record has no assistant turn to project".into(),
         ));
+    }
+    if target == TrlFormat::TrlPromptCompletion
+        && multi_turn_loss == MultiTurnLoss::AllAssistant
+        && assistant_turns > 1
+    {
+        return Err(FormatError::Projection(format!(
+            "prompt-completion supervises only the final assistant turn, but \
+             MultiTurnLoss::AllAssistant was requested with {assistant_turns} assistant turns \
+             (use MultiTurnLoss::FinalTurnOnly)"
+        )));
     }
     let rendered = render(&record.messages, target, cot)?;
     Ok(SftProjection {
@@ -281,5 +301,65 @@ mod tests {
             project_preference(&chosen, &rejected, CotPolicy::Supervised),
             Err(FormatError::Projection(_))
         ));
+    }
+
+    /// A two-assistant-turn record (user/assistant/user/assistant), prompt-completion-shaped.
+    fn two_turn_record() -> TrainingRecord {
+        let mut rec = record("a", "h1", "first", "r1", 0.9);
+        rec.messages = vec![
+            msg(Role::User, "q1", None),
+            msg(Role::Assistant, "first", Some("r1")),
+            msg(Role::User, "q2", None),
+            msg(Role::Assistant, "second", Some("r2")),
+        ];
+        rec
+    }
+
+    #[test]
+    fn sft_prompt_completion_all_assistant_multi_turn_errors() {
+        // AllAssistant (the schema default) is unsatisfiable for prompt-completion with >1
+        // assistant turn — it can only supervise the FINAL assistant turn.
+        let rec = two_turn_record();
+        let err = project_sft(
+            &rec,
+            TrlFormat::TrlPromptCompletion,
+            CotPolicy::Supervised,
+            MultiTurnLoss::AllAssistant,
+        )
+        .unwrap_err();
+        assert!(matches!(err, FormatError::Projection(_)));
+        assert!(err.to_string().contains("final assistant turn"));
+    }
+
+    #[test]
+    fn sft_prompt_completion_final_turn_only_multi_turn_ok() {
+        // FinalTurnOnly is exactly what prompt-completion supports.
+        let rec = two_turn_record();
+        let p = project_sft(
+            &rec,
+            TrlFormat::TrlPromptCompletion,
+            CotPolicy::Supervised,
+            MultiTurnLoss::FinalTurnOnly,
+        )
+        .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&p.rendered).unwrap();
+        assert_eq!(v["prompt"].as_array().unwrap().len(), 3);
+        assert_eq!(v["completion"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn sft_conversational_all_assistant_multi_turn_ok() {
+        // The guard is prompt-completion-specific: conversational targets supervise all
+        // assistant turns natively, so AllAssistant + multi-turn is fine.
+        let rec = two_turn_record();
+        assert!(
+            project_sft(
+                &rec,
+                TrlFormat::OpenAiMessages,
+                CotPolicy::Supervised,
+                MultiTurnLoss::AllAssistant,
+            )
+            .is_ok()
+        );
     }
 }

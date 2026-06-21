@@ -14,16 +14,31 @@
 //! | thought OPEN  | `<\|channel>thought\n`         | ASYMMETRIC — NOT symmetric `<\|channel\|>` |
 //! | thought CLOSE | `<channel\|>`                  | ASYMMETRIC                            |
 //!
-//! Roles map to `user` and `model` only (`assistant → model`); there is no system role — system
-//! content is folded into the FIRST user turn (a harness simplification of the upstream
-//! conditional-system-turn behavior). Every `model` turn carries a thought wrapper: it holds the
-//! reasoning when [`CotPolicy::Supervised`]/[`CotPolicy::Masked`], or is EMPTY
-//! (`<|channel>thought\n<channel|>`) when [`CotPolicy::Stripped`].
+//! Roles map to `user` and `model` only (`assistant → model`); there is no system role. A
+//! leading or mid-conversation `system`/`developer` message is folded into the NEXT `user` turn
+//! that follows it (and a trailing system message with no following user turn becomes a lone user
+//! turn) — a harness simplification of the upstream conditional-system-turn behavior. Every
+//! `model` turn carries a thought wrapper: it holds the reasoning when
+//! [`CotPolicy::Supervised`]/[`CotPolicy::Masked`], or is EMPTY (`<|channel>thought\n<channel|>`)
+//! when [`CotPolicy::Stripped`].
+//!
+//! ## Deliberate omissions (v1)
+//!
+//! - The upstream `<|think|>` thinking-enable marker (injected at the first system turn) is **NOT**
+//!   emitted: this renderer folds the system turn away entirely, so there is no system turn to
+//!   carry it. Thinking is instead expressed per-`model`-turn via the thought wrapper.
+//! - Assistant `tool_calls` are **dropped** (not rendered): the Gemma-4 tool-call DSL is out of
+//!   scope for v1. Only [`OpenAiMessages`](gw_schema::TrlFormat::OpenAiMessages) preserves
+//!   `tool_calls`. Noted for a future tool corpus.
+//! - [`Content::Parts`](gw_schema::Content::Parts) is flattened to its text segments; an
+//!   image/audio-only turn renders as empty content. Noted for a future multimodal corpus.
 //!
 //! TODO(gemma4-verify): these bytes are per the `_research` spec and are golden-file tested
 //! here, but they MUST be diff-verified byte-for-byte against the official pinned
-//! `google/gemma-4-12B-it` `chat_template.jinja` before production SFT. Do NOT fetch the template
-//! at runtime or in tests (no network).
+//! `google/gemma-4-12B-it` `chat_template.jinja` before production SFT — including reconciling the
+//! omitted `<|think|>` system-turn marker (this renderer's system-folding choice diverges from
+//! upstream's conditional system turn). Do NOT fetch the template at runtime or in tests (no
+//! network).
 
 use std::sync::OnceLock;
 

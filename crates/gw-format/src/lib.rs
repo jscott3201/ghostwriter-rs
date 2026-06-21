@@ -9,10 +9,20 @@
 //!
 //! The stored `content` is ALWAYS clean final-answer text. Raw channel tokens (`<think>`,
 //! `<|channel>`, `<turn|>`, …) live ONLY inside the `reasoning` text or are PRODUCED by the
-//! renderer — never stored in `content`. So format A↔B conversion is a pure function of
-//! `(clean messages + reasoning + target template)`: [`render()`] and [`ingest_openrouter`] /
-//! [`strip_channel_tokens`] are inverses, and `render → ingest` recovers the clean messages +
-//! reasoning.
+//! renderer — never stored in `content`. [`render()`] enforces this up front: it FAILS LOUD with
+//! [`FormatError::ControlTokenInContent`] if a clean field already carries a control token, rather
+//! than silently double-framing and corrupting the target.
+//!
+//! For the TOKEN-STREAM targets ([`Gemma4`](gw_schema::TrlFormat::Gemma4),
+//! [`ChatML`](gw_schema::TrlFormat::ChatML), [`Harmony`](gw_schema::TrlFormat::Harmony)), format
+//! A↔B conversion is a pure function of `(clean messages + reasoning + target template)`:
+//! [`render()`] and [`ingest_openrouter`] / [`strip_channel_tokens`] are inverses, so
+//! `render → ingest` recovers the clean messages + reasoning. The STRUCTURED targets
+//! ([`ShareGpt`](gw_schema::TrlFormat::ShareGpt),
+//! [`OpenAiMessages`](gw_schema::TrlFormat::OpenAiMessages),
+//! [`TrlPromptCompletion`](gw_schema::TrlFormat::TrlPromptCompletion)) carry `reasoning` in a CLEAN
+//! sibling key — lossless by construction, NOT round-tripped through the channel-stripping ingest
+//! path.
 //!
 //! ## Layout
 //!
@@ -64,6 +74,7 @@ mod error;
 mod ingest;
 mod projection;
 mod render;
+mod validate;
 
 pub use error::{FormatError, Result};
 pub use ingest::{ingest_openrouter, strip_channel_tokens};

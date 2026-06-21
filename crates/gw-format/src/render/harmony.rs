@@ -11,6 +11,11 @@
 //! has no reasoning under [`CotPolicy`] (e.g. [`CotPolicy::Stripped`]), the `analysis` channel is
 //! omitted and only the `final` channel is emitted. Harmony channel tokens are SYMMETRIC
 //! (`<|channel|>`), unlike Gemma-4.
+//!
+//! v1 omissions: assistant `tool_calls` are **dropped** (the Harmony `commentary` tool channel is
+//! out of scope; only [`OpenAiMessages`](gw_schema::TrlFormat::OpenAiMessages) preserves
+//! `tool_calls`), and [`Content::Parts`](gw_schema::Content::Parts) is flattened to text (an
+//! image/audio-only turn renders empty content). Noted for a future tool / multimodal corpus.
 
 use std::fmt::Write as _;
 

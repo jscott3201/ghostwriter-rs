@@ -4,6 +4,11 @@
 //! no native reasoning slot; this renderer uses the lossless **option 1** from the spec: a
 //! sibling `reasoning` key on the `gpt` turn (when `reasoning` is present under [`CotPolicy`]).
 //! `value` stays CLEAN final-answer text (INVARIANT-a). Output is a pretty-printed JSON document.
+//!
+//! v1 omissions: assistant `tool_calls` are **dropped** (only
+//! [`OpenAiMessages`](gw_schema::TrlFormat::OpenAiMessages) preserves them), and
+//! [`Content::Parts`](gw_schema::Content::Parts) is flattened to text (an image/audio-only turn
+//! renders empty content). Noted for a future tool / multimodal corpus.
 
 use serde_json::{Map, Value, json};
 

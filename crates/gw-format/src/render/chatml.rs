@@ -3,6 +3,11 @@
 //! Supervised reasoning is rendered as a `<think>{reasoning}</think>` block at the START of the
 //! assistant content region (the Qwen / DeepSeek-R1 convention), generated from the separate
 //! `reasoning` field — NEVER read out of `content`. [`CotPolicy::Stripped`] drops it.
+//!
+//! v1 omissions: assistant `tool_calls` are **dropped** (only
+//! [`OpenAiMessages`](gw_schema::TrlFormat::OpenAiMessages) preserves them), and
+//! [`Content::Parts`](gw_schema::Content::Parts) is flattened to text (an image/audio-only turn
+//! renders empty content). Noted for a future tool / multimodal corpus.
 
 use std::fmt::Write as _;
 

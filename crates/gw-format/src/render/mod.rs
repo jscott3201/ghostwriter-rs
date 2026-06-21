@@ -7,8 +7,20 @@
 //!
 //! The stored `content` is ALWAYS clean final-answer text. Channel tokens (`<think>`,
 //! `<|channel>`, `<turn|>`, …) are PRODUCED here by the renderer from the separate `reasoning`
-//! field — never read out of `content`. So format A↔B conversion is a pure function of
-//! `(clean messages + reasoning + target template)`; [`crate::ingest`] is its inverse.
+//! field — never read out of `content`. Before rendering ANY target, [`render`] calls
+//! [`validate_clean`](crate::validate) and FAILS LOUD with
+//! [`FormatError::ControlTokenInContent`](crate::FormatError::ControlTokenInContent) if a clean
+//! field already contains a control token (an upstream leak that would not round-trip).
+//!
+//! The render→ingest **identity** holds for the TOKEN-STREAM targets only
+//! ([`Gemma4`](TrlFormat::Gemma4), [`ChatML`](TrlFormat::ChatML), [`Harmony`](TrlFormat::Harmony)):
+//! there, [`crate::ingest`] re-extracts the reasoning the renderer framed into `content`. The
+//! STRUCTURED targets ([`ShareGpt`](TrlFormat::ShareGpt),
+//! [`OpenAiMessages`](TrlFormat::OpenAiMessages),
+//! [`TrlPromptCompletion`](TrlFormat::TrlPromptCompletion)) carry `reasoning` in a CLEAN sibling
+//! key (lossless by construction, not via the channel-stripping ingest path). The identity also
+//! excludes clean content that itself begins with a channel marker — but `validate_clean` rejects
+//! such content up front, so that case never reaches a renderer.
 //!
 //! ## CotPolicy semantics (uniform across targets)
 //!
@@ -40,10 +52,13 @@ use crate::error::Result;
 ///
 /// # Errors
 ///
-/// Returns [`crate::FormatError::Template`] if the Gemma-4 template fails to render,
+/// Returns [`crate::FormatError::ControlTokenInContent`] if a message's clean `content`/`reasoning`
+/// already contains a chat control token (an upstream leak; validated BEFORE any rendering),
+/// [`crate::FormatError::Template`] if the Gemma-4 template fails to render,
 /// [`crate::FormatError::Serde`] if a structured target fails to serialize, and
 /// [`crate::FormatError::UnsupportedRole`] if a message carries a role the target cannot place.
 pub fn render(messages: &[Message], target: TrlFormat, cot: CotPolicy) -> Result<String> {
+    crate::validate::validate_clean(messages)?;
     match target {
         TrlFormat::Gemma4 => gemma4::render(messages, cot),
         TrlFormat::ChatML => chatml::render(messages, cot),

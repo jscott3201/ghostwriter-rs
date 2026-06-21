@@ -19,13 +19,15 @@
     "<|turn>model\n<|channel>thought\n<channel|>{answer}<turn|>\n"  (stripped).
 
   Roles map to `user` and `model` only (assistant -> model). There is NO system
-  role: system content is folded into the FIRST user turn by the Rust caller
-  before this template runs (see render::gemma4). This is the harness simplification
-  of the upstream conditional-system-turn behavior and is documented there.
+  role: system content is folded into the NEXT user turn by the Rust caller before
+  this template runs (see render::gemma4). The upstream `<|think|>` thinking-enable
+  marker is NOT emitted (the system turn is folded away). This is the harness
+  simplification of the upstream conditional-system-turn behavior, documented there.
 
   TODO(gemma4-verify): these bytes are per the _research spec. Before production
   SFT they MUST be diff-verified byte-for-byte against the official pinned
-  `google/gemma-4-12B-it` chat_template.jinja (do NOT fetch at runtime / in tests).
+  `google/gemma-4-12B-it` chat_template.jinja (do NOT fetch at runtime / in tests),
+  including the omitted `<|think|>` system-turn marker.
   ==============================================================================
 
   Context shape (provided by render::gemma4):

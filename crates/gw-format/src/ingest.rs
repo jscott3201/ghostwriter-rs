@@ -6,14 +6,22 @@
 //! The stored `content` is ALWAYS clean final-answer text. On ingest, any channel tokens that a
 //! provider inlined into content (`<think>…</think>`, Gemma-4 `<|channel>thought…<channel|>`,
 //! Harmony `analysis` channel) are STRIPPED out of `content` into `reasoning`. Combined with
-//! [`render`](crate::render()) (its inverse), this makes `render → ingest` recover the original clean
-//! messages + reasoning.
+//! [`render`](crate::render()) (its inverse for the TOKEN-STREAM targets), this makes
+//! `render → ingest` recover the original clean messages + reasoning.
+//!
+//! ## Fail loud, never store a leak
+//!
+//! [`strip_channel_tokens`] removes the LEADING channel block. If the resulting clean content
+//! STILL contains a control token (an interleaved / second channel the stripper does not model),
+//! [`ingest_openrouter`] errors rather than store a leaking `content` — the same fail-loud stance
+//! as the render-time guard.
 
 use serde_json::Value;
 
 use gw_schema::{Content, Message, ReasoningDetail, Role};
 
 use crate::error::{FormatError, Result};
+use crate::validate::first_control_token;
 
 /// Parse ONE non-streaming OpenAI / OpenRouter assistant message into a clean [`Message`].
 ///
@@ -31,7 +39,8 @@ use crate::error::{FormatError, Result};
 /// # Errors
 ///
 /// Returns [`FormatError::Ingest`] if no assistant message can be located (missing `choices` /
-/// `message`, or a non-object payload).
+/// `message`, or a non-object payload), or if the clean `content` STILL contains a control token
+/// after stripping the leading channel block (a leak that must not be stored).
 pub fn ingest_openrouter(value: &Value) -> Result<Message> {
     let message = locate_message(value)?;
 
@@ -41,14 +50,25 @@ pub fn ingest_openrouter(value: &Value) -> Result<Message> {
         .unwrap_or_default();
     let (clean_content, extracted) = strip_channel_tokens(raw_content);
 
-    // Provider `reasoning` (or `reasoning_content` alias) wins; otherwise use any reasoning we
-    // peeled out of `content`.
+    // Fail loud: a control token surviving in the clean content means an interleaved / second
+    // channel the stripper does not model — storing it would leak channel markup into `content`.
+    if let Some(token) = first_control_token(&clean_content) {
+        return Err(FormatError::Ingest(format!(
+            "clean content still contains control token `{token}` after stripping"
+        )));
+    }
+
+    // Provider `reasoning` (or `reasoning_content` alias) wins, with an empty provider string
+    // collapsing to None. Otherwise use any reasoning peeled out of `content` — kept EVEN when
+    // empty, so an emitted-empty channel (`Some("")`) round-trips and stays distinct from "no
+    // channel at all" (`None`).
     let provider_reasoning = message
         .get("reasoning")
         .or_else(|| message.get("reasoning_content"))
         .and_then(Value::as_str)
-        .map(str::to_owned);
-    let reasoning = provider_reasoning.or(extracted).filter(|s| !s.is_empty());
+        .map(str::to_owned)
+        .filter(|s| !s.is_empty());
+    let reasoning = provider_reasoning.or(extracted);
 
     let reasoning_details = parse_reasoning_details(message.get("reasoning_details"));
 
@@ -104,15 +124,18 @@ fn parse_reasoning_details(raw: Option<&Value>) -> Option<Vec<ReasoningDetail>> 
 /// - Harmony: a leading `analysis` channel before the `final` channel.
 ///
 /// Returns `(clean_content, extracted_reasoning)`. `clean_content` is the final-answer text with
-/// the channel removed; `extracted_reasoning` is `Some` only when a channel was found (with the
-/// trailing newline the renderer added trimmed off, so the round-trip is exact). Content with no
-/// channel tokens is returned unchanged with `None`.
+/// the channel removed; `extracted_reasoning` is `Some` only when a channel was found. The trailing
+/// `\n` trim is framing-specific (it matches each renderer EXACTLY): Gemma-4 frames
+/// `{reasoning}\n<channel|>`, so its trailing `\n` is trimmed; ChatML (`<think>{reasoning}</think>`)
+/// and Harmony (`<|message|>{reasoning}<|end|>`) add NO trailing newline, so a reasoning ending in
+/// `\n` is preserved. Content with no channel tokens is returned unchanged with `None`.
 #[must_use]
 pub fn strip_channel_tokens(content: &str) -> (String, Option<String>) {
-    if let Some(r) = strip_pair(content, "<think>", "</think>") {
+    // (open, close, trim_one_trailing_newline) — the bool mirrors the matching renderer's framing.
+    if let Some(r) = strip_pair(content, "<think>", "</think>", false) {
         return r;
     }
-    if let Some(r) = strip_pair(content, "<|channel>thought\n", "<channel|>") {
+    if let Some(r) = strip_pair(content, "<|channel>thought\n", "<channel|>", true) {
         return r;
     }
     if let Some(r) = strip_harmony(content) {
@@ -122,12 +145,22 @@ pub fn strip_channel_tokens(content: &str) -> (String, Option<String>) {
 }
 
 /// Strip a single `open … close` channel anchored at the START of `content`. The reasoning is the
-/// text between the markers (one trailing `\n` trimmed, matching the renderer's framing); the
-/// clean content is everything after `close`.
-fn strip_pair(content: &str, open: &str, close: &str) -> Option<(String, Option<String>)> {
+/// text between the markers; one trailing `\n` is trimmed ONLY when `trim_trailing_nl` (the
+/// matching renderer added it). The clean content is everything after `close`.
+fn strip_pair(
+    content: &str,
+    open: &str,
+    close: &str,
+    trim_trailing_nl: bool,
+) -> Option<(String, Option<String>)> {
     let rest = content.strip_prefix(open)?;
     let end = rest.find(close)?;
-    let reasoning = rest[..end].strip_suffix('\n').unwrap_or(&rest[..end]);
+    let raw = &rest[..end];
+    let reasoning = if trim_trailing_nl {
+        raw.strip_suffix('\n').unwrap_or(raw)
+    } else {
+        raw
+    };
     let clean = &rest[end + close.len()..];
     Some((clean.to_owned(), Some(reasoning.to_owned())))
 }
@@ -227,5 +260,55 @@ mod tests {
     fn ingest_missing_message_errors() {
         let v = json!({"choices": []});
         assert!(matches!(ingest_openrouter(&v), Err(FormatError::Ingest(_))));
+    }
+
+    #[test]
+    fn ingest_errors_when_clean_content_retains_control_token() {
+        // A second interleaved channel the leading strip does not consume must NOT be stored.
+        let v = json!({
+            "role": "assistant",
+            "content": "<think>a</think>answer <|im_end|> trailing"
+        });
+        let err = ingest_openrouter(&v).unwrap_err();
+        assert!(matches!(err, FormatError::Ingest(_)));
+        assert!(err.to_string().contains("<|im_end|>"));
+    }
+
+    #[test]
+    fn chatml_reasoning_trailing_newline_is_preserved() {
+        // ChatML frames `<think>{r}</think>` with no added newline, so a reasoning ending in
+        // `\n` must survive ingest (framing-specific trim).
+        let (clean, r) = strip_channel_tokens("<think>step\n</think>42");
+        assert_eq!(clean, "42");
+        assert_eq!(r.as_deref(), Some("step\n"));
+    }
+
+    #[test]
+    fn gemma_reasoning_trailing_newline_is_trimmed_once() {
+        // Gemma frames `{r}\n<channel|>`, so exactly one trailing newline is the framing.
+        let (clean, r) = strip_channel_tokens("<|channel>thought\nstep\n<channel|>42");
+        assert_eq!(clean, "42");
+        assert_eq!(r.as_deref(), Some("step"));
+    }
+
+    #[test]
+    fn emitted_empty_channel_round_trips_to_some_empty() {
+        // An emitted-empty Gemma thought channel (`<|channel>thought\n<channel|>`) is a real,
+        // distinct signal — it must ingest to Some("") (a present-but-empty channel), NOT None.
+        let (clean, r) = strip_channel_tokens("<|channel>thought\n<channel|>96");
+        assert_eq!(clean, "96");
+        assert_eq!(r.as_deref(), Some(""));
+
+        let v = json!({"role": "assistant", "content": "<|channel>thought\n<channel|>96"});
+        let m = ingest_openrouter(&v).unwrap();
+        assert_eq!(m.reasoning.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn empty_provider_reasoning_collapses_to_none() {
+        // A provider-supplied empty `reasoning` string (no channel) is noise → None.
+        let v = json!({"role": "assistant", "content": "ok", "reasoning": ""});
+        let m = ingest_openrouter(&v).unwrap();
+        assert!(m.reasoning.is_none());
     }
 }

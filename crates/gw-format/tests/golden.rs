@@ -5,7 +5,7 @@
 //! bytes here are the ones that MUST be diff-verified against the official pinned
 //! `google/gemma-4-12B-it` `chat_template.jinja` before production SFT (no network in any test).
 
-use gw_format::{ingest_openrouter, render};
+use gw_format::{FormatError, ingest_openrouter, render};
 use gw_schema::{Content, CotPolicy, Message, Role, TrlFormat};
 use serde_json::json;
 
@@ -219,4 +219,114 @@ fn stripped_drops_reasoning_every_target() {
             "stripped render for {target:?} leaked reasoning"
         );
     }
+}
+
+// ------------------------- render-time control-token guard (A) -------------------------
+
+/// Every control token, when leaked into a CLEAN field, must make `render()` FAIL LOUD with
+/// `ControlTokenInContent` — for every target — instead of silently producing wrong output.
+#[test]
+fn render_fails_loud_on_control_token_in_reasoning() {
+    let delimiters = [
+        "<think>",
+        "</think>",
+        "<|channel>",
+        "<channel|>",
+        "<|channel|>",
+        "<|turn>",
+        "<turn|>",
+        "<|im_start|>",
+        "<|im_end|>",
+        "<|start|>",
+        "<|end|>",
+        "<|message|>",
+        "<|return|>",
+        "<|think|>",
+        "<bos>",
+    ];
+    let targets = [
+        TrlFormat::Gemma4,
+        TrlFormat::ChatML,
+        TrlFormat::ShareGpt,
+        TrlFormat::OpenAiMessages,
+        TrlFormat::Harmony,
+        TrlFormat::TrlPromptCompletion,
+    ];
+    for tok in delimiters {
+        // The leak rides in `reasoning` (a clean field); content is a valid final answer.
+        let convo = vec![
+            m(Role::User, "q", None),
+            m(Role::Assistant, "ans", Some(&format!("oops {tok} leak"))),
+        ];
+        for target in targets {
+            let err = render(&convo, target, CotPolicy::Supervised).unwrap_err();
+            assert!(
+                matches!(err, FormatError::ControlTokenInContent { .. }),
+                "target {target:?} did not fail loud for token {tok}: {err:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn render_fails_loud_on_control_token_in_content() {
+    let convo = vec![m(Role::Assistant, "answer <|im_end|> tail", None)];
+    let err = render(&convo, TrlFormat::ChatML, CotPolicy::Supervised).unwrap_err();
+    assert!(matches!(
+        err,
+        FormatError::ControlTokenInContent {
+            token: "<|im_end|>",
+            role: Role::Assistant,
+        }
+    ));
+}
+
+#[test]
+fn ingest_errors_when_clean_content_retains_control_token() {
+    // After stripping the leading <think> block, a second interleaved control token survives in
+    // the clean content -> ingest must error rather than store a leak.
+    let v = json!({"role": "assistant", "content": "<think>a</think>ok <|channel>thought\nx"});
+    let err = ingest_openrouter(&v).unwrap_err();
+    assert!(matches!(err, FormatError::Ingest(_)));
+}
+
+// ------------------------- prompt-completion final-turn guard (B) -------------------------
+
+#[test]
+fn prompt_completion_errors_when_not_ending_on_assistant() {
+    // Conversation ends on a USER turn -> a tail-split would supervise that user turn. Fail loud.
+    let convo = vec![
+        m(Role::User, "q1", None),
+        m(Role::Assistant, "a1", Some("r1")),
+        m(Role::User, "q2 (no answer yet)", None),
+    ];
+    let err = render(
+        &convo,
+        TrlFormat::TrlPromptCompletion,
+        CotPolicy::Supervised,
+    )
+    .unwrap_err();
+    assert!(matches!(err, FormatError::Projection(_)));
+    assert!(err.to_string().contains("assistant turn"));
+}
+
+// ------------------------- Gemma-4 mid-conversation system fold -------------------------
+
+#[test]
+fn gemma4_folds_midconversation_system_into_next_user_turn() {
+    // A system message appearing mid-conversation folds into the NEXT user turn, not the first.
+    let convo = vec![
+        m(Role::User, "first question", None),
+        m(Role::Assistant, "first answer", Some("r1")),
+        m(Role::System, "NEW POLICY", None),
+        m(Role::User, "second question", None),
+        m(Role::Assistant, "second answer", Some("r2")),
+    ];
+    let out = render(&convo, TrlFormat::Gemma4, CotPolicy::Supervised).unwrap();
+    // The system text must be prepended to the SECOND user turn, not the first.
+    assert!(out.contains("<|turn>user\nfirst question<turn|>"));
+    assert!(out.contains("<|turn>user\nNEW POLICY\n\nsecond question<turn|>"));
+    // Exactly two user turns and two model turns (no standalone system turn).
+    assert_eq!(out.matches("<|turn>user\n").count(), 2);
+    assert_eq!(out.matches("<|turn>model\n").count(), 2);
 }

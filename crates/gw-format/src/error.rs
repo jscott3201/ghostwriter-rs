@@ -2,7 +2,8 @@
 //!
 //! Variants distinguish the failure classes a caller must reason about: a minijinja template
 //! compile/render fault (`Template`), JSON (de)serialization of the ingest/export shapes
-//! (`Serde`), a role the target template cannot represent (`UnsupportedRole`), a malformed
+//! (`Serde`), a role the target template cannot represent (`UnsupportedRole`), a control token
+//! leaked into a clean field (`ControlTokenInContent`, the loud round-trip guard), a malformed
 //! ingest payload (`Ingest`), and a projection precondition violation (`Projection`). No
 //! `anyhow` — this crate surfaces a typed error.
 
@@ -35,6 +36,19 @@ pub enum FormatError {
         role: Role,
         /// The target format name (e.g. `"sharegpt"`).
         target: &'static str,
+    },
+
+    /// A message's CLEAN field (`content` or `reasoning`) already contains a chat control token
+    /// (e.g. `<think>`, `<|channel>`, `<turn|>`). Per INVARIANT-a these fields must be CLEAN — a
+    /// control token there means an upstream stage leaked channel markup and the render would not
+    /// round-trip. Failing loud beats silently corrupting the training target. Carries the
+    /// offending token and the role of the message it was found on.
+    #[error("control token `{token}` found in clean field of `{role:?}` message")]
+    ControlTokenInContent {
+        /// The control token that leaked into a clean field.
+        token: &'static str,
+        /// The role of the message carrying the leak.
+        role: Role,
     },
 
     /// An OpenRouter / OpenAI ingest payload was malformed (missing `message`, wrong type, …).
@@ -70,6 +84,17 @@ mod tests {
         let bad = serde_json::from_str::<i32>("not json").unwrap_err();
         let e: FormatError = bad.into();
         assert!(matches!(e, FormatError::Serde(_)));
+    }
+
+    #[test]
+    fn control_token_names_token_and_role() {
+        let e = FormatError::ControlTokenInContent {
+            token: "<think>",
+            role: Role::Assistant,
+        };
+        let msg = e.to_string();
+        assert!(msg.contains("<think>"));
+        assert!(msg.contains("Assistant"));
     }
 
     #[test]
