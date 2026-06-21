@@ -78,7 +78,7 @@ pub use client::{
 pub use delta::{ChunkProvenance, CompletionTokensDetails, StreamDelta, Usage};
 pub use error::ProviderError;
 pub use limiter::RateLimiter;
-pub use request::{ChatRequest, ProviderRouting, ReasoningParam, UsageRequest};
+pub use request::{ChatRequest, ProviderRouting, ReasoningParam, SortStrategy, UsageRequest};
 pub use retry::{RetryPolicy, retry, retry_with};
 pub use sse::decode_sse;
 

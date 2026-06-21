@@ -11,7 +11,7 @@
 use gw_schema::ReasoningDetail;
 use serde::Deserialize;
 
-use crate::delta_wire::{RawChunk, RawDelta, convert_reasoning_details};
+use crate::delta_wire::{RawChunk, RawDelta, convert_reasoning_details, convert_usage};
 
 /// One streaming delta: the per-chunk slice of an assistant turn.
 ///
@@ -105,6 +105,13 @@ impl ChunkProvenance {
 }
 
 /// Token accounting mirrored from an OpenRouter `usage` block (final chunk only).
+///
+/// This struct is **not** the direct wire deserialization target: the usage block rides the
+/// terminal chunk, so a type-drifted field (e.g. `cost` as a string, a token count as a float)
+/// must not abort the whole chunk and discard `finish_reason` / provenance. The wire `usage` is
+/// captured as a raw `serde_json::Value` and coerced **tolerantly** into this struct by the
+/// crate-private `convert_usage`, which never errors. (The `Deserialize` derive is retained for
+/// downstream convenience, not used on the hot wire path.)
 #[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize)]
 pub struct Usage {
     /// Prompt (input) tokens billed.
@@ -159,9 +166,11 @@ pub struct CompletionTokensDetails {
 /// (see [`convert_reasoning_details`]).
 ///
 /// # Errors
-/// Returns the underlying `serde_json` error if the payload is not a valid chunk object. A
-/// malformed `reasoning_details` (non-array, or a bad fragment) never errors here — it is
-/// skipped, not propagated, so a co-located `content` always survives.
+/// Returns the underlying `serde_json` error only if the payload is not a valid JSON chunk
+/// object at all. A malformed `reasoning_details` (non-array, or a bad fragment) and a
+/// type-drifted `usage` (string cost, float token counts, garbage shape) never error here —
+/// they are coerced or skipped, not propagated, so a terminal chunk's `finish_reason` /
+/// provenance / coercible usage fields always survive.
 pub(crate) fn parse_chunk(json: &str) -> Result<StreamDelta, serde_json::Error> {
     let raw: RawChunk = serde_json::from_str(json)?;
     let first = raw.choices.into_iter().next();
@@ -178,7 +187,7 @@ pub(crate) fn parse_chunk(json: &str) -> Result<StreamDelta, serde_json::Error> 
         };
         if p.is_empty() { None } else { Some(p) }
     };
-    let usage = raw.usage.filter(|u| !u.is_empty());
+    let usage = convert_usage(raw.usage);
     let reasoning_details = convert_reasoning_details(delta.reasoning_details);
 
     Ok(StreamDelta {
@@ -473,5 +482,83 @@ mod tests {
         assert!(d.is_empty_payload());
         assert!(d.refusal.is_none());
         assert!(d.native_finish_reason.is_none());
+    }
+
+    // --- F. lenient usage coercion: a type-drifted usage field must NEVER abort the chunk ----
+
+    #[test]
+    fn cost_as_string_does_not_abort_terminal_chunk() {
+        // cost arrives as a JSON string; finish_reason + token counts must still be captured.
+        let j = r#"{"choices":[{"delta":{},"finish_reason":"stop"}],
+            "usage":{"prompt_tokens":10,"completion_tokens":42,"cost":"0.00043"}}"#;
+        let d = parse_chunk(j).unwrap();
+        assert_eq!(d.finish_reason.as_deref(), Some("stop"));
+        let usage = d.usage.expect("usage present");
+        assert_eq!(usage.cost, Some(0.00043));
+        assert_eq!(usage.completion_tokens, Some(42));
+        assert_eq!(usage.prompt_tokens, Some(10));
+    }
+
+    #[test]
+    fn completion_tokens_as_float_is_truncated() {
+        let j = r#"{"choices":[{"delta":{},"finish_reason":"stop"}],
+            "usage":{"completion_tokens":42.0}}"#;
+        let d = parse_chunk(j).unwrap();
+        assert_eq!(d.usage.unwrap().completion_tokens, Some(42));
+    }
+
+    #[test]
+    fn reasoning_tokens_as_float_is_coerced() {
+        let j = r#"{"choices":[{"delta":{},"finish_reason":"stop"}],
+            "usage":{"completion_tokens":200,"completion_tokens_details":{"reasoning_tokens":150.0}}}"#;
+        let d = parse_chunk(j).unwrap();
+        assert_eq!(d.usage.unwrap().reasoning_tokens(), Some(150));
+    }
+
+    #[test]
+    fn garbage_usage_string_yields_none_but_keeps_finish_reason() {
+        // usage is a bare string ("nope"): degrade usage to None, never error, keep finish_reason.
+        let j = r#"{"choices":[{"delta":{},"finish_reason":"stop"}],"usage":"nope"}"#;
+        let d = parse_chunk(j).unwrap();
+        assert_eq!(d.finish_reason.as_deref(), Some("stop"));
+        assert!(d.usage.is_none());
+    }
+
+    #[test]
+    fn numeric_string_token_count_is_parsed() {
+        let j = r#"{"choices":[{"delta":{}}],"usage":{"total_tokens":"52"}}"#;
+        let d = parse_chunk(j).unwrap();
+        assert_eq!(d.usage.unwrap().total_tokens, Some(52));
+    }
+
+    #[test]
+    fn integer_zero_cost_is_preserved() {
+        // cost:0 (an int) coerces to Some(0.0), not dropped.
+        let j = r#"{"choices":[{"delta":{},"finish_reason":"stop"}],
+            "usage":{"completion_tokens":1,"cost":0}}"#;
+        let d = parse_chunk(j).unwrap();
+        assert_eq!(d.usage.unwrap().cost, Some(0.0));
+    }
+
+    #[test]
+    fn partially_bad_usage_keeps_coercible_fields() {
+        // completion_tokens is a non-numeric string (dropped); the rest survives.
+        let j = r#"{"choices":[{"delta":{},"finish_reason":"stop"}],
+            "usage":{"prompt_tokens":7,"completion_tokens":"abc","cost":0.001}}"#;
+        let d = parse_chunk(j).unwrap();
+        let usage = d
+            .usage
+            .expect("usage present (prompt_tokens + cost coercible)");
+        assert_eq!(usage.prompt_tokens, Some(7));
+        assert_eq!(usage.completion_tokens, None);
+        assert_eq!(usage.cost, Some(0.001));
+    }
+
+    #[test]
+    fn fully_uncoercible_usage_object_degrades_to_none() {
+        let j = r#"{"choices":[{"delta":{}}],
+            "usage":{"prompt_tokens":"x","completion_tokens":true,"cost":[1,2]}}"#;
+        let d = parse_chunk(j).unwrap();
+        assert!(d.usage.is_none());
     }
 }

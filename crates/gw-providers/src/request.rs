@@ -87,10 +87,15 @@ impl ChatRequest {
     ///
     /// Pinning a provider (e.g. via [`ProviderRouting::pin`]) also makes the captured
     /// `served_by` / provenance deterministic, since OpenRouter then routes to exactly that
-    /// upstream rather than its default fallback set.
+    /// upstream rather than its default fallback set. An all-default (empty) routing is dropped
+    /// so it emits no `provider` key. (G)
     #[must_use]
     pub fn with_provider(mut self, routing: ProviderRouting) -> Self {
-        self.provider = Some(routing);
+        self.provider = if routing.is_empty() {
+            None
+        } else {
+            Some(routing)
+        };
         self
     }
 
@@ -192,19 +197,21 @@ pub struct UsageRequest {
 /// `ChatRequest.provider` emits no `provider` key at all.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct ProviderRouting {
-    /// Preferred provider slugs, tried in order, e.g. `["novita"]`. Empty ⇒ omitted.
+    /// Preferred provider slugs, tried in order, e.g. `["novita"]`. Open set (free strings).
+    /// Empty ⇒ omitted.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub order: Vec<String>,
-    /// Restrict routing to ONLY these providers. `None` ⇒ omitted.
+    /// Restrict routing to ONLY these providers. Open set. `None` ⇒ omitted.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub only: Option<Vec<String>>,
     /// Whether to fall through to other providers if the preferred ones fail. `None` ⇒
     /// omitted (OpenRouter default is `true`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allow_fallbacks: Option<bool>,
-    /// Sort strategy: `"price"` | `"throughput"` | `"latency"`. `None` ⇒ omitted.
+    /// Sort strategy — a closed set ([`SortStrategy`]), so illegal values are unrepresentable.
+    /// `None` ⇒ omitted. (H)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub sort: Option<String>,
+    pub sort: Option<SortStrategy>,
 }
 
 impl ProviderRouting {
@@ -233,14 +240,39 @@ impl ProviderRouting {
         }
     }
 
-    /// Route by a sort strategy (`"price"` | `"throughput"` | `"latency"`).
+    /// Route by a [`SortStrategy`] (`Price` | `Throughput` | `Latency`).
     #[must_use]
-    pub fn sorted(strategy: impl Into<String>) -> Self {
+    pub fn sorted(strategy: SortStrategy) -> Self {
         Self {
-            sort: Some(strategy.into()),
+            sort: Some(strategy),
             ..Self::default()
         }
     }
+
+    /// `true` when no routing is set at all (empty `order`, and `only`/`allow_fallbacks`/`sort`
+    /// all `None`) — i.e. serializing it would emit `{}`. Used by
+    /// [`ChatRequest::with_provider`] to drop an empty routing entirely. (G)
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.order.is_empty()
+            && self.only.is_none()
+            && self.allow_fallbacks.is_none()
+            && self.sort.is_none()
+    }
+}
+
+/// OpenRouter provider sort strategy — a closed set (mirrors `ReasoningEffort`'s approach so an
+/// illegal sort value is unrepresentable). Serializes lowercase: `"price"` | `"throughput"` |
+/// `"latency"`. (H)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SortStrategy {
+    /// Cheapest provider first.
+    Price,
+    /// Highest-throughput provider first.
+    Throughput,
+    /// Lowest-latency provider first.
+    Latency,
 }
 
 #[cfg(test)]
@@ -361,11 +393,45 @@ mod tests {
     #[test]
     fn sorted_serializes_sort_only() {
         let req = ChatRequest::new("m", vec![user_msg("q")])
-            .with_provider(ProviderRouting::sorted("throughput"));
+            .with_provider(ProviderRouting::sorted(SortStrategy::Throughput));
         let v: Value = serde_json::to_value(&req).unwrap();
         assert_eq!(v["provider"]["sort"], "throughput");
         assert!(v["provider"].get("order").is_none());
         assert!(v["provider"].get("allow_fallbacks").is_none());
+    }
+
+    #[test]
+    fn sort_strategy_spellings() {
+        // H: the closed sort set serializes lowercase.
+        assert_eq!(
+            serde_json::to_value(SortStrategy::Price).unwrap(),
+            Value::from("price")
+        );
+        assert_eq!(
+            serde_json::to_value(SortStrategy::Throughput).unwrap(),
+            Value::from("throughput")
+        );
+        assert_eq!(
+            serde_json::to_value(SortStrategy::Latency).unwrap(),
+            Value::from("latency")
+        );
+        // sorted(Price) → {"sort":"price"}
+        let r = ProviderRouting::sorted(SortStrategy::Price);
+        assert_eq!(
+            serde_json::to_value(&r).unwrap(),
+            serde_json::json!({"sort":"price"})
+        );
+    }
+
+    #[test]
+    fn empty_routing_via_with_provider_emits_no_provider_key() {
+        // G: an all-default routing handed to with_provider is dropped entirely.
+        let req =
+            ChatRequest::new("m", vec![user_msg("q")]).with_provider(ProviderRouting::default());
+        let v: Value = serde_json::to_value(&req).unwrap();
+        assert!(v.get("provider").is_none());
+        assert!(ProviderRouting::default().is_empty());
+        assert!(!ProviderRouting::pin("novita").is_empty());
     }
 
     #[test]
