@@ -45,10 +45,17 @@ fn assert_partition_invariant(err: EngineError) {
 async fn relaunch_with_different_shard_count_hard_errors_before_spend_or_status_reset() {
     let store = Store::open_in_memory().await.unwrap();
     let teacher = Arc::new(ScriptedTeacher::new(
-        vec![good_cot(0.01), good_cot(0.01)],
-        2,
+        vec![
+            good_cot(0.01),
+            good_cot(0.01),
+            good_cot(0.01),
+            good_cot(0.01),
+        ],
+        4,
     ));
     let judge = Arc::new(ScriptedJudge::new(vec![
+        &judge_body(0.95, "accept"),
+        &judge_body(0.95, "accept"),
         &judge_body(0.95, "accept"),
         &judge_body(0.95, "accept"),
     ]));
@@ -63,15 +70,12 @@ async fn relaunch_with_different_shard_count_hard_errors_before_spend_or_status_
         area_k1(one_judge(), lenient_thresholds()),
         2,
     );
+    let prompts = ["q0", "q1", "q2", "q3"];
     engine
-        .run(
-            "run-shards",
-            &source(&["q0", "q1"], 2),
-            CancellationToken::new(),
-        )
+        .run("run-shards", &source(&prompts, 2), CancellationToken::new())
         .await
         .unwrap();
-    assert_eq!(teacher.call_count(), 2);
+    assert_eq!(teacher.call_count(), 4);
     assert_eq!(
         run_status(&store, "run-shards").await.as_deref(),
         Some(RunStatus::Completed.as_str())
@@ -88,17 +92,15 @@ async fn relaunch_with_different_shard_count_hard_errors_before_spend_or_status_
         area_k1(one_judge(), lenient_thresholds()),
         2,
     );
+    // ≥3 prompts required so %2 vs %3 re-buckets at least one prompt to a fresh shard —
+    // otherwise the no-spend/no-orphan assertions don't discriminate.
     let err = engine2
-        .run(
-            "run-shards",
-            &source(&["q0", "q1"], 3),
-            CancellationToken::new(),
-        )
+        .run("run-shards", &source(&prompts, 3), CancellationToken::new())
         .await
         .unwrap_err();
     assert_partition_invariant(err);
-    assert_eq!(teacher.call_count(), 2, "mismatch must not spend");
-    assert_eq!(record_count(&store, "run-shards").await, 2);
+    assert_eq!(teacher.call_count(), 4, "mismatch must not spend");
+    assert_eq!(record_count(&store, "run-shards").await, 4);
     assert_eq!(
         run_status(&store, "run-shards").await.as_deref(),
         Some(RunStatus::Completed.as_str()),
@@ -110,10 +112,17 @@ async fn relaunch_with_different_shard_count_hard_errors_before_spend_or_status_
 async fn relaunch_with_reordered_prompts_hard_errors_before_spend() {
     let store = Store::open_in_memory().await.unwrap();
     let teacher = Arc::new(ScriptedTeacher::new(
-        vec![good_cot(0.01), good_cot(0.01)],
-        2,
+        vec![
+            good_cot(0.01),
+            good_cot(0.01),
+            good_cot(0.01),
+            good_cot(0.01),
+        ],
+        4,
     ));
     let judge = Arc::new(ScriptedJudge::new(vec![
+        &judge_body(0.95, "accept"),
+        &judge_body(0.95, "accept"),
         &judge_body(0.95, "accept"),
         &judge_body(0.95, "accept"),
     ]));
@@ -128,10 +137,11 @@ async fn relaunch_with_reordered_prompts_hard_errors_before_spend() {
         area_k1(one_judge(), lenient_thresholds()),
         2,
     );
+    let prompts = ["q0", "q1", "q2", "q3"];
     engine
         .run(
             "run-prompts",
-            &source(&["q0", "q1"], 2),
+            &source(&prompts, 2),
             CancellationToken::new(),
         )
         .await
@@ -151,14 +161,14 @@ async fn relaunch_with_reordered_prompts_hard_errors_before_spend() {
     let err = engine2
         .run(
             "run-prompts",
-            &source(&["q1", "q0"], 2),
+            &source(&["q0", "q2", "q1", "q3"], 2),
             CancellationToken::new(),
         )
         .await
         .unwrap_err();
     assert_partition_invariant(err);
-    assert_eq!(teacher.call_count(), 2);
-    assert_eq!(record_count(&store, "run-prompts").await, 2);
+    assert_eq!(teacher.call_count(), 4);
+    assert_eq!(record_count(&store, "run-prompts").await, 4);
 }
 
 #[tokio::test]

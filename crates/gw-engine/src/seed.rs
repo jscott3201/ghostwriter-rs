@@ -26,7 +26,7 @@
 //! path.
 
 use gw_generate::UserTurnCandidate;
-use gw_schema::{Content, ContentPart};
+use gw_schema::Content;
 
 use crate::Result;
 
@@ -123,7 +123,7 @@ impl SeedSource for InMemorySeedSource {
             .items
             .iter()
             .map(candidate_prompt_text)
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>>>()?;
         Ok(gw_storage::prompts_hash(&prompts)?)
     }
 
@@ -145,17 +145,10 @@ impl SeedSource for InMemorySeedSource {
     }
 }
 
-fn candidate_prompt_text(candidate: &UserTurnCandidate) -> String {
+fn candidate_prompt_text(candidate: &UserTurnCandidate) -> Result<String> {
     match &candidate.message.content {
-        Content::Text(text) => text.trim().to_string(),
-        Content::Parts(parts) => parts
-            .iter()
-            .filter_map(|part| match part {
-                ContentPart::Text { text } => Some(text.trim()),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join(""),
+        Content::Text(text) => Ok(text.trim().to_string()),
+        Content::Parts(_) => Ok(serde_json::to_string(&candidate.message.content)?),
     }
 }
 
@@ -180,7 +173,7 @@ pub fn record_id(
 mod tests {
     use super::*;
     use gw_generate::{UserSeed, user_message};
-    use gw_schema::{Oracle, VerificationContract, VerificationKind};
+    use gw_schema::{ContentPart, Oracle, VerificationContract, VerificationKind};
 
     fn candidate(text: &str) -> UserTurnCandidate {
         UserTurnCandidate {
@@ -195,6 +188,12 @@ mod tests {
             difficulty_targeted: true,
             in_scope: true,
         }
+    }
+
+    fn candidate_with_content(content: Content) -> UserTurnCandidate {
+        let mut candidate = candidate("");
+        candidate.message.content = content;
+        candidate
     }
 
     #[test]
@@ -258,6 +257,42 @@ mod tests {
         let c = InMemorySeedSource::new(vec![candidate("q2"), candidate("q1")], 1);
         assert_eq!(a.prompts_hash().unwrap(), b.prompts_hash().unwrap());
         assert_ne!(a.prompts_hash().unwrap(), c.prompts_hash().unwrap());
+    }
+
+    #[test]
+    fn prompts_hash_distinguishes_part_boundaries_and_non_text_parts() {
+        let joined = InMemorySeedSource::new(
+            vec![candidate_with_content(Content::Parts(vec![
+                ContentPart::Text { text: "ab".into() },
+            ]))],
+            1,
+        );
+        let split = InMemorySeedSource::new(
+            vec![candidate_with_content(Content::Parts(vec![
+                ContentPart::Text { text: "a".into() },
+                ContentPart::Text { text: "b".into() },
+            ]))],
+            1,
+        );
+        let image_only = InMemorySeedSource::new(
+            vec![candidate_with_content(Content::Parts(vec![
+                ContentPart::ImageUrl {
+                    image_url: "https://example.test/image.png".into(),
+                },
+            ]))],
+            1,
+        );
+        let empty_parts =
+            InMemorySeedSource::new(vec![candidate_with_content(Content::Parts(vec![]))], 1);
+
+        let joined_hash = joined.prompts_hash().unwrap();
+        let split_hash = split.prompts_hash().unwrap();
+        let image_hash = image_only.prompts_hash().unwrap();
+        let empty_hash = empty_parts.prompts_hash().unwrap();
+
+        assert_ne!(joined_hash, split_hash);
+        assert_ne!(image_hash, empty_hash);
+        assert_ne!(split_hash, image_hash);
     }
 
     #[test]
