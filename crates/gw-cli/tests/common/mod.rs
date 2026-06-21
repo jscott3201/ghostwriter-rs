@@ -5,6 +5,7 @@
 //! some of them reads as dead code in the others — allow it crate-wide for this shared module.
 #![allow(dead_code)]
 
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -21,6 +22,15 @@ pub fn unique_temp_path(suffix: &str) -> PathBuf {
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
     let mut path = std::env::temp_dir();
     path.push(format!("gw-cli-it-{}-{n}-{suffix}", std::process::id()));
+    path
+}
+
+/// Write a tiny `eval_results.json` to a unique temp file and return the path.
+pub fn write_eval_results(suffix: &str, aggregate: f64, gsm8k: f64) -> PathBuf {
+    let path = unique_temp_path(suffix);
+    let json = format!(r#"{{"aggregate": {aggregate}, "benchmarks": {{"gsm8k": {gsm8k}}}}}"#);
+    let mut f = std::fs::File::create(&path).expect("create eval_results");
+    f.write_all(json.as_bytes()).expect("write eval_results");
     path
 }
 

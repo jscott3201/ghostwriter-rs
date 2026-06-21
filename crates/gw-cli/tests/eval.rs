@@ -5,8 +5,6 @@
 
 mod common;
 
-use std::io::Write;
-
 use gw_cli::CommandOutcome;
 use gw_cli::cli::{AuditSeparationArgs, PromoteArgs};
 use gw_cli::commands::eval::{audit_separation, promote_cmd};
@@ -14,7 +12,7 @@ use gw_eval::{SeparationConfig, promote::EvalResults, promote::promote, separati
 use gw_schema::Verdict;
 use gw_storage::{RecordFilter, Store};
 
-use common::{cleanup_db, record, seed_store, unique_temp_path};
+use common::{cleanup_db, record, seed_store, unique_temp_path, write_eval_results};
 
 /// A corpus with one mixed group (verifier-decidable) and one all-pass group with two scored
 /// siblings (selector-eligible): a deterministic separation signal.
@@ -128,15 +126,6 @@ async fn audit_separation_check_rejects_on_low_data_and_passes_on_signal() {
     assert_eq!(outcome, CommandOutcome::Success);
 
     cleanup_db(&db);
-}
-
-/// Write a tiny `eval_results.json` to a unique temp file and return the path.
-fn write_eval_results(suffix: &str, aggregate: f64, gsm8k: f64) -> std::path::PathBuf {
-    let path = unique_temp_path(suffix);
-    let json = format!(r#"{{"aggregate": {aggregate}, "benchmarks": {{"gsm8k": {gsm8k}}}}}"#);
-    let mut f = std::fs::File::create(&path).expect("create eval_results");
-    f.write_all(json.as_bytes()).expect("write eval_results");
-    path
 }
 
 #[tokio::test]
