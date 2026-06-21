@@ -212,6 +212,18 @@ pub struct ProviderRouting {
     /// `None` ⇒ omitted. (H)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sort: Option<SortStrategy>,
+    /// OpenRouter `provider.data_collection` — whether the chosen upstream may retain prompts.
+    /// Reuses the closed [`gw_schema::DataCollection`] set (serializes `"deny"` | `"allow"`). The
+    /// harness pins `"deny"` on every teacher request so the captured traces are legally
+    /// redistributable (ARCHITECTURE D5; OSS-hygiene). `None` ⇒ omitted (OpenRouter default).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data_collection: Option<gw_schema::DataCollection>,
+    /// OpenRouter `provider.require_parameters` — drop routes that cannot honor the request's
+    /// sampling / reasoning params (temperature, top_p, the `reasoning` object). The harness pins
+    /// `true` so a route silently dropping `reasoning` can never serve a CoT request (ARCHITECTURE
+    /// D5). `None` ⇒ omitted (OpenRouter default `false`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub require_parameters: Option<bool>,
 }
 
 impl ProviderRouting {
@@ -249,15 +261,32 @@ impl ProviderRouting {
         }
     }
 
-    /// `true` when no routing is set at all (empty `order`, and `only`/`allow_fallbacks`/`sort`
-    /// all `None`) — i.e. serializing it would emit `{}`. Used by
-    /// [`ChatRequest::with_provider`] to drop an empty routing entirely. (G)
+    /// Set the OpenRouter data-redistribution posture on this routing: `data_collection` +
+    /// `require_parameters`. Chainable, so a pin can be combined with the deny posture, e.g.
+    /// `ProviderRouting::pin("novita").with_data_posture(DataCollection::Deny, true)`.
+    #[must_use]
+    pub fn with_data_posture(
+        mut self,
+        data_collection: gw_schema::DataCollection,
+        require_parameters: bool,
+    ) -> Self {
+        self.data_collection = Some(data_collection);
+        self.require_parameters = Some(require_parameters);
+        self
+    }
+
+    /// `true` when no routing field is set at all — i.e. serializing it would emit `{}`. Used by
+    /// [`ChatRequest::with_provider`] to drop an empty routing entirely. (G) Includes the
+    /// data-redistribution fields, so a routing that ONLY pins `data_collection` /
+    /// `require_parameters` is NOT dropped (its deny posture must ride the request).
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.order.is_empty()
             && self.only.is_none()
             && self.allow_fallbacks.is_none()
             && self.sort.is_none()
+            && self.data_collection.is_none()
+            && self.require_parameters.is_none()
     }
 }
 
@@ -432,6 +461,52 @@ mod tests {
         assert!(v.get("provider").is_none());
         assert!(ProviderRouting::default().is_empty());
         assert!(!ProviderRouting::pin("novita").is_empty());
+    }
+
+    #[test]
+    fn data_posture_serializes_deny_and_require_parameters() {
+        // D5: the deny posture must ride the request as provider.data_collection + require_parameters.
+        let req = ChatRequest::new("m", vec![user_msg("q")]).with_provider(
+            ProviderRouting::default().with_data_posture(gw_schema::DataCollection::Deny, true),
+        );
+        let v: Value = serde_json::to_value(&req).unwrap();
+        assert_eq!(v["provider"]["data_collection"], "deny");
+        assert_eq!(v["provider"]["require_parameters"], Value::Bool(true));
+    }
+
+    #[test]
+    fn data_posture_alone_is_not_dropped_by_with_provider() {
+        // G: a routing that ONLY sets the deny posture (no order/only/sort) must NOT be dropped —
+        // is_empty() now accounts for the data-redistribution fields.
+        let routing =
+            ProviderRouting::default().with_data_posture(gw_schema::DataCollection::Deny, true);
+        assert!(!routing.is_empty());
+        let req = ChatRequest::new("m", vec![user_msg("q")]).with_provider(routing);
+        let v: Value = serde_json::to_value(&req).unwrap();
+        assert!(v.get("provider").is_some());
+        assert_eq!(v["provider"]["data_collection"], "deny");
+    }
+
+    #[test]
+    fn pin_combines_with_data_posture() {
+        // A hard pin + the deny posture coexist on one routing object.
+        let req = ChatRequest::new("minimax/minimax-m3", vec![user_msg("q")]).with_provider(
+            ProviderRouting::pin("novita")
+                .with_data_posture(gw_schema::DataCollection::Allow, false),
+        );
+        let v: Value = serde_json::to_value(&req).unwrap();
+        assert_eq!(v["provider"]["order"][0], "novita");
+        assert_eq!(v["provider"]["allow_fallbacks"], Value::Bool(false));
+        assert_eq!(v["provider"]["data_collection"], "allow");
+        assert_eq!(v["provider"]["require_parameters"], Value::Bool(false));
+    }
+
+    #[test]
+    fn default_routing_still_omits_data_posture() {
+        // A bare default routing emits no data_collection / require_parameters keys.
+        let v = serde_json::to_value(ProviderRouting::default()).unwrap();
+        assert!(v.get("data_collection").is_none());
+        assert!(v.get("require_parameters").is_none());
     }
 
     #[test]
