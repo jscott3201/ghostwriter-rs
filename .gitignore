@@ -1,0 +1,35 @@
+# --- Internal planning & private material (OSS standing rule: never publish) ---
+# Research, planning, and spec docs contain local paths and private-repo references.
+_research/
+_*/
+.aionforge/
+.claude/
+# Agent memory identities (internal tooling wiring; not project code)
+*-id.json
+claude-id.json
+codex-id.json
+
+# --- Secrets (keys live in runtime env only, never in the repo) ---
+.env
+.env.*
+*.key
+*.pem
+secrets/
+
+# --- Rust ---
+/target/
+**/target/
+Cargo.lock.bak
+
+# --- OS / editor noise ---
+.DS_Store
+*.swp
+.idea/
+.vscode/
+.direnv/
+
+# --- Data artifacts (generated traces / datasets are not committed) ---
+/data/
+*.jsonl
+*.parquet
+!**/fixtures/**/*.jsonl

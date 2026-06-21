@@ -1,0 +1,71 @@
+# cargo-deny baseline for ghostwriter-rs.
+#
+# TLS posture: rustls-only. native-tls and the openssl* stacks are banned, so
+# rustls is the only TLS implementation (reqwest uses `rustls-tls`; async-openai
+# is pinned to its `rustls` feature with default-features off).
+#
+# Divergence from the AionforgeMemory substrate: aws-lc-rs / aws-lc-sys are NOT
+# banned here. The substrate bans them because its release image is a musl/Alpine
+# static build where aws-lc's cmake/Go toolchain fails; ghostwriter-rs ships no
+# such static image, so rustls's default aws-lc-rs crypto provider is fine. Add
+# the ban (and force the `ring` provider) if a musl static target is introduced.
+#
+# multiple-versions is `warn` (not `deny`) while the dependency tree is young and
+# churning; tighten to `deny` with a curated, owner-attributed skip list once it
+# settles.
+
+[graph]
+all-features = false
+no-default-features = false
+
+[advisories]
+version = 2
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+yanked = "deny"
+ignore = []
+
+[licenses]
+version = 2
+confidence-threshold = 0.93
+allow = [
+  "MIT",
+  "MIT-0",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-3.0",
+  "Unicode-DFS-2016",
+  "CC0-1.0",
+  "Zlib",
+  "BSL-1.0",
+  "MPL-2.0",
+  "CDLA-Permissive-2.0",
+  "OpenSSL",
+]
+exceptions = []
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Workspace-internal `{ path = ... }` crates carry no version (they are wildcards
+# by nature); allow those while still denying real `*` deps from crates.io.
+allow-wildcard-paths = true
+highlight = "all"
+deny = [
+  # rustls-only TLS posture: ban the alternative TLS implementations.
+  { name = "native-tls" },
+  { name = "openssl-sys" },
+  { name = "openssl-src" },
+  { name = "openssl" },
+]
+skip = []
+skip-tree = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

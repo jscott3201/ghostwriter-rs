@@ -1,0 +1,24 @@
+[package]
+name = "gw-tui"
+description = "ratatui terminal UI for ghostwriter-rs (Component + Action architecture over an async event loop)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gw-schema.workspace = true
+gw-engine.workspace = true
+ratatui.workspace = true
+tui-input.workspace = true
+tui-logger.workspace = true
+throbber-widgets-tui.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+futures.workspace = true
+tracing.workspace = true

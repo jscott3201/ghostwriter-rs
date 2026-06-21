@@ -1,0 +1,28 @@
+[package]
+name = "gw-cli"
+description = "The `gw` command-line entrypoint for ghostwriter-rs."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "gw"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+gw-schema.workspace = true
+gw-engine.workspace = true
+gw-eval.workspace = true
+gw-tui.workspace = true
+clap.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+figment.workspace = true

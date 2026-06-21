@@ -1,0 +1,6 @@
+# Pinned channel (not @stable) so CI and local builds agree exactly. Mirrors the
+# AionforgeMemory substrate (edition 2024 / 1.95.0).
+[toolchain]
+channel = "1.95.0"
+components = ["rustfmt", "clippy"]
+profile = "default"

@@ -1,0 +1,6 @@
+# Fetch any git dependencies with the system `git` binary so Cargo uses the same
+# credential helper, proxy, and certificate settings as the developer's shell.
+# Retained as a safe default: the dependency tree currently resolves entirely
+# from crates.io, so no secrets live here.
+[net]
+git-fetch-with-cli = true

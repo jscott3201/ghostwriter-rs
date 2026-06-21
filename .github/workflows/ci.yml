@@ -1,0 +1,110 @@
+# CI for ghostwriter-rs — runs on PRs into `development`.
+#
+# Workflow model (mirrors the AionforgeMemory substrate): every logical change
+# opens a PR into `development` behind this gate; release batches go
+# `development` -> `main`, where release-gate.yml runs the full ubuntu + macOS
+# matrix.
+#
+# Dev PRs get FAST gates only — fmt, the 700-LOC file-size cap, the no-secret
+# scan, and a cached rustdoc (-D warnings); cargo-deny runs only when a
+# dependency manifest changes. The heavy clippy + nextest + build matrix runs at
+# the development -> main release gate (release-gate.yml) and locally: the
+# pre-push hook runs clippy, and `cargo nextest run --workspace` is the local
+# test command. Keeping dev PRs compile-light keeps the inner loop fast.
+#
+# Security: no `${{ github.event.* }}` in any `run:` (confined to if:/with:/env:).
+
+name: ci
+
+on:
+  pull_request:
+    branches: [development]
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: short
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  changes:
+    name: detect changes
+    if: github.event.pull_request.draft == false || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    outputs:
+      deps: ${{ steps.filter.outputs.deps }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            deps:
+              - 'Cargo.lock'
+              - 'Cargo.toml'
+              - 'crates/*/Cargo.toml'
+              - 'deny.toml'
+
+  fmt:
+    name: fmt
+    if: github.event.pull_request.draft == false || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  file-size-cap:
+    name: file-size cap (700 LOC)
+    if: github.event.pull_request.draft == false || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash .github/scripts/check-file-size.sh
+
+  no-secret-scan:
+    name: no-secret scan
+    if: github.event.pull_request.draft == false || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash .github/scripts/check-no-secrets.sh
+
+  rustdoc:
+    name: rustdoc (-D warnings)
+    if: github.event.pull_request.draft == false || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo doc (deny warnings)
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc --no-deps --workspace --document-private-items --locked
+
+  deny:
+    name: cargo-deny
+    needs: changes
+    if: |
+      (github.event.pull_request.draft == false || github.event_name == 'workflow_dispatch')
+      && needs.changes.outputs.deps == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - run: cargo deny check bans licenses sources

@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# ghostwriter-rs pre-push gate — fast lint guard.
+#
+# Runs clippy with warnings-as-errors so a push to `development` can't carry a
+# lint regression. The full test/build matrix runs at the development->main
+# release gate; agent workflows run the complete gate set before pushing.
+# Skip once:    git push --no-verify
+# Skip session: export GW_SKIP_HOOKS=1
+set -euo pipefail
+[ -n "${GW_SKIP_HOOKS:-}" ] && { echo "[pre-push] skipped (GW_SKIP_HOOKS)"; exit 0; }
+cd "$(git rev-parse --show-toplevel)"
+
+if [ -f Cargo.toml ]; then
+  echo "[pre-push] cargo clippy --workspace --all-targets --locked -- -D warnings"
+  cargo clippy --workspace --all-targets --locked -- -D warnings
+else
+  echo "[pre-push] (no Cargo.toml yet — skipping clippy)"
+fi
+
+echo "[pre-push] ok"

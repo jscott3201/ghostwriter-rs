@@ -1,0 +1,57 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jscott3201/ghostwriter-rs"
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[workspace.dependencies]
+# --- internal crates (acyclic: schema -> {format,providers,storage} -> {generate,judge} -> engine -> {tui,cli}; {schema,storage} -> eval) ---
+gw-schema    = { path = "crates/gw-schema" }
+gw-format    = { path = "crates/gw-format" }
+gw-providers = { path = "crates/gw-providers" }
+gw-storage   = { path = "crates/gw-storage" }
+gw-generate  = { path = "crates/gw-generate" }
+gw-judge     = { path = "crates/gw-judge" }
+gw-engine    = { path = "crates/gw-engine" }
+gw-tui       = { path = "crates/gw-tui" }
+gw-eval      = { path = "crates/gw-eval" }
+
+# --- external (versions verified against crates.io 2026-06-19; see _research/06-rust-ratatui-architecture.md) ---
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
+futures = "0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1"
+thiserror = "2"
+reqwest = { version = "0.12", default-features = false, features = ["stream", "rustls-tls", "json"] }
+governor = "0.10.4"
+# rustls-only TLS posture (native-tls / openssl are banned by deny.toml).
+async-openai = { version = "0.41.1", default-features = false, features = ["rustls"] }
+ratatui = "0.30.2"
+tui-input = "0.15.3"
+tui-logger = "0.18.2"
+throbber-widgets-tui = "0.11.1"
+sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "sqlite", "macros", "migrate"] }
+arrow = "59.0.0"
+parquet = "59.0.0"
+minijinja = "2.21.0"
+clap = { version = "4", features = ["derive"] }
+blake3 = "1"
+semver = { version = "1", features = ["serde"] }
+time = { version = "0.3", features = ["serde", "formatting", "parsing", "macros"] }
+figment = { version = "0.10", features = ["toml", "env"] }

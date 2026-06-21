@@ -1,0 +1,21 @@
+[package]
+name = "gw-judge"
+description = "Verifier + judge-panel grading and admission, with weighted-design-effect consensus."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gw-schema.workspace = true
+gw-providers.workspace = true
+gw-storage.workspace = true
+serde.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+thiserror.workspace = true

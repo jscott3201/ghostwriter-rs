@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# ghostwriter-rs fast pre-commit gate — mirrors the cheap PR->development CI.
+# Heavy checks (clippy) run in .githooks/pre-push; the full matrix runs at the
+# development->main release gate.
+# Skip once:    git commit --no-verify
+# Skip session: export GW_SKIP_HOOKS=1
+set -euo pipefail
+[ -n "${GW_SKIP_HOOKS:-}" ] && { echo "[pre-commit] skipped (GW_SKIP_HOOKS)"; exit 0; }
+cd "$(git rev-parse --show-toplevel)"
+
+if [ -f Cargo.toml ]; then
+  echo "[pre-commit] cargo fmt --all --check"
+  cargo fmt --all --check
+else
+  echo "[pre-commit] (no Cargo.toml yet — skipping cargo fmt)"
+fi
+
+echo "[pre-commit] file-size cap (700 LOC)"
+bash .github/scripts/check-file-size.sh
+
+echo "[pre-commit] no-secret scan"
+bash .github/scripts/check-no-secrets.sh
+
+echo "[pre-commit] ok"

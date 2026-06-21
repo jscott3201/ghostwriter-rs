@@ -1,0 +1,25 @@
+[package]
+name = "gw-providers"
+description = "OpenRouter streaming client with hand-rolled chain-of-thought capture, GCRA rate limiting, and retries."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gw-schema.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+reqwest.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+futures.workspace = true
+governor.workspace = true
+async-openai.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
