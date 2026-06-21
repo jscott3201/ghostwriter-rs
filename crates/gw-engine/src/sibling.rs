@@ -419,8 +419,7 @@ fn plan_for(seed: &SeedItem, sampling: SamplingPreset, k: u32) -> gw_generate::S
 }
 
 /// `true` when a sibling's state is in the admitted set (it passed admission): `Admitted`,
-/// `Formatted`, or `Exported`. A sibling in this set is an ESTABLISHED winner — the group already
-/// admitted it on a prior (pre-crash) pass.
+/// `Formatted`, or `Exported`.
 fn is_admitted_state(state: LifecycleState) -> bool {
     matches!(
         state,
@@ -428,16 +427,24 @@ fn is_admitted_state(state: LifecycleState) -> bool {
     )
 }
 
+/// `true` when a sibling is the established group winner from a prior pass.
+///
+/// An established winner is one already admitted or one driven to the `Revising` handoff. Retained
+/// non-winners are forced to `Rejected`, so a sibling at `Revising` can only be the elected winner.
+fn is_established_winner(state: LifecycleState) -> bool {
+    is_admitted_state(state) || state == LifecycleState::Revising
+}
+
 /// Finalize a group of siblings: admit ONLY the single best, RETAIN the rest (INVARIANT 11), and stay
 /// CRASH-IDEMPOTENT (E1) — never elect a SECOND winner when one was already admitted on a prior pass.
 ///
-/// CRASH-RESUME GUARD (E1): a crash can land AFTER the best sibling reached `Admitted`/`Exported` but
-/// BEFORE the shard cursor committed, so on relaunch this re-runs over the SAME group. It first scans
-/// ALL siblings for one already in the admitted set ([`is_admitted_state`]). If one exists, THAT is the
-/// established winner: every other still-`Judged` sibling is driven to a retained `Rejected` and NO
-/// second winner is elected (the established winner's id is returned). Only when NO sibling is yet
-/// admitted does it elect a fresh winner: the highest-`judging.aggregate` sibling among those whose
-/// verifier hard-gate passed AND whose re-derived decision is admissible (`Accept`/`Revise`). The
+/// CRASH-RESUME GUARD (E1): a crash can land AFTER the best sibling reached `Admitted`/`Exported` or
+/// the `Revising` handoff but BEFORE the shard cursor committed, so on relaunch this re-runs over the
+/// SAME group. It first scans ALL siblings for an established winner ([`is_established_winner`]). If
+/// one exists, THAT is the established winner: every other still-`Judged` sibling is driven to a
+/// retained `Rejected` and NO second winner is elected (the established winner's id is returned). Only
+/// when NO sibling is yet established does it elect a fresh winner: the highest-`judging.aggregate`
+/// sibling among those whose verifier hard-gate passed AND whose re-derived decision is admissible. The
 /// elected best is reconciled NATURALLY (`Judged → Admitted → … → Exported`, or `Judged → Revising`);
 /// every OTHER `Judged` sibling whose own decision would ADMIT/revise is OVERRIDDEN to a retained
 /// `Rejected`, and one whose natural outcome is Reject/Escalate reconciles to it (retained / parked).
@@ -449,11 +456,11 @@ async fn select_and_finalize(
     area: &AreaConfig,
     control: RunControl<'_>,
 ) -> Result<Option<String>> {
-    // E1 crash-idempotency: if a sibling is ALREADY admitted (a prior pass admitted it before the crash),
-    // it is the established winner — do NOT re-elect. Retain every still-Judged sibling and return it.
+    // E1 crash-idempotency: if a sibling is ALREADY established as the winner from a prior pass, do NOT
+    // re-elect. Retain every still-Judged sibling and return it.
     if let Some(winner_idx) = siblings
         .iter()
-        .position(|s| is_admitted_state(s.lifecycle.state))
+        .position(|s| is_established_winner(s.lifecycle.state))
     {
         // F3 (H-A): DRIVE the established winner before returning. A crash can land with the winner at
         // `Admitted`/`Formatted` (admitted but not yet exported); without this it would be stranded at
@@ -462,10 +469,7 @@ async fn select_and_finalize(
         let finalized = drive(siblings[winner_idx].clone(), clients, area, control.token()).await?;
         let winner_id = finalized.record_id.clone();
         siblings[winner_idx] = finalized;
-        if control.is_cancelled() {
-            return Ok(Some(winner_id));
-        }
-        retain_remaining_judged(siblings, Some(winner_idx), clients, area, control).await?;
+        retain_remaining_judged(siblings, Some(winner_idx), clients, area, control.token()).await?;
         return Ok(Some(winner_id));
     }
 
@@ -496,9 +500,7 @@ async fn select_and_finalize(
         best_id = Some(finalized.record_id.clone());
         siblings[i] = finalized;
     }
-    if !control.is_cancelled() {
-        retain_remaining_judged(siblings, best_idx, clients, area, control).await?;
-    }
+    retain_remaining_judged(siblings, best_idx, clients, area, control.token()).await?;
     Ok(best_id)
 }
 
@@ -511,12 +513,9 @@ async fn retain_remaining_judged(
     keep_idx: Option<usize>,
     clients: &Clients,
     area: &AreaConfig,
-    control: RunControl<'_>,
+    cancel: &tokio_util::sync::CancellationToken,
 ) -> Result<()> {
     for (i, sib) in siblings.iter_mut().enumerate() {
-        if control.is_cancelled() {
-            return Ok(());
-        }
         if Some(i) == keep_idx {
             continue;
         }
@@ -540,7 +539,7 @@ async fn retain_remaining_judged(
             *sib = clients.store.get(&sib.record_id).await?;
         } else {
             // Natural non-admitted outcome (Reject / Escalate→NeedsReview): reconcile + drive normally.
-            *sib = drive(sib.clone(), clients, area, control.token()).await?;
+            *sib = drive(sib.clone(), clients, area, cancel).await?;
         }
     }
     Ok(())

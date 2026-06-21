@@ -73,6 +73,30 @@ fn on_breach_pause_is_rejected() {
 }
 
 #[test]
+fn env_on_breach_abort_parses() {
+    Jail::expect_with(|jail| {
+        jail.set_env("GW_ON_BREACH", "abort");
+        let cfg = Config::load(None).expect("GW_ON_BREACH=abort parses");
+        assert_eq!(cfg.on_breach, gw_schema::BudgetBreach::Abort);
+        Ok(())
+    });
+}
+
+#[test]
+fn env_on_breach_pause_is_rejected() {
+    Jail::expect_with(|jail| {
+        jail.set_env("GW_ON_BREACH", "pause");
+        let err = Config::load(None).expect_err("GW_ON_BREACH=pause rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("on_breach = \"pause\" is not yet supported"),
+            "got: {msg}"
+        );
+        Ok(())
+    });
+}
+
+#[test]
 fn export_cot_defaults_to_supervised() {
     Jail::expect_with(|jail| {
         jail.create_file(
