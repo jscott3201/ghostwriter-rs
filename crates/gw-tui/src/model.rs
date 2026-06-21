@@ -100,6 +100,22 @@ pub struct App {
     pub ticks: u64,
 }
 
+/// Whether a lifecycle state is a DECIDED outcome — mirrors `gw-engine`'s `executor::is_decided`
+/// (`Admitted`/`Formatted`/`Exported`/`Rejected`/`NeedsReview`/`Revising`). A record-level fault
+/// (`RecordErrored`) must NOT clobber a row already at one of these, exactly as the engine's
+/// no-clobber ledger never overwrites a decided record with `Error`.
+fn is_decided(state: LifecycleState) -> bool {
+    matches!(
+        state,
+        LifecycleState::Admitted
+            | LifecycleState::Formatted
+            | LifecycleState::Exported
+            | LifecycleState::Rejected
+            | LifecycleState::NeedsReview
+            | LifecycleState::Revising
+    )
+}
+
 impl App {
     /// Construct an empty model.
     #[must_use]
@@ -187,15 +203,30 @@ impl App {
             }
             Action::RecordErrored { record_id, error } => {
                 self.push_log(format!("ERROR {record_id}: {error}"));
-                // The engine also emits a StateAdvanced(Error); if it was dropped, reflect Error here so
-                // the table and counters stay consistent with the log.
-                let row = self.records.entry(record_id).or_insert(RecordRow {
-                    state: LifecycleState::Error,
-                    updates: 0,
-                });
-                row.state = LifecycleState::Error;
-                row.updates += 1;
-                self.clamp_selection();
+                // Mirror the engine's NO-CLOBBER ledger (executor::park_allowed / is_decided): a
+                // record-level fault must NOT overwrite a row that already reached a DECIDED outcome
+                // (Admitted/Formatted/Exported/Rejected/NeedsReview/Revising). Otherwise a healthy
+                // record the engine merely ATTRIBUTED a fault to — or whose StateAdvanced raced ahead
+                // of this event — would be shown AND counted as Error, a wrong dashboard state. Only
+                // stub an UNKNOWN record, or reflect Error on an IN-FLIGHT one, where the
+                // authoritative StateAdvanced(Error) may simply have been dropped.
+                match self.records.get_mut(&record_id) {
+                    None => {
+                        self.records.insert(
+                            record_id,
+                            RecordRow {
+                                state: LifecycleState::Error,
+                                updates: 1,
+                            },
+                        );
+                        self.clamp_selection();
+                    }
+                    Some(row) if !is_decided(row.state) => {
+                        row.state = LifecycleState::Error;
+                        row.updates += 1;
+                    }
+                    Some(_) => { /* decided outcome stands; the fault is logged only */ }
+                }
             }
             Action::ShardFinished { .. } => {
                 self.header.shards_finished += 1;
@@ -457,5 +488,46 @@ mod tests {
         app.update(Action::Tick);
         app.update(Action::Tick);
         assert_eq!(app.ticks, 2);
+    }
+
+    /// FIDELITY-1 regression: `RecordErrored` must NOT clobber a row that already reached a DECIDED
+    /// outcome (mirrors the engine's no-clobber ledger). The fault is logged, but a healthy
+    /// Admitted/Exported/Rejected record is never shown or counted as `Error`.
+    #[test]
+    fn record_errored_does_not_clobber_a_decided_row() {
+        let mut app = App::new();
+        advance(&mut app, "win", LifecycleState::Admitted);
+        advance(&mut app, "win", LifecycleState::Exported);
+        app.update(Action::RecordErrored {
+            record_id: "win".into(),
+            error: "late attributed fault".into(),
+        });
+        // The decided outcome stands; only the log reflects the fault.
+        assert_eq!(app.records["win"].state, LifecycleState::Exported);
+        assert_eq!(app.count_in(LifecycleState::Error), 0);
+        assert_eq!(app.admitted_total(), 1);
+        assert!(app.error_log.last().unwrap().contains("win"));
+    }
+
+    /// FIDELITY-1: an UNKNOWN record (its `StateAdvanced(Error)` may have been dropped) is stubbed
+    /// at `Error`; an IN-FLIGHT (non-decided) record is moved to `Error` as the dropped-event
+    /// fallback. Both are consistent with the ledger, unlike clobbering a decided row.
+    #[test]
+    fn record_errored_stubs_unknown_and_reflects_inflight() {
+        let mut app = App::new();
+        // Unknown record → stub at Error.
+        app.update(Action::RecordErrored {
+            record_id: "ghost".into(),
+            error: "no prior state".into(),
+        });
+        assert_eq!(app.records["ghost"].state, LifecycleState::Error);
+        // In-flight (Judged is NOT a decided outcome) → reflect Error (StateAdvanced(Error) dropped).
+        advance(&mut app, "wip", LifecycleState::Judged);
+        app.update(Action::RecordErrored {
+            record_id: "wip".into(),
+            error: "faulted in flight".into(),
+        });
+        assert_eq!(app.records["wip"].state, LifecycleState::Error);
+        assert_eq!(app.count_in(LifecycleState::Error), 2);
     }
 }

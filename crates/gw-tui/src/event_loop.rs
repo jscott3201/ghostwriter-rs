@@ -84,6 +84,10 @@ async fn event_loop(
     let mut reader = EventStream::new();
     let mut tick = interval(tick_rate);
     let mut render = interval(frame_rate);
+    // Once the engine sink is dropped the channel CLOSES and `recv()` returns `None` immediately and
+    // forever; without disabling the arm the `select!` would busy-spin at 100% CPU (LOOP-1). Track the
+    // open state and guard the arm so a closed channel simply stops being polled.
+    let mut events_open = true;
 
     loop {
         tokio::select! {
@@ -91,10 +95,13 @@ async fn event_loop(
             () = cancel.cancelled() => break,
 
             // Engine events: map -> Action -> pure update. `None` => the sink was dropped (run over):
-            // keep the final frame up but stop draining; the caller will cancel to end us.
-            maybe_event = events.recv() => {
-                if let Some(engine_event) = maybe_event {
-                    app.update(Action::from_engine_event(engine_event));
+            // keep the final frame up but stop polling this arm (the caller will cancel to end us).
+            maybe_event = events.recv(), if events_open => {
+                match maybe_event {
+                    Some(engine_event) => {
+                        app.update(Action::from_engine_event(engine_event));
+                    }
+                    None => events_open = false,
                 }
             }
 
@@ -157,8 +164,21 @@ fn map_key(key: KeyEvent) -> Option<Action> {
 }
 
 /// Enter raw mode + the alternate screen and build the ratatui terminal over stdout.
+///
+/// SELF-CLEANING (LOOP-2): once `enable_raw_mode` succeeds, any later failure (entering the alternate
+/// screen, or building the terminal) UNDOES raw mode + the alt screen before returning the error — so a
+/// partial-setup failure can never leave the caller's terminal in raw mode (the error propagates out of
+/// `run` via `?` WITHOUT reaching `exit`).
 fn enter() -> Result<Terminal<CrosstermBackend<Stdout>>> {
     enable_raw_mode()?;
+    enter_after_raw_mode().inspect_err(|_| {
+        let _ = execute!(stdout(), LeaveAlternateScreen, DisableMouseCapture);
+        let _ = disable_raw_mode();
+    })
+}
+
+/// The post-raw-mode setup steps, split out so [`enter`] can undo raw mode on any failure here.
+fn enter_after_raw_mode() -> Result<Terminal<CrosstermBackend<Stdout>>> {
     let mut out = stdout();
     execute!(out, EnterAlternateScreen, EnableMouseCapture)?;
     let terminal = Terminal::new(CrosstermBackend::new(out))?;
