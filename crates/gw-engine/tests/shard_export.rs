@@ -239,6 +239,10 @@ async fn best_of_k_export_excludes_retained_admissible_runner_up() {
 
     let sidecar_manifest: ExportManifest =
         serde_json::from_slice(&std::fs::read(sidecar_path(&dst)).unwrap()).unwrap();
+    assert_eq!(
+        sidecar_manifest.n_records, 2,
+        "n_records = whole-run population (winner + retained runner-up)"
+    );
     assert_eq!(sidecar_manifest.n_admitted as usize, report.admitted);
     let row_ids = exported_record_ids(&dst);
     assert_eq!(row_ids.len(), report.admitted);

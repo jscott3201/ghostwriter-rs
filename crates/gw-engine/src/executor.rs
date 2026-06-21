@@ -579,8 +579,9 @@ impl Engine {
     /// sidecar.
     ///
     /// The shared Parquet exporter filters by judge verdict; end-of-run export narrows that input to
-    /// lifecycle-admitted records first so the shard agrees with [`RunReport::admitted`]. The configured
-    /// `dataset_version` is set only on the sidecar manifest, not on record rows.
+    /// lifecycle-admitted records first so shard rows agree with [`RunReport::admitted`], then restores
+    /// manifest `n_records` to the whole scanned run population. The configured `dataset_version` is set
+    /// only on the sidecar manifest, not on record rows.
     ///
     /// # Errors
     /// Returns an engine error if scanning records, writing the Parquet shard, serializing the manifest,
@@ -591,6 +592,7 @@ impl Engine {
             .store
             .scan(&RecordFilter::new().run_id(run_id))
             .await?;
+        let n_records_total = records.len() as u64;
         records.retain(|record| {
             matches!(
                 record.lifecycle.state,
@@ -598,6 +600,7 @@ impl Engine {
             )
         });
         let mut manifest = export_parquet(&records, spec.target, spec.cot, &spec.dst).await?;
+        manifest.n_records = n_records_total;
         manifest.dataset_version = spec.dataset_version.clone();
         let sidecar = manifest_sidecar_path(&spec.dst);
         let body = serde_json::to_vec_pretty(&manifest)?;
