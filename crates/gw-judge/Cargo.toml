@@ -15,7 +15,9 @@ workspace = true
 gw-schema.workspace = true
 gw-providers.workspace = true
 gw-storage.workspace = true
-serde.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+futures.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
