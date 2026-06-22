@@ -293,7 +293,11 @@ mod tests {
     #[test]
     fn content_faults_stay_record_level() {
         // Genuine per-record content faults must remain isolatable (don't regress E5's real purpose).
-        let e: EngineError = GenerateError::TruncatedReasoning("len".into()).into();
+        let e: EngineError = GenerateError::TruncatedReasoning {
+            detail: "len".into(),
+            cost_usd: None,
+        }
+        .into();
         assert!(e.is_record_level());
         let e: EngineError = GenerateError::EmptyResponse("empty".into()).into();
         assert!(e.is_record_level());
@@ -337,7 +341,11 @@ mod tests {
 
     #[test]
     fn attribute_to_threads_the_faulting_record_id() {
-        let e: EngineError = GenerateError::TruncatedReasoning("len".into()).into();
+        let e: EngineError = GenerateError::TruncatedReasoning {
+            detail: "len".into(),
+            cost_usd: None,
+        }
+        .into();
         let attributed = e.attribute_to("run-1-s0-seed5-a0-c2");
         assert_eq!(
             attributed.attributed_record(),

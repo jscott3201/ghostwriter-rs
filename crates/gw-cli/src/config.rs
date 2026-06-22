@@ -265,6 +265,7 @@ impl Config {
         fig = fig.merge(Env::prefixed("GW_").split("__"));
         let config: Self = fig.extract()?;
         config.validate_run_control()?;
+        config.validate_generation_budgets()?;
         config.validate_judge_reasoning()?;
         Ok(config)
     }
@@ -279,6 +280,17 @@ impl Config {
             anyhow::bail!(
                 "on_breach = \"pause\" is not yet supported (tracked as a follow-up); use \"drain\" or \"abort\""
             );
+        }
+        Ok(())
+    }
+
+    /// Validate generation token budgets that deserialize but cannot produce a usable provider call.
+    ///
+    /// # Errors
+    /// Returns an error if the teacher completion cap is explicitly set to zero.
+    pub fn validate_generation_budgets(&self) -> anyhow::Result<()> {
+        if self.area.teacher_max_tokens == Some(0) {
+            anyhow::bail!("area teacher_max_tokens must be greater than zero");
         }
         Ok(())
     }

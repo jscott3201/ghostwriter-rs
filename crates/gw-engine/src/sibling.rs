@@ -169,6 +169,11 @@ struct GroupDrive<'a> {
     control: RunControl<'a>,
 }
 
+struct GeneratedTeacherAttempt {
+    turn: gw_generate::AssistantTurn,
+    call: TeacherCall,
+}
+
 /// Generate (if needed) and drive ONE best-of-k sibling to `Judged`, ISOLATING its faults (F1).
 ///
 /// Returns the sibling driven to `Judged` (or its persisted state on crash-resume) on success. On
@@ -196,17 +201,7 @@ async fn drive_sibling(
                 }
                 return Err(SiblingOutcome::BudgetGated);
             }
-            match generate_and_persist(
-                ctx.run_id,
-                rid,
-                ctx.shard,
-                ctx.seed,
-                plan.sampling,
-                ctx.clients,
-                ctx.area,
-            )
-            .await
-            {
+            match generate_and_persist(ctx, rid, plan.sampling).await {
                 Ok(rec) => rec,
                 Err(e) => {
                     return Err(classify_sibling_fault(
@@ -329,23 +324,22 @@ fn is_sibling_parkable(state: LifecycleState) -> bool {
 /// Generate one sibling via the producer and persist it at `AssistantGenerated`. The single
 /// teacher-spend site; charges the budget meter post-spend with the call's authoritative cost.
 async fn generate_and_persist(
-    run_id: &str,
+    group: &GroupDrive<'_>,
     rid: &str,
-    shard: i64,
-    seed: &SeedItem,
     sampling: SamplingPreset,
-    clients: &Clients,
-    area: &AreaConfig,
 ) -> Result<TrainingRecord> {
     // Gate the candidate (no teacher spend if the four-bool QC gate fails).
-    let gated: GatedUserTurn =
-        synthesize_user_turn(seed.candidate.clone(), clients.embedder.as_ref(), &[])?;
+    let gated: GatedUserTurn = synthesize_user_turn(
+        group.seed.candidate.clone(),
+        group.clients.embedder.as_ref(),
+        &[],
+    )?;
     if !gated.passed() {
         return Err(EngineError::Generate(
             gw_generate::GenerateError::Invariant(format!(
                 "user-turn QC gate failed for seed {} (answerable={}, difficulty_targeted={}, \
              diverse={}, in_scope_safe={})",
-                seed.seed,
+                group.seed.seed,
                 gated.verdict.answerable,
                 gated.verdict.difficulty_targeted,
                 gated.verdict.diverse,
@@ -355,94 +349,131 @@ async fn generate_and_persist(
     }
 
     let mut call = TeacherCall::new(
-        area.teacher_slug.clone(),
+        group.area.teacher_slug.clone(),
         vec![gated.candidate.message.clone()],
-        area.max_tokens,
+        group.area.max_tokens,
     )
     .with_sampling(sampling);
-    if let Some(reasoning_max_tokens) = area.teacher_reasoning_max_tokens {
+    if let Some(reasoning_max_tokens) = group.area.teacher_reasoning_max_tokens {
         call = call.with_reasoning(ReasoningPolicy::MaxTokens(reasoning_max_tokens));
     }
 
-    // The single teacher-spend.
-    let turn = generate_assistant_with_truncation_retry(clients, &gated, &call).await?;
-    let cost_usd = turn.cost.unwrap_or(0.0);
+    // The single teacher-spend, with one cost-accounted truncation retry if needed.
+    let generated =
+        generate_assistant_with_truncation_retry(group.clients, rid, &gated, &call, group.control)
+            .await?;
+    let cost_usd = generated.turn.cost.unwrap_or(0.0);
 
     let teacher_ref = TeacherRef {
         provider: "openrouter".to_string(),
-        slug: area.teacher_slug.clone(),
+        slug: group.area.teacher_slug.clone(),
         served_by: None,
         model_card_revision: None,
     };
-    let ctx = RecordContext {
+    let record_ctx = RecordContext {
         record_id: rid.to_string(),
-        run_id: run_id.to_string(),
-        training_area: area.training_area.clone(),
-        harness_version: clients.harness_version.clone(),
-        git_commit: clients.git_commit.clone(),
+        run_id: group.run_id.to_string(),
+        training_area: group.area.training_area.clone(),
+        harness_version: group.clients.harness_version.clone(),
+        git_commit: group.clients.git_commit.clone(),
         now_rfc3339: now_rfc3339(),
         user_synth_model: gated.candidate.seed.prompt_template_id.clone(),
     };
 
-    let plan = plan_for(seed, sampling, area.k);
+    let plan = plan_for(group.seed, sampling, group.area.k);
+    let generation = generated.call.generation();
     let mut rec = assemble(
-        &ctx,
+        &record_ctx,
         &gated,
-        turn,
+        generated.turn,
         teacher_ref,
-        call.generation(),
+        generation,
         Some(plan),
     );
 
     // Fill the sibling_group_id from the canonical prompt_hash (gw-generate leaves it None; gw-storage
     // is authoritative for hashes, so compute it here from the same canonical projection).
-    rec.generation.sibling_group_id = Some(sibling_group_id(&rec, &clients.store)?);
-    let _ = shard; // shard rode into the record id; nothing else to stamp here.
+    rec.generation.sibling_group_id = Some(sibling_group_id(&rec, &group.clients.store)?);
+    let _ = group.shard; // shard rode into the record id; nothing else to stamp here.
 
     // Persist at AssistantGenerated (the expensive CoT is written before the next transition).
-    clients.store.put(&rec).await?;
-    clients.events.emit(EngineEvent::StateAdvanced {
+    group.clients.store.put(&rec).await?;
+    group.clients.events.emit(EngineEvent::StateAdvanced {
         record_id: rec.record_id.clone(),
         to: LifecycleState::AssistantGenerated,
     });
 
     // Charge the budget AFTER the spend, with the call's authoritative cost.
-    let total = clients.budget.charge(cost_usd);
-    clients.events.emit(EngineEvent::CostCharged {
-        record_id: rec.record_id.clone(),
-        usd: cost_usd,
-        run_total_usd: total,
-    });
+    charge_teacher_cost(group.clients, &rec.record_id, cost_usd);
 
     // Re-read so the returned envelope matches what was persisted.
-    Ok(clients.store.get(rid).await?)
+    Ok(group.clients.store.get(rid).await?)
 }
 
 async fn generate_assistant_with_truncation_retry(
     clients: &Clients,
+    rid: &str,
     gated: &GatedUserTurn,
     call: &TeacherCall,
-) -> Result<gw_generate::AssistantTurn> {
+    control: RunControl<'_>,
+) -> Result<GeneratedTeacherAttempt> {
     let err = match generate_assistant(clients.teacher.as_ref(), gated, call).await {
-        Ok(turn) => return Ok(turn),
+        Ok(turn) => {
+            return Ok(GeneratedTeacherAttempt {
+                turn,
+                call: call.clone(),
+            });
+        }
         Err(err) => err,
     };
-    if !matches!(err, GenerateError::TruncatedReasoning(_)) {
+    let GenerateError::TruncatedReasoning { cost_usd, .. } = &err else {
         return Err(err.into());
-    }
+    };
+    charge_truncated_attempt(clients, rid, *cost_usd);
     if !clients.budget.may_dispatch() {
+        if control.on_breach() == BudgetBreach::Abort {
+            control.cancel();
+        }
         return Err(err.into());
     }
+    let Some(retry_tokens) = retry_max_tokens(call.max_tokens) else {
+        return Err(err.into());
+    };
 
     let mut retry = call.clone();
-    retry.max_tokens = retry_max_tokens(call.max_tokens);
-    generate_assistant(clients.teacher.as_ref(), gated, &retry)
-        .await
-        .map_err(EngineError::from)
+    retry.max_tokens = retry_tokens;
+    match generate_assistant(clients.teacher.as_ref(), gated, &retry).await {
+        Ok(turn) => Ok(GeneratedTeacherAttempt { turn, call: retry }),
+        Err(err @ GenerateError::TruncatedReasoning { cost_usd, .. }) => {
+            charge_truncated_attempt(clients, rid, cost_usd);
+            Err(err.into())
+        }
+        Err(err) => Err(EngineError::from(err)),
+    }
 }
 
-fn retry_max_tokens(max_tokens: u32) -> u32 {
-    ((u64::from(max_tokens) * 3).div_ceil(2)).min(u64::from(TRUNCATION_RETRY_MAX_TOKENS)) as u32
+fn charge_truncated_attempt(clients: &Clients, rid: &str, cost_usd: Option<f64>) {
+    if let Some(cost_usd) = cost_usd {
+        charge_teacher_cost(clients, rid, cost_usd);
+    }
+}
+
+fn charge_teacher_cost(clients: &Clients, rid: &str, cost_usd: f64) {
+    let total = clients.budget.charge(cost_usd);
+    clients.events.emit(EngineEvent::CostCharged {
+        record_id: rid.to_string(),
+        usd: cost_usd,
+        run_total_usd: total,
+    });
+}
+
+fn retry_max_tokens(max_tokens: u32) -> Option<u32> {
+    if max_tokens >= TRUNCATION_RETRY_MAX_TOKENS {
+        return None;
+    }
+    let widened =
+        ((u64::from(max_tokens) * 3).div_ceil(2)).min(u64::from(TRUNCATION_RETRY_MAX_TOKENS));
+    Some(widened as u32)
 }
 
 /// The canonical `sibling_group_id == prompt_hash` for a record, computed via the same hashing

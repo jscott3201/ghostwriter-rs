@@ -70,6 +70,51 @@ impl Provider for SeedBarrierFaultTeacher {
     }
 }
 
+struct SeedBarrierStatusTeacher {
+    barrier: Arc<tokio::sync::Barrier>,
+    fatal_seed: i64,
+    status: u16,
+    calls: AtomicUsize,
+}
+
+impl SeedBarrierStatusTeacher {
+    fn new(n: usize, fatal_seed: i64, status: u16) -> Self {
+        Self {
+            barrier: Arc::new(tokio::sync::Barrier::new(n)),
+            fatal_seed,
+            status,
+            calls: AtomicUsize::new(0),
+        }
+    }
+
+    fn call_count(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+}
+
+impl Provider for SeedBarrierStatusTeacher {
+    fn stream_chat(&self, req: ChatRequest) -> StreamChatFuture<'_> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let barrier = Arc::clone(&self.barrier);
+        let seed = req.seed.unwrap_or_default();
+        let fatal = seed == self.fatal_seed;
+        let status = self.status;
+        Box::pin(async move {
+            barrier.wait().await;
+            if fatal {
+                return Err(ProviderError::from_status(status, None));
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            let answer = format!("answer-{seed}");
+            let items = answer_cot(&answer, 0.01)
+                .into_iter()
+                .map(Ok::<StreamDelta, ProviderError>);
+            let stream: DeltaStream = Box::pin(futures::stream::iter(items.collect::<Vec<_>>()));
+            Ok(stream)
+        })
+    }
+}
+
 /// A k=2 group is driven once (sibling0 admitted→Exported, sibling1 retained→Rejected). We then force
 /// the precise crash window — reset sibling1 back to `Judged` — and re-run the group. The E1 guard must
 /// keep sibling0 as the sole winner and drive sibling1 to Rejected, never admitting a SECOND sibling.
@@ -308,6 +353,81 @@ async fn concurrent_sibling_faults_park_only_faulting_records() {
     assert_eq!(
         errored_ids, expected,
         "only the two faulting siblings are parked"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn systemic_fatal_waits_for_sibling_fanout_to_settle() {
+    let store = Store::open_in_memory().await.unwrap();
+    store
+        .create_run("run-f1-systemic", "{}", Some(25.0))
+        .await
+        .unwrap();
+
+    let source = InMemorySeedSource::new(vec![good_candidate("What is 12*8?")], 1);
+    let item = source.items_for_shard(0).remove(0);
+    let teacher = Arc::new(SeedBarrierStatusTeacher::new(
+        3,
+        item.seed.wrapping_add(1),
+        401,
+    ));
+    let judge = Arc::new(ScriptedJudge::new(vec![
+        &judge_body(0.95, "accept"),
+        &judge_body(0.90, "accept"),
+    ]));
+    let cl = clients(
+        store.clone(),
+        teacher.clone(),
+        judge,
+        25.0,
+        EventSink::disconnected(),
+    );
+    let budget = cl.budget.clone();
+    let area = area_k(one_judge(), lenient_thresholds(), 3);
+    let cancel = no_cancel();
+
+    let err = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        run_group("run-f1-systemic", 0, &item, &cl, &area, control(&cancel)),
+    )
+    .await
+    .expect("all siblings should fan out concurrently")
+    .expect_err("the systemic 401 should surface after sibling join");
+
+    let expected_fatal = format!("run-f1-systemic-s0-seed{}-a0-c1", item.seed);
+    assert_eq!(
+        err.attributed_record(),
+        Some(expected_fatal.as_str()),
+        "the fatal is attributed to the 401 sibling"
+    );
+    assert_eq!(teacher.call_count(), 3);
+    assert!(
+        (budget.spent() - 0.02).abs() < 1e-12,
+        "healthy siblings are allowed to settle and charge before the fatal returns"
+    );
+
+    let all = store
+        .scan(&RecordFilter::new().run_id("run-f1-systemic"))
+        .await
+        .unwrap();
+    assert_eq!(
+        all.len(),
+        2,
+        "the two healthy siblings persisted before the systemic fatal surfaced"
+    );
+    assert!(
+        all.iter()
+            .all(|rec| rec.lifecycle.state == LifecycleState::Judged),
+        "healthy siblings stop at Judged because the group returns the fatal before finalization"
+    );
+    let mut ids: Vec<_> = all.iter().map(|rec| rec.record_id.clone()).collect();
+    ids.sort_unstable();
+    assert_eq!(
+        ids,
+        vec![
+            format!("run-f1-systemic-s0-seed{}-a0-c0", item.seed),
+            format!("run-f1-systemic-s0-seed{}-a0-c2", item.seed),
+        ]
     );
 }
 

@@ -137,8 +137,8 @@ async fn truncated_teacher_reasoning_retries_once_and_persists_record() {
     );
     assert_eq!(report.errored, 0);
     assert!(
-        (budget.spent() - 0.02).abs() < 1e-12,
-        "the successful retry cost is charged"
+        (budget.spent() - 0.03).abs() < 1e-12,
+        "the truncated attempt and successful retry costs are charged"
     );
 
     let all = store
@@ -147,6 +147,11 @@ async fn truncated_teacher_reasoning_retries_once_and_persists_record() {
         .unwrap();
     assert_eq!(all.len(), 1, "retry does not double-persist");
     assert_eq!(all[0].lifecycle.state, LifecycleState::Exported);
+    assert_eq!(
+        all[0].generation.max_tokens,
+        Some(15_000),
+        "retry provenance records the bumped cap that produced the CoT"
+    );
 }
 
 /// MANDATORY 7 (verdict→lifecycle): a below-threshold panel REJECTS; the record is not exported and

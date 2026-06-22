@@ -96,6 +96,20 @@ fn judge_reasoning_effort_conflicts_with_reasoning_max_tokens() {
 }
 
 #[test]
+fn teacher_max_tokens_zero_is_rejected() {
+    Jail::expect_with(|jail| {
+        jail.create_file("gw.toml", "[area]\nteacher_max_tokens = 0\n")?;
+        let err = Config::load(Some(Path::new("gw.toml"))).expect_err("zero cap rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("teacher_max_tokens must be greater than zero"),
+            "got: {msg}"
+        );
+        Ok(())
+    });
+}
+
+#[test]
 fn on_breach_pause_is_rejected() {
     Jail::expect_with(|jail| {
         jail.create_file("gw.toml", "on_breach = \"pause\"\n")?;
