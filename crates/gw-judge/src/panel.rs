@@ -525,7 +525,13 @@ pub async fn grade_one<P: Provider + ?Sized>(
             judge, &drained, max_tokens, reasoning,
         ));
     }
-    parse_grade(judge, &drained.content, judge.scoring)
+    match parse_grade(judge, &drained.content, judge.scoring) {
+        Ok(grade) => Ok(grade),
+        Err(_) if drained.hit_length_cap() => Err(empty_completion_error(
+            judge, &drained, max_tokens, reasoning,
+        )),
+        Err(err) => Err(err),
+    }
 }
 
 /// Grade the whole panel in a BLIND, INDEPENDENT, SEALED first pass (§5.7): every judge is a
@@ -766,5 +772,18 @@ mod tests {
         let req = build_judge_request(&judge, "rubric", "trace");
         assert_eq!(req.max_tokens, Some(800 + MIN_JUDGE_VERDICT_TOKENS));
         assert_eq!(req.reasoning, Some(ReasoningParam::max_tokens(800)));
+    }
+
+    #[test]
+    fn judge_request_keeps_effort_mode_max_tokens_unfloored() {
+        let judge = PanelJudge::new("m", "fam")
+            .with_max_tokens(1_000)
+            .with_reasoning_effort(ReasoningEffort::Xhigh);
+        let req = build_judge_request(&judge, "rubric", "trace");
+        assert_eq!(req.max_tokens, Some(1_000));
+        assert_eq!(
+            req.reasoning,
+            Some(ReasoningParam::effort(ReasoningEffort::Xhigh))
+        );
     }
 }

@@ -196,17 +196,6 @@ impl JudgeSettings {
     }
 }
 
-impl From<&JudgeSettings> for PanelJudge {
-    fn from(j: &JudgeSettings) -> Self {
-        let judge = PanelJudge::new(&j.slug, &j.family);
-        let judge = match &j.rubric_id {
-            Some(id) => judge.with_rubric(id),
-            None => judge,
-        };
-        j.apply_overrides(judge)
-    }
-}
-
 /// The admission thresholds, mirroring [`AreaThresholds`] (which does not derive serde). Defaults
 /// match the gw-judge defaults exactly.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

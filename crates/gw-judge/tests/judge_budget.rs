@@ -122,3 +122,42 @@ async fn length_truncated_empty_judge_completion_names_budget_fix() {
         "got: {msg}"
     );
 }
+
+struct PartialJsonLengthProvider;
+
+impl Provider for PartialJsonLengthProvider {
+    fn stream_chat(&self, _req: ChatRequest) -> StreamChatFuture<'_> {
+        Box::pin(async move {
+            let stream: DeltaStream = Box::pin(stream::iter(vec![
+                Ok::<StreamDelta, ProviderError>(StreamDelta {
+                    reasoning: Some("reasoning consumed most of the cap".into()),
+                    ..Default::default()
+                }),
+                Ok::<StreamDelta, ProviderError>(StreamDelta {
+                    content: Some("{\"score\":0.9,\"verdict\":\"acce".into()),
+                    finish_reason: Some("length".into()),
+                    ..Default::default()
+                }),
+            ]));
+            Ok(stream)
+        })
+    }
+}
+
+#[tokio::test]
+async fn length_truncated_partial_judge_json_names_budget_fix() {
+    let judge = PanelJudge::new("deepseek/deepseek-v4-pro", "deepseek");
+    let err = grade_one(&PartialJsonLengthProvider, &judge, "rubric", "trace")
+        .await
+        .expect_err("length-truncated partial JSON errors");
+
+    let JudgeError::JudgeParse(msg) = err else {
+        panic!("expected JudgeParse");
+    };
+    assert!(msg.contains("truncated at max_tokens"), "got: {msg}");
+    assert!(msg.contains("raise judge max_tokens"), "got: {msg}");
+    assert!(
+        msg.contains("lower the judge reasoning budget"),
+        "got: {msg}"
+    );
+}

@@ -239,6 +239,7 @@ mod tests {
     use crate::decision::Verdict;
     use crate::panel::{JudgeSampling, JudgeScoring};
     use gw_providers::{ChatRequest, DeltaStream, ProviderError, StreamChatFuture, StreamDelta};
+    use gw_schema::ReasoningEffort;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// A provider that PANICS if called more than `max_calls` times — proves a cache hit skips it.
@@ -369,6 +370,81 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn different_top_p_misses_the_cache() {
+        let store = Store::open_in_memory().await.unwrap();
+        let provider = CountingProvider::new(2, "{\"score\":0.6,\"verdict\":\"revise\"}");
+
+        let narrow = PanelJudge::new("m", "fam")
+            .with_rubric("r")
+            .with_sampling(JudgeSampling {
+                top_p: Some(0.8),
+                ..JudgeSampling::default()
+            });
+        let wide = PanelJudge::new("m", "fam")
+            .with_rubric("r")
+            .with_sampling(JudgeSampling {
+                top_p: Some(0.9),
+                ..JudgeSampling::default()
+            });
+
+        grade_one_cached(&store, &provider, &narrow, "rubric", "trace", "h")
+            .await
+            .unwrap();
+        grade_one_cached(&store, &provider, &wide, "rubric", "trace", "h")
+            .await
+            .unwrap();
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn different_seed_misses_the_cache() {
+        let store = Store::open_in_memory().await.unwrap();
+        let provider = CountingProvider::new(2, "{\"score\":0.6,\"verdict\":\"revise\"}");
+
+        let seed_one = PanelJudge::new("m", "fam")
+            .with_rubric("r")
+            .with_sampling(JudgeSampling {
+                seed: Some(1),
+                ..JudgeSampling::default()
+            });
+        let seed_two = PanelJudge::new("m", "fam")
+            .with_rubric("r")
+            .with_sampling(JudgeSampling {
+                seed: Some(2),
+                ..JudgeSampling::default()
+            });
+
+        grade_one_cached(&store, &provider, &seed_one, "rubric", "trace", "h")
+            .await
+            .unwrap();
+        grade_one_cached(&store, &provider, &seed_two, "rubric", "trace", "h")
+            .await
+            .unwrap();
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn different_max_tokens_misses_the_cache() {
+        let store = Store::open_in_memory().await.unwrap();
+        let provider = CountingProvider::new(2, "{\"score\":0.6,\"verdict\":\"revise\"}");
+
+        let smaller = PanelJudge::new("m", "fam")
+            .with_rubric("r")
+            .with_max_tokens(3_600);
+        let larger = PanelJudge::new("m", "fam")
+            .with_rubric("r")
+            .with_max_tokens(4_000);
+
+        grade_one_cached(&store, &provider, &smaller, "rubric", "trace", "h")
+            .await
+            .unwrap();
+        grade_one_cached(&store, &provider, &larger, "rubric", "trace", "h")
+            .await
+            .unwrap();
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
     async fn different_reasoning_budget_misses_the_cache() {
         let store = Store::open_in_memory().await.unwrap();
         let provider = CountingProvider::new(2, "{\"score\":0.6,\"verdict\":\"revise\"}");
@@ -384,6 +460,35 @@ mod tests {
             .await
             .unwrap();
         grade_one_cached(&store, &provider, &deeper, "rubric", "trace", "h")
+            .await
+            .unwrap();
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn reasoning_effort_misses_reasoning_max_tokens_cache() {
+        let store = Store::open_in_memory().await.unwrap();
+        let provider = CountingProvider::new(2, "{\"score\":0.6,\"verdict\":\"revise\"}");
+
+        let effort = PanelJudge::new("m", "fam")
+            .with_rubric("r")
+            .with_max_tokens(4_000)
+            .with_reasoning_effort(ReasoningEffort::Xhigh);
+        let budget = PanelJudge::new("m", "fam")
+            .with_rubric("r")
+            .with_max_tokens(4_000)
+            .with_reasoning_max_tokens(2_000);
+
+        let effort_key = folded_request_key(&effort);
+        let budget_key = folded_request_key(&budget);
+        assert!(effort_key.contains("#reffort"));
+        assert!(budget_key.contains("#rmt"));
+        assert_ne!(effort_key, budget_key);
+
+        grade_one_cached(&store, &provider, &effort, "rubric", "trace", "h")
+            .await
+            .unwrap();
+        grade_one_cached(&store, &provider, &budget, "rubric", "trace", "h")
             .await
             .unwrap();
         assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
