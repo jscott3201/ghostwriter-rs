@@ -33,7 +33,7 @@ use serde::{Deserialize, Serialize};
 
 use gw_engine::AreaConfig;
 use gw_judge::{AreaThresholds, PanelJudge};
-use gw_schema::{BudgetBreach, CotPolicy, TrlFormat};
+use gw_schema::{BudgetBreach, CotPolicy, ReasoningEffort, TrlFormat};
 
 /// The default SQLite store path when none is configured.
 pub const DEFAULT_DB_PATH: &str = "gw-run.sqlite";
@@ -114,6 +114,16 @@ pub struct AreaSettings {
     pub judges: Vec<JudgeSettings>,
     /// The admission thresholds + correlation-guard floors.
     pub thresholds: ThresholdSettings,
+    /// Optional area-wide judge combined completion cap.
+    #[serde(default)]
+    pub judge_max_tokens: Option<u32>,
+    /// Optional area-wide explicit judge reasoning-token cap.
+    #[serde(default)]
+    pub judge_reasoning_max_tokens: Option<u32>,
+    /// Optional area-wide judge reasoning effort. Mutually exclusive with
+    /// `judge_reasoning_max_tokens` in the same table.
+    #[serde(default)]
+    pub judge_reasoning_effort: Option<ReasoningEffort>,
 }
 
 impl Default for AreaSettings {
@@ -127,7 +137,25 @@ impl Default for AreaSettings {
             correlation_rho: gw_engine::DEFAULT_CORRELATION_RHO,
             judges: Vec::new(),
             thresholds: ThresholdSettings::default(),
+            judge_max_tokens: None,
+            judge_reasoning_max_tokens: None,
+            judge_reasoning_effort: None,
         }
+    }
+}
+
+impl AreaSettings {
+    fn apply_judge_defaults(&self, mut judge: PanelJudge) -> PanelJudge {
+        if let Some(max_tokens) = self.judge_max_tokens {
+            judge = judge.with_max_tokens(max_tokens);
+        }
+        if let Some(reasoning_max_tokens) = self.judge_reasoning_max_tokens {
+            judge = judge.with_reasoning_max_tokens(reasoning_max_tokens);
+        }
+        if let Some(reasoning_effort) = self.judge_reasoning_effort {
+            judge = judge.with_reasoning_effort(reasoning_effort);
+        }
+        judge
     }
 }
 
@@ -141,15 +169,30 @@ pub struct JudgeSettings {
     /// Optional rubric id (part of the cache key).
     #[serde(default)]
     pub rubric_id: Option<String>,
+    /// Optional per-judge combined completion cap.
+    #[serde(default)]
+    pub max_tokens: Option<u32>,
+    /// Optional per-judge explicit reasoning-token cap.
+    #[serde(default)]
+    pub reasoning_max_tokens: Option<u32>,
+    /// Optional per-judge reasoning effort. Mutually exclusive with `reasoning_max_tokens` in the
+    /// same judge table.
+    #[serde(default)]
+    pub reasoning_effort: Option<ReasoningEffort>,
 }
 
-impl From<&JudgeSettings> for PanelJudge {
-    fn from(j: &JudgeSettings) -> Self {
-        let judge = PanelJudge::new(&j.slug, &j.family);
-        match &j.rubric_id {
-            Some(id) => judge.with_rubric(id),
-            None => judge,
+impl JudgeSettings {
+    fn apply_overrides(&self, mut judge: PanelJudge) -> PanelJudge {
+        if let Some(max_tokens) = self.max_tokens {
+            judge = judge.with_max_tokens(max_tokens);
         }
+        if let Some(reasoning_max_tokens) = self.reasoning_max_tokens {
+            judge = judge.with_reasoning_max_tokens(reasoning_max_tokens);
+        }
+        if let Some(reasoning_effort) = self.reasoning_effort {
+            judge = judge.with_reasoning_effort(reasoning_effort);
+        }
+        judge
     }
 }
 
@@ -214,6 +257,7 @@ impl Config {
         fig = fig.merge(Env::prefixed("GW_").split("__"));
         let config: Self = fig.extract()?;
         config.validate_run_control()?;
+        config.validate_judge_reasoning()?;
         Ok(config)
     }
 
@@ -231,13 +275,49 @@ impl Config {
         Ok(())
     }
 
+    /// Validate judge reasoning settings that are individually valid TOML but ambiguous together.
+    ///
+    /// # Errors
+    /// Returns an error when the same area or judge table asks for both effort-mode and explicit
+    /// max-token reasoning.
+    pub fn validate_judge_reasoning(&self) -> anyhow::Result<()> {
+        if self.area.judge_reasoning_max_tokens.is_some()
+            && self.area.judge_reasoning_effort.is_some()
+        {
+            anyhow::bail!(
+                "area judge_reasoning_max_tokens and judge_reasoning_effort are mutually exclusive"
+            );
+        }
+        for judge in &self.area.judges {
+            if judge.reasoning_max_tokens.is_some() && judge.reasoning_effort.is_some() {
+                anyhow::bail!(
+                    "judge {} sets both reasoning_max_tokens and reasoning_effort; use only one",
+                    judge.slug
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// Map the configured area into the engine's [`AreaConfig`].
     ///
     /// The `k` and `correlation_rho` are carried through the engine's builders (which clamp `k >= 1`).
     /// The judge panel + thresholds are mapped from the serde-mirror structs into the leaf types.
     #[must_use]
     pub fn area_config(&self) -> AreaConfig {
-        let judges: Vec<PanelJudge> = self.area.judges.iter().map(PanelJudge::from).collect();
+        let judges: Vec<PanelJudge> = self
+            .area
+            .judges
+            .iter()
+            .map(|j| {
+                let judge = PanelJudge::new(&j.slug, &j.family);
+                let judge = match &j.rubric_id {
+                    Some(id) => judge.with_rubric(id),
+                    None => judge,
+                };
+                j.apply_overrides(self.area.apply_judge_defaults(judge))
+            })
+            .collect();
         AreaConfig::new(
             &self.area.training_area,
             &self.area.teacher_slug,
@@ -273,17 +353,35 @@ mod tests {
                 slug: "deepseek/deepseek-v4-pro".into(),
                 family: "deepseek".into(),
                 rubric_id: Some("r1".into()),
+                max_tokens: None,
+                reasoning_max_tokens: None,
+                reasoning_effort: None,
             },
             JudgeSettings {
                 slug: "qwen/qwen4-72b".into(),
                 family: "qwen".into(),
                 rubric_id: None,
+                max_tokens: Some(4_200),
+                reasoning_max_tokens: Some(1_200),
+                reasoning_effort: None,
             },
         ];
+        cfg.area.judge_max_tokens = Some(3_500);
+        cfg.area.judge_reasoning_max_tokens = Some(2_000);
         cfg.area.k = 3;
         let area = cfg.area_config();
         assert_eq!(area.k_judges(), 2);
         assert_eq!(area.k, 3);
+        assert_eq!(area.judges[0].max_tokens, 3_500);
+        assert_eq!(
+            area.judges[0].reasoning,
+            Some(gw_judge::JudgeReasoning::MaxTokens(2_000))
+        );
+        assert_eq!(area.judges[1].max_tokens, 4_200);
+        assert_eq!(
+            area.judges[1].reasoning,
+            Some(gw_judge::JudgeReasoning::MaxTokens(1_200))
+        );
         // Thresholds round-trip into the leaf type.
         assert!((area.thresholds.accept_threshold - 0.80).abs() < 1e-12);
     }
