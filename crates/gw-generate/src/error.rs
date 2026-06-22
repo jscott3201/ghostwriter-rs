@@ -54,8 +54,13 @@ pub enum GenerateError {
     /// unterminated (ARCHITECTURE §3.2, the truncation hazard). A record carrying a truncated CoT
     /// must NOT be admitted; the producer fails loud so the engine can retry with a larger
     /// `max_tokens` or route the record to `revising`.
-    #[error("reasoning truncated (finish_reason=length): {0}")]
-    TruncatedReasoning(String),
+    #[error("reasoning truncated (finish_reason=length): {detail}")]
+    TruncatedReasoning {
+        /// Human-readable truncation detail.
+        detail: String,
+        /// Provider-reported cost for the truncated attempt, if present.
+        cost_usd: Option<f64>,
+    },
 
     /// The injected [`Embedder`](crate::Embedder) used by the `diverse` dedup check failed. Carries
     /// a human-readable message from the embedder backend.
@@ -104,7 +109,10 @@ mod tests {
 
     #[test]
     fn truncated_reasoning_names_the_hazard() {
-        let e = GenerateError::TruncatedReasoning("3200 reasoning tokens then length".into());
+        let e = GenerateError::TruncatedReasoning {
+            detail: "3200 reasoning tokens then length".into(),
+            cost_usd: Some(0.01),
+        };
         let msg = e.to_string();
         assert!(msg.contains("finish_reason=length"));
         assert!(msg.contains("3200 reasoning tokens"));

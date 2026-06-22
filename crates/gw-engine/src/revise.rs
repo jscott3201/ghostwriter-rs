@@ -21,8 +21,8 @@
 //! original).
 
 use gw_generate::{
-    GatedUserTurn, RecordContext, SamplingPreset, TeacherCall, assemble, generate_assistant,
-    synthesize_user_turn,
+    GatedUserTurn, ReasoningPolicy, RecordContext, SamplingPreset, TeacherCall, assemble,
+    generate_assistant, synthesize_user_turn,
 };
 use gw_schema::{BudgetBreach, LifecycleState, TeacherRef, TrainingRecord};
 use gw_storage::{StorageError, now_rfc3339, prompt_hash};
@@ -140,12 +140,15 @@ async fn generate_retry(
         .seed
         .wrapping_add(i64::from(completion_index))
         .wrapping_add(1_000_000);
-    let call = TeacherCall::new(
+    let mut call = TeacherCall::new(
         area.teacher_slug.clone(),
         vec![gated.candidate.message.clone()],
         area.max_tokens,
     )
     .with_sampling(SamplingPreset::official().with_seed(retry_seed));
+    if let Some(reasoning_max_tokens) = area.teacher_reasoning_max_tokens {
+        call = call.with_reasoning(ReasoningPolicy::MaxTokens(reasoning_max_tokens));
+    }
 
     let turn = generate_assistant(clients.teacher.as_ref(), &gated, &call).await?;
     let cost_usd = turn.cost.unwrap_or(0.0);

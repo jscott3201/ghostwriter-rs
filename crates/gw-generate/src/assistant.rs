@@ -130,11 +130,14 @@ impl AccumulatedStream {
     pub fn into_turn(self) -> Result<AssistantTurn> {
         // The truncation hazard: a CoT cut off mid-channel must never be admitted.
         if self.hit_length_cap() && self.has_reasoning() {
-            return Err(GenerateError::TruncatedReasoning(format!(
-                "{} reasoning tokens emitted then finish_reason=length \
-                 (CoT cut off inside the <|channel>thought block)",
-                self.reasoning_tokens.unwrap_or_default()
-            )));
+            return Err(GenerateError::TruncatedReasoning {
+                detail: format!(
+                    "{} reasoning tokens emitted then finish_reason=length \
+                     (CoT cut off inside the <|channel>thought block)",
+                    self.reasoning_tokens.unwrap_or_default()
+                ),
+                cost_usd: self.cost,
+            });
         }
 
         if self.content.is_empty() && !self.has_reasoning() && self.refusal.is_none() {
@@ -354,11 +357,16 @@ mod tests {
             reasoning: "a long unfinished thought".into(),
             finish_reason: Some("length".into()),
             reasoning_tokens: Some(16000),
+            cost: Some(0.0123),
             ..Default::default()
         };
         let err = acc.into_turn().unwrap_err();
-        assert!(matches!(err, GenerateError::TruncatedReasoning(_)));
-        assert!(err.to_string().contains("16000"));
+        let msg = err.to_string();
+        let GenerateError::TruncatedReasoning { cost_usd, .. } = err else {
+            panic!("expected truncated reasoning error");
+        };
+        assert_eq!(cost_usd, Some(0.0123));
+        assert!(msg.contains("16000"));
     }
 
     #[test]

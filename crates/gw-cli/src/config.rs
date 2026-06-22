@@ -102,6 +102,12 @@ pub struct AreaSettings {
     pub training_area: String,
     /// The teacher model slug.
     pub teacher_slug: String,
+    /// Optional teacher combined completion cap.
+    #[serde(default)]
+    pub teacher_max_tokens: Option<u32>,
+    /// Optional teacher reasoning-token cap.
+    #[serde(default)]
+    pub teacher_reasoning_max_tokens: Option<u32>,
     /// The rubric text handed to each judge.
     pub rubric: String,
     /// Whether this area requires chain-of-thought (drives the reasoning-present Verify gate).
@@ -131,6 +137,8 @@ impl Default for AreaSettings {
         Self {
             training_area: "general".to_string(),
             teacher_slug: "z-ai/glm-5.2".to_string(),
+            teacher_max_tokens: None,
+            teacher_reasoning_max_tokens: None,
             rubric: "Grade the reasoning trace for correctness, rigor, and clarity.".to_string(),
             cot_required: true,
             k: gw_engine::DEFAULT_K,
@@ -257,6 +265,7 @@ impl Config {
         fig = fig.merge(Env::prefixed("GW_").split("__"));
         let config: Self = fig.extract()?;
         config.validate_run_control()?;
+        config.validate_generation_budgets()?;
         config.validate_judge_reasoning()?;
         Ok(config)
     }
@@ -271,6 +280,17 @@ impl Config {
             anyhow::bail!(
                 "on_breach = \"pause\" is not yet supported (tracked as a follow-up); use \"drain\" or \"abort\""
             );
+        }
+        Ok(())
+    }
+
+    /// Validate generation token budgets that deserialize but cannot produce a usable provider call.
+    ///
+    /// # Errors
+    /// Returns an error if the teacher completion cap is explicitly set to zero.
+    pub fn validate_generation_budgets(&self) -> anyhow::Result<()> {
+        if self.area.teacher_max_tokens == Some(0) {
+            anyhow::bail!("area teacher_max_tokens must be greater than zero");
         }
         Ok(())
     }
@@ -318,7 +338,7 @@ impl Config {
                 j.apply_overrides(self.area.apply_judge_defaults(judge))
             })
             .collect();
-        AreaConfig::new(
+        let mut area = AreaConfig::new(
             &self.area.training_area,
             &self.area.teacher_slug,
             judges,
@@ -327,7 +347,14 @@ impl Config {
         .with_k(self.area.k)
         .with_correlation_rho(self.area.correlation_rho)
         .with_cot_required(self.area.cot_required)
-        .with_thresholds(self.area.thresholds.into())
+        .with_thresholds(self.area.thresholds.into());
+        if let Some(max_tokens) = self.area.teacher_max_tokens {
+            area = area.with_max_tokens(max_tokens);
+        }
+        if let Some(reasoning_max_tokens) = self.area.teacher_reasoning_max_tokens {
+            area = area.with_teacher_reasoning_max_tokens(reasoning_max_tokens);
+        }
+        area
     }
 }
 
@@ -366,12 +393,16 @@ mod tests {
                 reasoning_effort: None,
             },
         ];
+        cfg.area.teacher_max_tokens = Some(20_000);
+        cfg.area.teacher_reasoning_max_tokens = Some(12_000);
         cfg.area.judge_max_tokens = Some(3_500);
         cfg.area.judge_reasoning_max_tokens = Some(2_000);
         cfg.area.k = 3;
         let area = cfg.area_config();
         assert_eq!(area.k_judges(), 2);
         assert_eq!(area.k, 3);
+        assert_eq!(area.max_tokens, 20_000);
+        assert_eq!(area.teacher_reasoning_max_tokens, Some(12_000));
         assert_eq!(area.judges[0].max_tokens, 3_500);
         assert_eq!(
             area.judges[0].reasoning,

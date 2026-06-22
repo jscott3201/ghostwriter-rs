@@ -75,8 +75,8 @@ pub enum EngineError {
     Invariant(String),
 
     /// A RECORD-SCOPED wrapper that attributes an underlying error to the SPECIFIC record it struck
-    /// (F1). The best-of-k group drives siblings sequentially, so a fault on a LATER sibling (e.g.
-    /// `c2`) must be attributed to THAT sibling's id — never blindly to `c0`, which may be a healthy
+    /// (F1). The best-of-k group drives siblings independently, so a fault on one sibling (e.g. `c2`)
+    /// must be attributed to THAT sibling's id — never blindly to `c0`, which may be a healthy
     /// already-judged record. `crate::run_group` wraps a record-level fault with the faulting
     /// `record_id` so the shard parks the RIGHT record at `Error` (see [`Self::attributed_record`]).
     /// Classification ([`Self::is_record_level`]) and any inner-provider inspection delegate to the
@@ -293,7 +293,11 @@ mod tests {
     #[test]
     fn content_faults_stay_record_level() {
         // Genuine per-record content faults must remain isolatable (don't regress E5's real purpose).
-        let e: EngineError = GenerateError::TruncatedReasoning("len".into()).into();
+        let e: EngineError = GenerateError::TruncatedReasoning {
+            detail: "len".into(),
+            cost_usd: None,
+        }
+        .into();
         assert!(e.is_record_level());
         let e: EngineError = GenerateError::EmptyResponse("empty".into()).into();
         assert!(e.is_record_level());
@@ -337,7 +341,11 @@ mod tests {
 
     #[test]
     fn attribute_to_threads_the_faulting_record_id() {
-        let e: EngineError = GenerateError::TruncatedReasoning("len".into()).into();
+        let e: EngineError = GenerateError::TruncatedReasoning {
+            detail: "len".into(),
+            cost_usd: None,
+        }
+        .into();
         let attributed = e.attribute_to("run-1-s0-seed5-a0-c2");
         assert_eq!(
             attributed.attributed_record(),

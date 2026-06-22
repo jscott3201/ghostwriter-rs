@@ -323,7 +323,7 @@ async fn truncated_cot_fails_loud() {
     let err = generate_assistant(&provider, &gated, &call)
         .await
         .unwrap_err();
-    assert!(matches!(err, GenerateError::TruncatedReasoning(_)));
+    assert!(matches!(err, GenerateError::TruncatedReasoning { .. }));
 }
 
 #[tokio::test]

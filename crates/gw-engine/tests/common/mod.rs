@@ -39,6 +39,7 @@ pub fn reasoning_text_detail(text: &str) -> ReasoningDetail {
 /// test can assert the teacher was (or was NOT) re-spent. Panics if called more than `max_calls`.
 pub struct ScriptedTeacher {
     scripts: Mutex<Vec<Vec<StreamDelta>>>,
+    seen: Mutex<Vec<ChatRequest>>,
     calls: AtomicUsize,
     max_calls: usize,
 }
@@ -48,6 +49,7 @@ impl ScriptedTeacher {
     pub fn new(scripts: Vec<Vec<StreamDelta>>, max_calls: usize) -> Self {
         Self {
             scripts: Mutex::new(scripts),
+            seen: Mutex::new(Vec::new()),
             calls: AtomicUsize::new(0),
             max_calls,
         }
@@ -57,16 +59,22 @@ impl ScriptedTeacher {
     pub fn call_count(&self) -> usize {
         self.calls.load(Ordering::SeqCst)
     }
+
+    /// Requests seen by this fake teacher, in provider-call order.
+    pub fn seen_requests(&self) -> Vec<ChatRequest> {
+        self.seen.lock().unwrap().clone()
+    }
 }
 
 impl Provider for ScriptedTeacher {
-    fn stream_chat(&self, _req: ChatRequest) -> StreamChatFuture<'_> {
+    fn stream_chat(&self, req: ChatRequest) -> StreamChatFuture<'_> {
         let n = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
         assert!(
             n <= self.max_calls,
             "teacher re-spent: called {n} times (max {})",
             self.max_calls
         );
+        self.seen.lock().unwrap().push(req);
         let script = {
             let mut s = self.scripts.lock().unwrap();
             if s.is_empty() {
@@ -344,6 +352,27 @@ pub fn good_cot(cost_usd: f64) -> Vec<StreamDelta> {
             ..Default::default()
         },
     ]
+}
+
+/// A teacher stream that hits the reasoning truncation hazard.
+pub fn truncated_reasoning() -> Vec<StreamDelta> {
+    vec![StreamDelta {
+        reasoning: Some("an unfinished long reasoning trace".into()),
+        reasoning_details: Some(vec![reasoning_text_detail(
+            "an unfinished long reasoning trace",
+        )]),
+        finish_reason: Some("length".into()),
+        usage: Some(Usage {
+            prompt_tokens: Some(20),
+            completion_tokens: Some(16_000),
+            total_tokens: Some(16_020),
+            completion_tokens_details: Some(CompletionTokensDetails {
+                reasoning_tokens: Some(15_900),
+            }),
+            cost: Some(0.01),
+        }),
+        ..Default::default()
+    }]
 }
 
 /// Like [`good_cot`] but with a custom final answer, so two siblings drawing the SAME prompt produce

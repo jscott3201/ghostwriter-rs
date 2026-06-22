@@ -28,6 +28,8 @@ fn toml_file_overrides_defaults() {
                 [area]
                 training_area = "rust-async"
                 teacher_slug = "z-ai/glm-5.2"
+                teacher_max_tokens = 20000
+                teacher_reasoning_max_tokens = 12000
                 k = 3
                 judge_max_tokens = 3600
                 judge_reasoning_max_tokens = 1800
@@ -51,6 +53,8 @@ fn toml_file_overrides_defaults() {
         assert_eq!(cfg.provider_rpm, 120);
         assert_eq!(cfg.area.training_area, "rust-async");
         assert_eq!(cfg.area.k, 3);
+        assert_eq!(cfg.area.teacher_max_tokens, Some(20_000));
+        assert_eq!(cfg.area.teacher_reasoning_max_tokens, Some(12_000));
         assert_eq!(cfg.area.judge_max_tokens, Some(3600));
         assert_eq!(cfg.area.judge_reasoning_max_tokens, Some(1800));
         assert_eq!(cfg.area.judges.len(), 1);
@@ -86,6 +90,20 @@ fn judge_reasoning_effort_conflicts_with_reasoning_max_tokens() {
             err.to_string()
                 .contains("judge_reasoning_max_tokens and judge_reasoning_effort"),
             "got: {err}"
+        );
+        Ok(())
+    });
+}
+
+#[test]
+fn teacher_max_tokens_zero_is_rejected() {
+    Jail::expect_with(|jail| {
+        jail.create_file("gw.toml", "[area]\nteacher_max_tokens = 0\n")?;
+        let err = Config::load(Some(Path::new("gw.toml"))).expect_err("zero cap rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("teacher_max_tokens must be greater than zero"),
+            "got: {msg}"
         );
         Ok(())
     });
