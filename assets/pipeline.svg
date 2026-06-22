@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 540" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif" role="img" aria-label="ghostwriter-rs generation and grading pipeline: the record lifecycle from seed to exported training data">
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#868e96"/>
+    </marker>
+    <marker id="aro" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#f59f00"/>
+    </marker>
+    <style>
+      .card{fill:#f6f8fa;stroke:#d0d7de;}
+      .b{stroke-width:1.5;}
+      .t{fill:#1f2328;font-weight:600;font-size:13px;}
+      .role{fill:#57606a;font-size:10.5px;}
+      .edge{stroke:#868e96;stroke-width:2;fill:none;}
+      .loop{stroke:#f59f00;stroke-width:2;fill:none;stroke-dasharray:5 4;}
+      .lbl{fill:#57606a;font-size:11px;font-weight:600;}
+      .title{fill:#1f2328;font-weight:700;font-size:19px;}
+      .sub{fill:#57606a;font-size:12.5px;}
+      .note{fill:#57606a;font-size:11px;font-style:italic;}
+    </style>
+  </defs>
+
+  <rect class="card" x="1" y="1" width="958" height="538" rx="14"/>
+  <text class="title" x="28" y="40">The record lifecycle &#8212; seed to training data</text>
+  <text class="sub" x="28" y="60">Every state transition is persisted (event-sourced), so a run resumes after a crash and never re-spends the teacher.</text>
+
+  <!-- best-of-k ghost stack above AssistantGenerated -->
+  <rect class="b" x="268" y="92" width="116" height="40" rx="9" fill="#d0ebff" stroke="#74c0fc" opacity="0.45"/>
+  <rect class="b" x="262" y="98" width="116" height="40" rx="9" fill="#d0ebff" stroke="#74c0fc" opacity="0.75"/>
+  <text class="lbl" x="314" y="84" text-anchor="middle">best-of-k fan-out</text>
+
+  <!-- spine edges (under boxes) -->
+  <path class="edge" d="M128 174 L140 174" marker-end="url(#ar)"/>
+  <path class="edge" d="M244 174 L256 174" marker-end="url(#ar)"/>
+  <path class="edge" d="M372 174 L384 174" marker-end="url(#ar)"/>
+  <path class="edge" d="M488 174 L500 174" marker-end="url(#ar)"/>
+  <path class="edge" d="M604 174 L676 174" marker-end="url(#ar)"/>
+  <text class="lbl" x="640" y="166" text-anchor="middle">admit</text>
+  <path class="edge" d="M728 198 L728 290" marker-end="url(#ar)"/>
+  <path class="edge" d="M780 313 L812 313" marker-end="url(#ar)"/>
+
+  <!-- branch edges from Judged -->
+  <path class="edge" d="M524 198 C486 240 452 262 446 290" marker-end="url(#ar)"/>
+  <path class="edge" d="M544 198 C470 292 450 326 446 360" marker-end="url(#ar)"/>
+  <path class="edge" d="M584 198 C598 292 600 326 600 360" marker-end="url(#ar)"/>
+  <!-- revise loop back to AssistantGenerated -->
+  <path class="loop" d="M384 306 C322 300 314 250 314 200" marker-end="url(#aro)"/>
+  <text class="note" x="300" y="252" text-anchor="end">re-generate</text>
+
+  <!-- spine boxes -->
+  <rect class="b" x="24" y="150" width="104" height="48" rx="9" fill="#ffe8cc" stroke="#f08c00"/>
+  <text class="t" x="76" y="170" text-anchor="middle">Seeded</text>
+  <text class="role" x="76" y="186" text-anchor="middle">prompt + id</text>
+
+  <rect class="b" x="140" y="150" width="104" height="48" rx="9" fill="#ffe8cc" stroke="#f08c00"/>
+  <text class="t" x="192" y="168" text-anchor="middle" font-size="12">User</text>
+  <text class="t" x="192" y="182" text-anchor="middle" font-size="12">Synthesized</text>
+
+  <rect class="b" x="256" y="150" width="116" height="48" rx="9" fill="#d0ebff" stroke="#1c7ed6"/>
+  <text class="t" x="314" y="167" text-anchor="middle" font-size="12">Assistant</text>
+  <text class="t" x="314" y="181" text-anchor="middle" font-size="12">Generated</text>
+  <text class="role" x="314" y="194" text-anchor="middle">teacher CoT &#215;k</text>
+
+  <rect class="b" x="384" y="150" width="104" height="48" rx="9" fill="#d3f9d8" stroke="#2f9e44"/>
+  <text class="t" x="436" y="170" text-anchor="middle">Verified</text>
+  <text class="role" x="436" y="186" text-anchor="middle">deterministic rail</text>
+
+  <rect class="b" x="500" y="150" width="104" height="48" rx="9" fill="#d3f9d8" stroke="#2f9e44"/>
+  <text class="t" x="552" y="170" text-anchor="middle">Judged</text>
+  <text class="role" x="552" y="186" text-anchor="middle">panel + n_eff</text>
+
+  <rect class="b" x="676" y="150" width="104" height="48" rx="9" fill="#e5dbff" stroke="#7048e8"/>
+  <text class="t" x="728" y="170" text-anchor="middle">Admitted</text>
+  <text class="role" x="728" y="186" text-anchor="middle">winner of k</text>
+
+  <rect class="b" x="676" y="290" width="104" height="46" rx="9" fill="#c3fae8" stroke="#0ca678"/>
+  <text class="t" x="728" y="318" text-anchor="middle">Formatted</text>
+
+  <rect class="b" x="812" y="290" width="104" height="46" rx="9" fill="#c3fae8" stroke="#0ca678"/>
+  <text class="t" x="864" y="312" text-anchor="middle">Exported</text>
+  <text class="role" x="864" y="327" text-anchor="middle">Parquet</text>
+
+  <!-- branch boxes -->
+  <rect class="b" x="386" y="290" width="120" height="44" rx="9" fill="#fff3bf" stroke="#f59f00"/>
+  <text class="t" x="446" y="312" text-anchor="middle">Revising</text>
+  <text class="role" x="446" y="327" text-anchor="middle">bounded retry &#215;1</text>
+
+  <rect class="b" x="386" y="360" width="120" height="44" rx="9" fill="#ffe8cc" stroke="#e8590c"/>
+  <text class="t" x="446" y="382" text-anchor="middle" font-size="12">NeedsReview</text>
+  <text class="role" x="446" y="397" text-anchor="middle">parked / escalate</text>
+
+  <rect class="b" x="540" y="360" width="120" height="44" rx="9" fill="#ffe3e3" stroke="#e03131"/>
+  <text class="t" x="600" y="382" text-anchor="middle">Rejected</text>
+  <text class="role" x="600" y="397" text-anchor="middle">retained &#8594; DPO</text>
+
+  <rect class="b" x="812" y="360" width="104" height="44" rx="9" fill="#f1f3f5" stroke="#868e96"/>
+  <text class="t" x="864" y="382" text-anchor="middle" font-size="12">Error</text>
+  <text class="role" x="864" y="397" text-anchor="middle">requeue</text>
+
+  <text class="sub" x="28" y="446">A deterministic <tspan font-weight="700">Verifier</tspan> rail (incl. a reasoning-present hard gate) precedes the model <tspan font-weight="700">Judge panel</tspan>;</text>
+  <text class="sub" x="28" y="464">consensus is weighted by an <tspan font-weight="700">n_eff</tspan> design-effect that discounts correlated, same-family judges.</text>
+
+  <text class="note" x="932" y="446" text-anchor="end">any state &#8594; Error on fault (terminal-until-requeue)</text>
+  <text class="role" x="932" y="500" text-anchor="end">Admitted &#183; Rejected &#183; Exported are terminal</text>
+</svg>

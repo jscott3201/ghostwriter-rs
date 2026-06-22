@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 600" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif" role="img" aria-label="ghostwriter-rs crate architecture: an acyclic dependency graph in five tiers">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#868e96"/>
+    </marker>
+    <style>
+      .card{fill:#f6f8fa;stroke:#d0d7de;}
+      .band{fill:#ffffff;stroke:#eaeef2;}
+      .pill{stroke-width:1.5;rx:9;}
+      .t{fill:#1f2328;font-weight:600;}
+      .lbl{fill:#57606a;font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;}
+      .role{fill:#57606a;font-size:11px;}
+      .edge{stroke:#868e96;stroke-width:2;fill:none;}
+      .title{fill:#1f2328;font-weight:700;font-size:19px;}
+      .sub{fill:#57606a;font-size:12.5px;}
+    </style>
+  </defs>
+
+  <rect class="card" x="1" y="1" width="898" height="598" rx="14"/>
+  <text class="title" x="28" y="40">ghostwriter-rs &#8212; crate architecture</text>
+  <text class="sub" x="28" y="60">An acyclic workspace: each tier builds only on the tiers above it. <tspan font-weight="700">unsafe forbidden.</tspan></text>
+
+  <!-- edges (tier to tier), drawn first so pills sit on top -->
+  <path class="edge" d="M450 118 L450 150" marker-end="url(#arrow)"/>
+  <path class="edge" d="M450 214 L450 246" marker-end="url(#arrow)"/>
+  <path class="edge" d="M450 310 L450 342" marker-end="url(#arrow)"/>
+  <path class="edge" d="M450 406 L450 438" marker-end="url(#arrow)"/>
+  <!-- eval side branch: from schema + storage -->
+  <path class="edge" stroke-dasharray="5 4" d="M620 95 C770 95 800 95 800 175 L800 250 C800 300 770 300 712 300" marker-end="url(#arrow)"/>
+
+  <!-- Tier 1: contract -->
+  <text class="lbl" x="28" y="96">Contract</text>
+  <g>
+    <rect class="pill" x="350" y="72" width="200" height="46" fill="#ffe8cc" stroke="#f08c00"/>
+    <text class="t" x="450" y="92" text-anchor="middle" font-size="14">gw-schema</text>
+    <text class="role" x="450" y="108" text-anchor="middle">canonical serde data contract (no I/O)</text>
+  </g>
+
+  <!-- Tier 2: I/O + rendering -->
+  <text class="lbl" x="28" y="192">I/O &amp; rendering</text>
+  <g>
+    <rect class="pill" x="150" y="168" width="180" height="46" fill="#d0ebff" stroke="#1c7ed6"/>
+    <text class="t" x="240" y="188" text-anchor="middle" font-size="14">gw-providers</text>
+    <text class="role" x="240" y="204" text-anchor="middle">streaming client + rate limit</text>
+    <rect class="pill" x="360" y="168" width="180" height="46" fill="#d0ebff" stroke="#1c7ed6"/>
+    <text class="t" x="450" y="188" text-anchor="middle" font-size="14">gw-storage</text>
+    <text class="role" x="450" y="204" text-anchor="middle">run state + Parquet export</text>
+    <rect class="pill" x="570" y="168" width="180" height="46" fill="#d0ebff" stroke="#1c7ed6"/>
+    <text class="t" x="660" y="188" text-anchor="middle" font-size="14">gw-format</text>
+    <text class="role" x="660" y="204" text-anchor="middle">chat-template rendering</text>
+  </g>
+
+  <!-- Tier 3: cognition -->
+  <text class="lbl" x="28" y="288">Cognition</text>
+  <g>
+    <rect class="pill" x="255" y="264" width="180" height="46" fill="#d3f9d8" stroke="#2f9e44"/>
+    <text class="t" x="345" y="284" text-anchor="middle" font-size="14">gw-generate</text>
+    <text class="role" x="345" y="300" text-anchor="middle">synthesize user + assistant</text>
+    <rect class="pill" x="465" y="264" width="180" height="46" fill="#d3f9d8" stroke="#2f9e44"/>
+    <text class="t" x="555" y="284" text-anchor="middle" font-size="14">gw-judge</text>
+    <text class="role" x="555" y="300" text-anchor="middle">verifier + judge panel</text>
+  </g>
+
+  <!-- Tier 4: orchestration -->
+  <text class="lbl" x="28" y="384">Orchestration</text>
+  <g>
+    <rect class="pill" x="350" y="360" width="200" height="46" fill="#e5dbff" stroke="#7048e8"/>
+    <text class="t" x="450" y="380" text-anchor="middle" font-size="14">gw-engine</text>
+    <text class="role" x="450" y="396" text-anchor="middle">headless lifecycle orchestrator</text>
+  </g>
+
+  <!-- Tier 5: surfaces -->
+  <text class="lbl" x="28" y="480">Surfaces</text>
+  <g>
+    <rect class="pill" x="255" y="456" width="180" height="46" fill="#ffe3e3" stroke="#e03131"/>
+    <text class="t" x="345" y="476" text-anchor="middle" font-size="14">gw-cli</text>
+    <text class="role" x="345" y="492" text-anchor="middle">the `gw` command</text>
+    <rect class="pill" x="465" y="456" width="180" height="46" fill="#ffe3e3" stroke="#e03131"/>
+    <text class="t" x="555" y="476" text-anchor="middle" font-size="14">gw-tui</text>
+    <text class="role" x="555" y="492" text-anchor="middle">ratatui dashboard</text>
+  </g>
+
+  <!-- eval -->
+  <g>
+    <rect class="pill" x="712" y="277" width="160" height="46" fill="#c3fae8" stroke="#0ca678"/>
+    <text class="t" x="792" y="297" text-anchor="middle" font-size="14">gw-eval</text>
+    <text class="role" x="792" y="313" text-anchor="middle">off-path diagnostics</text>
+  </g>
+  <text class="role" x="792" y="262" text-anchor="middle" font-style="italic">reads schema + storage</text>
+
+  <text class="sub" x="450" y="556" text-anchor="middle">schema &#8594; {format, providers, storage} &#8594; {generate, judge} &#8594; engine &#8594; {cli, tui}</text>
+  <text class="role" x="450" y="576" text-anchor="middle">resolver 3 &#183; edition 2024 &#183; Rust 1.95 &#183; MIT OR Apache-2.0</text>
+</svg>
