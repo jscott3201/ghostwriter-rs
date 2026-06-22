@@ -28,6 +28,8 @@ fn toml_file_overrides_defaults() {
                 [area]
                 training_area = "rust-async"
                 teacher_slug = "z-ai/glm-5.2"
+                teacher_max_tokens = 20000
+                teacher_reasoning_max_tokens = 12000
                 k = 3
                 judge_max_tokens = 3600
                 judge_reasoning_max_tokens = 1800
@@ -51,6 +53,8 @@ fn toml_file_overrides_defaults() {
         assert_eq!(cfg.provider_rpm, 120);
         assert_eq!(cfg.area.training_area, "rust-async");
         assert_eq!(cfg.area.k, 3);
+        assert_eq!(cfg.area.teacher_max_tokens, Some(20_000));
+        assert_eq!(cfg.area.teacher_reasoning_max_tokens, Some(12_000));
         assert_eq!(cfg.area.judge_max_tokens, Some(3600));
         assert_eq!(cfg.area.judge_reasoning_max_tokens, Some(1800));
         assert_eq!(cfg.area.judges.len(), 1);

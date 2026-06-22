@@ -23,9 +23,10 @@
 //! store does not already carry. So a restart mid-fan-out re-enters each sibling at its last persisted
 //! state, and the teacher is never re-spent for an already-generated sibling (INVARIANT 3).
 
+use futures::StreamExt;
 use gw_generate::{
-    GatedUserTurn, RecordContext, SamplingPreset, TeacherCall, assemble, generate_assistant,
-    plan_group, synthesize_user_turn,
+    GatedUserTurn, GenerateError, ReasoningPolicy, RecordContext, SamplingPreset, TeacherCall,
+    assemble, generate_assistant, plan_group, synthesize_user_turn,
 };
 use gw_schema::{BudgetBreach, LifecycleState, TeacherRef, TrainingRecord};
 use gw_storage::{Store, now_rfc3339, prompt_hash};
@@ -36,6 +37,8 @@ use crate::error::{EngineError, Result};
 use crate::event::EngineEvent;
 use crate::seed::{SeedItem, record_id};
 use crate::step::{drive, drive_to_judged};
+
+const TRUNCATION_RETRY_MAX_TOKENS: u32 = 32_000;
 
 /// Generate, persist, drive, and select the best of a best-of-k group for one seed item.
 ///
@@ -58,7 +61,7 @@ pub async fn run_group(
     control: RunControl<'_>,
 ) -> Result<GroupOutcome> {
     let plans = plan_group(SamplingPreset::official().with_seed(seed.seed), area.k);
-    let mut siblings: Vec<TrainingRecord> = Vec::with_capacity(plans.len());
+    let plan_count = plans.len();
     let mut interrupted = false;
     let ctx = GroupDrive {
         run_id,
@@ -68,35 +71,51 @@ pub async fn run_group(
         area,
         control,
     };
+    let mut settled: Vec<(u32, TrainingRecord)> = Vec::with_capacity(plan_count);
+    let mut first_fatal = None;
 
-    for plan in &plans {
-        if control.is_cancelled() {
-            interrupted = true;
-            break;
-        }
-        let rid = record_id(run_id, shard, seed.seed, 0, plan.completion_index);
+    if control.is_cancelled() {
+        interrupted = true;
+    } else {
+        // F1: drive EACH sibling independently and concurrently. Join-all semantics are load-bearing:
+        // a single fatal must not cancel sibling futures mid-generation and strand teacher spend. We
+        // let every in-flight sibling settle, then surface the first systemic fault.
+        let mut outcomes = futures::stream::iter(plans)
+            .map(|plan| {
+                let rid = record_id(run_id, shard, seed.seed, 0, plan.completion_index);
+                let completion_index = plan.completion_index;
+                let ctx = &ctx;
+                async move { (completion_index, drive_sibling(ctx, &rid, &plan).await) }
+            })
+            .buffer_unordered(plan_count);
 
-        // F1: drive THIS sibling, ISOLATING a record-level fault to THIS sibling. The group drives
-        // siblings sequentially, so a fault on a later sibling (e.g. `c2`) must NEVER unwind the group
-        // and strand the healthy earlier siblings at `Judged`, nor be mis-attributed to `c0`. So a
-        // RECORD-LEVEL fault parks ONLY this sibling at `Error` (correctly attributed) and the loop
-        // CONTINUES; `select_and_finalize` then elects a winner among the healthy survivors. An
-        // INFRASTRUCTURE fault (systemic — it would fail every sibling identically) still propagates
-        // out to abort the run, attributed to this sibling for the audit trail.
-        match drive_sibling(&ctx, &rid, plan).await {
-            Ok(driven) => {
-                interrupted |= control.is_cancelled();
-                siblings.push(driven);
+        while let Some((completion_index, outcome)) = outcomes.next().await {
+            match outcome {
+                Ok(driven) => {
+                    interrupted |= control.is_cancelled();
+                    settled.push((completion_index, driven));
+                }
+                // The budget gate tripped before this sibling could generate (Drain). Under fan-out,
+                // other siblings may already be in flight; those still settle before we finalize.
+                Err(SiblingOutcome::BudgetGated) => {}
+                // This sibling faulted at the record level: it is parked at `Error`; keep its (now
+                // terminal) envelope in the group so the report counts it.
+                Err(SiblingOutcome::Parked(parked)) => settled.push((completion_index, *parked)),
+                // A systemic/infrastructure fault — record it and continue joining siblings.
+                Err(SiblingOutcome::Fatal(e)) => {
+                    if first_fatal.is_none() {
+                        first_fatal = Some(e);
+                    }
+                }
             }
-            // The budget gate tripped before this sibling could generate (Drain): stop fanning out.
-            Err(SiblingOutcome::BudgetGated) => break,
-            // This sibling faulted at the record level: it is parked at `Error`; keep its (now terminal)
-            // envelope in the group so the report counts it, and continue with the remaining siblings.
-            Err(SiblingOutcome::Parked(parked)) => siblings.push(*parked),
-            // A systemic/infrastructure fault — abort the whole group/run (attributed for the audit log).
-            Err(SiblingOutcome::Fatal(e)) => return Err(e),
         }
     }
+
+    if let Some(e) = first_fatal {
+        return Err(e);
+    }
+    settled.sort_by_key(|(completion_index, _)| *completion_index);
+    let mut siblings: Vec<TrainingRecord> = settled.into_iter().map(|(_, rec)| rec).collect();
 
     if control.is_cancelled() {
         interrupted = true;
@@ -335,15 +354,18 @@ async fn generate_and_persist(
         ));
     }
 
-    let call = TeacherCall::new(
+    let mut call = TeacherCall::new(
         area.teacher_slug.clone(),
         vec![gated.candidate.message.clone()],
         area.max_tokens,
     )
     .with_sampling(sampling);
+    if let Some(reasoning_max_tokens) = area.teacher_reasoning_max_tokens {
+        call = call.with_reasoning(ReasoningPolicy::MaxTokens(reasoning_max_tokens));
+    }
 
     // The single teacher-spend.
-    let turn = generate_assistant(clients.teacher.as_ref(), &gated, &call).await?;
+    let turn = generate_assistant_with_truncation_retry(clients, &gated, &call).await?;
     let cost_usd = turn.cost.unwrap_or(0.0);
 
     let teacher_ref = TeacherRef {
@@ -394,6 +416,33 @@ async fn generate_and_persist(
 
     // Re-read so the returned envelope matches what was persisted.
     Ok(clients.store.get(rid).await?)
+}
+
+async fn generate_assistant_with_truncation_retry(
+    clients: &Clients,
+    gated: &GatedUserTurn,
+    call: &TeacherCall,
+) -> Result<gw_generate::AssistantTurn> {
+    let err = match generate_assistant(clients.teacher.as_ref(), gated, call).await {
+        Ok(turn) => return Ok(turn),
+        Err(err) => err,
+    };
+    if !matches!(err, GenerateError::TruncatedReasoning(_)) {
+        return Err(err.into());
+    }
+    if !clients.budget.may_dispatch() {
+        return Err(err.into());
+    }
+
+    let mut retry = call.clone();
+    retry.max_tokens = retry_max_tokens(call.max_tokens);
+    generate_assistant(clients.teacher.as_ref(), gated, &retry)
+        .await
+        .map_err(EngineError::from)
+}
+
+fn retry_max_tokens(max_tokens: u32) -> u32 {
+    ((u64::from(max_tokens) * 3).div_ceil(2)).min(u64::from(TRUNCATION_RETRY_MAX_TOKENS)) as u32
 }
 
 /// The canonical `sibling_group_id == prompt_hash` for a record, computed via the same hashing

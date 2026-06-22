@@ -75,8 +75,8 @@ pub enum EngineError {
     Invariant(String),
 
     /// A RECORD-SCOPED wrapper that attributes an underlying error to the SPECIFIC record it struck
-    /// (F1). The best-of-k group drives siblings sequentially, so a fault on a LATER sibling (e.g.
-    /// `c2`) must be attributed to THAT sibling's id — never blindly to `c0`, which may be a healthy
+    /// (F1). The best-of-k group drives siblings independently, so a fault on one sibling (e.g. `c2`)
+    /// must be attributed to THAT sibling's id — never blindly to `c0`, which may be a healthy
     /// already-judged record. `crate::run_group` wraps a record-level fault with the faulting
     /// `record_id` so the shard parks the RIGHT record at `Error` (see [`Self::attributed_record`]).
     /// Classification ([`Self::is_record_level`]) and any inner-provider inspection delegate to the

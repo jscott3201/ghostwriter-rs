@@ -446,7 +446,7 @@ async fn formatted_winner_cancel_window_retains_runner_and_resumes_one_admit() {
 }
 
 #[tokio::test]
-async fn in_group_abort_budget_gate_keeps_cursor_and_resume_completes_one_admit() {
+async fn in_group_abort_budget_gate_commits_settled_group_and_resume_no_respend() {
     let store = Store::open_in_memory().await.unwrap();
     let teacher = Arc::new(ScriptedTeacher::new(
         vec![answer_cot("first", 0.01), answer_cot("second", 0.01)],
@@ -480,22 +480,35 @@ async fn in_group_abort_budget_gate_keeps_cursor_and_resume_completes_one_admit(
         .unwrap();
 
     assert!(!first.completed);
-    assert_eq!(teacher.call_count(), 1);
-    assert_eq!(judge.call_count(), 1);
     assert_eq!(
-        records(&store, "run-k2-ingroup-abort")
-            .await
-            .into_iter()
-            .map(|record| record.lifecycle.state)
-            .collect::<Vec<_>>(),
-        vec![LifecycleState::Judged]
+        teacher.call_count(),
+        2,
+        "fan-out permits both siblings to pass the budget gate before either charge lands"
+    );
+    assert_eq!(judge.call_count(), 2);
+    let states = records(&store, "run-k2-ingroup-abort")
+        .await
+        .into_iter()
+        .map(|record| record.lifecycle.state)
+        .collect::<Vec<_>>();
+    assert_eq!(states.len(), 2);
+    assert!(
+        states.iter().any(|state| matches!(
+            state,
+            LifecycleState::Exported | LifecycleState::Admitted | LifecycleState::Formatted
+        )),
+        "one sibling is still admitted before the abort boundary: {states:?}"
+    );
+    assert!(
+        states.contains(&LifecycleState::Rejected),
+        "the non-winning sibling is retained: {states:?}"
     );
     assert_eq!(
         load_cursor(&store, "run-k2-ingroup-abort", 0)
             .await
             .unwrap()
             .next_offset,
-        0
+        1
     );
 
     let resumed_engine = Engine::new(
@@ -525,7 +538,7 @@ async fn in_group_abort_budget_gate_keeps_cursor_and_resume_completes_one_admit(
     assert_eq!(
         teacher.call_count(),
         2,
-        "resume generates only the missing sibling"
+        "resume does not re-spend already generated siblings"
     );
     assert_eq!(judge.call_count(), 2);
 }

@@ -57,6 +57,9 @@ pub struct AreaConfig {
     pub teacher_slug: String,
     /// The combined-output token cap for the teacher call (always set; INVARIANT-g).
     pub max_tokens: u32,
+    /// Optional explicit reasoning-token cap for teacher calls. `None` keeps the teacher default
+    /// effort mode.
+    pub teacher_reasoning_max_tokens: Option<u32>,
     /// Whether this area requires chain-of-thought (drives the reasoning-present Verify hard gate).
     pub cot_required: bool,
     /// Whether the rule-based answer comparator is authoritative (hard-reject a non-match) for this
@@ -91,6 +94,7 @@ impl AreaConfig {
             training_area: training_area.into(),
             teacher_slug: teacher_slug.into(),
             max_tokens: DEFAULT_MAX_TOKENS,
+            teacher_reasoning_max_tokens: None,
             cot_required: true,
             rule_only_authoritative: false,
             judges,
@@ -105,6 +109,20 @@ impl AreaConfig {
     #[must_use]
     pub fn with_k(mut self, k: u32) -> Self {
         self.k = k.max(1);
+        self
+    }
+
+    /// Set the combined-output token cap for teacher calls. Chainable.
+    #[must_use]
+    pub fn with_max_tokens(mut self, max_tokens: u32) -> Self {
+        self.max_tokens = max_tokens;
+        self
+    }
+
+    /// Set an explicit teacher reasoning-token cap. Chainable.
+    #[must_use]
+    pub fn with_teacher_reasoning_max_tokens(mut self, max_tokens: u32) -> Self {
+        self.teacher_reasoning_max_tokens = Some(max_tokens);
         self
     }
 

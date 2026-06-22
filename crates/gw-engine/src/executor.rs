@@ -449,12 +449,12 @@ impl Engine {
     /// Park the ACTUAL faulting record at [`LifecycleState::Error`] after a RECORD-LEVEL fault (E5/F1),
     /// and emit [`EngineEvent::RecordErrored`].
     ///
-    /// ATTRIBUTION (F1): the best-of-k group drives siblings sequentially, so a fault may strike a LATER
-    /// sibling (`c1`/`c2`) while earlier ones are already healthy at `Judged`. The faulting sibling's id
-    /// rides on the error via [`EngineError::attributed_record`] (stamped by `crate::run_group`); this
-    /// parks THAT record — falling back to the item's primary id (`c0`) only for an unattributed fault
-    /// (e.g. a k=1 path). If the faulting record never persisted (the fault hit during generation before
-    /// the first `put`), a MINIMAL stub is persisted at `Error` so the failure is queryable, counted
+    /// ATTRIBUTION (F1): the best-of-k group drives siblings independently, so a fault may strike any
+    /// sibling (`c1`/`c2`) while another is already healthy at `Judged`. The faulting sibling's id rides
+    /// on the error via [`EngineError::attributed_record`] (stamped by `crate::run_group`); this parks
+    /// THAT record — falling back to the item's primary id (`c0`) only for an unattributed fault (e.g.
+    /// a k=1 path). If the faulting record never persisted (the fault hit during generation before the
+    /// first `put`), a MINIMAL stub is persisted at `Error` so the failure is queryable, counted
     /// (`report.errored`), and auditable.
     ///
     /// NO-CLOBBER (F1, invariant 1): a fault on ONE sibling must NEVER overwrite a DIFFERENT healthy

@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use common::*;
 use gw_engine::{Engine, EngineEvent, EventSink, InMemorySeedSource, correlation_prior};
+use gw_providers::ReasoningParam;
 use gw_schema::{LifecycleState, Verdict};
 use gw_storage::{RecordFilter, Store};
 use tokio_util::sync::CancellationToken;
@@ -53,6 +54,99 @@ async fn happy_path_drives_to_exported() {
         }
     }
     assert!(saw_finish, "a RunFinished event must be emitted");
+}
+
+#[tokio::test]
+async fn teacher_reasoning_cap_reaches_request_and_provenance() {
+    let store = Store::open_in_memory().await.unwrap();
+    let teacher = Arc::new(ScriptedTeacher::new(vec![good_cot(0.01)], 1));
+    let judge = Arc::new(ScriptedJudge::new(vec![&judge_body(0.95, "accept")]));
+    let cl = clients(
+        store.clone(),
+        teacher.clone(),
+        judge,
+        25.0,
+        EventSink::disconnected(),
+    );
+    let area = area_k1(one_judge(), lenient_thresholds())
+        .with_max_tokens(20_000)
+        .with_teacher_reasoning_max_tokens(12_000);
+    let engine = Engine::new(cl, area, 4);
+
+    let report = engine
+        .run(
+            "run-teacher-cap",
+            &one_item_source(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(report.exported, 1);
+    let seen = teacher.seen_requests();
+    assert_eq!(seen.len(), 1);
+    assert_eq!(seen[0].max_tokens, Some(20_000));
+    assert_eq!(seen[0].reasoning, Some(ReasoningParam::max_tokens(12_000)));
+
+    let all = store
+        .scan(&RecordFilter::new().run_id("run-teacher-cap"))
+        .await
+        .unwrap();
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0].generation.max_tokens, Some(20_000));
+    assert_eq!(all[0].generation.reasoning_max_tokens, Some(12_000));
+    assert_eq!(all[0].generation.reasoning_effort, None);
+}
+
+#[tokio::test]
+async fn truncated_teacher_reasoning_retries_once_and_persists_record() {
+    let store = Store::open_in_memory().await.unwrap();
+    let teacher = Arc::new(ScriptedTeacher::new(
+        vec![truncated_reasoning(), good_cot(0.02)],
+        2,
+    ));
+    let judge = Arc::new(ScriptedJudge::new(vec![&judge_body(0.95, "accept")]));
+    let cl = clients(
+        store.clone(),
+        teacher.clone(),
+        judge,
+        25.0,
+        EventSink::disconnected(),
+    );
+    let budget = cl.budget.clone();
+    let area = area_k1(one_judge(), lenient_thresholds()).with_max_tokens(10_000);
+    let engine = Engine::new(cl, area, 4);
+
+    let report = engine
+        .run(
+            "run-teacher-retry",
+            &one_item_source(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(teacher.call_count(), 2, "one retry is issued");
+    let seen = teacher.seen_requests();
+    assert_eq!(seen.len(), 2);
+    assert_eq!(seen[0].max_tokens, Some(10_000));
+    assert_eq!(seen[1].max_tokens, Some(15_000));
+    assert_eq!(
+        report.exported, 1,
+        "the retried record persists and exports"
+    );
+    assert_eq!(report.errored, 0);
+    assert!(
+        (budget.spent() - 0.02).abs() < 1e-12,
+        "the successful retry cost is charged"
+    );
+
+    let all = store
+        .scan(&RecordFilter::new().run_id("run-teacher-retry"))
+        .await
+        .unwrap();
+    assert_eq!(all.len(), 1, "retry does not double-persist");
+    assert_eq!(all[0].lifecycle.state, LifecycleState::Exported);
 }
 
 /// MANDATORY 7 (verdict→lifecycle): a below-threshold panel REJECTS; the record is not exported and
