@@ -29,6 +29,8 @@ fn toml_file_overrides_defaults() {
                 training_area = "rust-async"
                 teacher_slug = "z-ai/glm-5.2"
                 k = 3
+                judge_max_tokens = 3600
+                judge_reasoning_max_tokens = 1800
 
                 [export]
                 out = "auto.parquet"
@@ -39,6 +41,8 @@ fn toml_file_overrides_defaults() {
                 [[area.judges]]
                 slug = "deepseek/deepseek-v4-pro"
                 family = "deepseek"
+                max_tokens = 3900
+                reasoning_max_tokens = 1200
             "#,
         )?;
         let cfg = Config::load(Some(Path::new("gw.toml"))).expect("loads the TOML fixture");
@@ -47,13 +51,42 @@ fn toml_file_overrides_defaults() {
         assert_eq!(cfg.provider_rpm, 120);
         assert_eq!(cfg.area.training_area, "rust-async");
         assert_eq!(cfg.area.k, 3);
+        assert_eq!(cfg.area.judge_max_tokens, Some(3600));
+        assert_eq!(cfg.area.judge_reasoning_max_tokens, Some(1800));
         assert_eq!(cfg.area.judges.len(), 1);
         assert_eq!(cfg.area.judges[0].family, "deepseek");
+        assert_eq!(cfg.area.judges[0].max_tokens, Some(3900));
+        assert_eq!(cfg.area.judges[0].reasoning_max_tokens, Some(1200));
         let export = cfg.export.expect("export section parsed");
         assert_eq!(export.out, Path::new("auto.parquet"));
         assert_eq!(export.format, gw_schema::TrlFormat::ChatML);
         assert_eq!(export.cot, gw_schema::CotPolicy::Masked);
         assert_eq!(export.dataset_version, Some(semver::Version::new(1, 2, 3)));
+        Ok(())
+    });
+}
+
+#[test]
+fn judge_reasoning_effort_conflicts_with_reasoning_max_tokens() {
+    Jail::expect_with(|jail| {
+        jail.create_file(
+            "gw.toml",
+            r#"
+                [area]
+                judge_reasoning_max_tokens = 1800
+                judge_reasoning_effort = "low"
+
+                [[area.judges]]
+                slug = "deepseek/deepseek-v4-pro"
+                family = "deepseek"
+            "#,
+        )?;
+        let err = Config::load(Some(Path::new("gw.toml"))).expect_err("ambiguous area rejected");
+        assert!(
+            err.to_string()
+                .contains("judge_reasoning_max_tokens and judge_reasoning_effort"),
+            "got: {err}"
+        );
         Ok(())
     });
 }

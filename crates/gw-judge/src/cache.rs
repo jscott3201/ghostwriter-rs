@@ -4,17 +4,17 @@
 //! Every judge call is content-hash-cached so re-runs and crash-restarts never re-spend tokens.
 //! The cache is checked BEFORE spending and written AFTER. The key is the storage cache key
 //! `(content_hash, kind, model, rubric_id)` (`gw_storage::Store::cache_get` / `cache_put`), with the
-//! judge **`temperature` folded in** as `temperature_bits = f64::to_bits(temperature)`:
+//! judge request knobs folded into the `rubric_id` slot:
 //!
 //! - **`content_hash`** — the candidate's `record_hash` (`gw_storage::record_hash`).
 //! - **`kind`** — [`JUDGE_CACHE_KIND`] (`"judge"`), distinguishing judge calls from teacher/verify.
 //! - **`model`** — the judge slug.
-//! - **`rubric_id`** — the folded key [`folded_rubric_key`]: `"<rubric>#t<temperature_bits>"`. The
-//!   storage layer's cache key is a fixed 4-tuple, so `temperature_bits` rides inside the
-//!   `rubric_id` component rather than widening the schema. This is the load-bearing A2 change: a
-//!   re-run at a DIFFERENT judge temperature gets a DIFFERENT key and so cannot silently reuse a
-//!   stale verdict — the CACHE, not temp=0, is what guarantees exact replay (OpenRouter MoE routing
-//!   is non-deterministic even at temp 0).
+//! - **`rubric_id`** — the folded key: rubric id plus sampling and budget knobs. The storage
+//!   layer's cache key is a fixed 4-tuple, so request-affecting parameters ride inside the
+//!   `rubric_id` component rather than widening the schema. This extends the A2 temperature fold:
+//!   a re-run at a DIFFERENT judge temperature, top-p, seed, max-token cap, or reasoning budget gets
+//!   a DIFFERENT key and so cannot silently reuse a stale verdict — the CACHE, not temp=0, is what
+//!   guarantees exact replay (OpenRouter MoE routing is non-deterministic even at temp 0).
 //!
 //! [`grade_panel_cached`] is the production panel entry: for each judge it checks the cache, calls
 //! the provider only on a miss, and writes the result back. A fake provider that asserts on a
@@ -25,7 +25,7 @@ use gw_storage::Store;
 use serde_json::Value;
 
 use crate::error::Result;
-use crate::panel::{Grade, PanelJudge, grade_one};
+use crate::panel::{Grade, JudgeReasoning, PanelJudge, grade_one};
 
 /// The `kind` discriminant for judge calls in the storage cache (distinct from teacher generation
 /// and the deterministic verify rail). The verifier rail is pure/local and is not cached here.
@@ -44,6 +44,40 @@ pub fn folded_rubric_key(rubric_id: Option<&str>, temperature: f64) -> String {
     match rubric_id {
         Some(r) => format!("{r}#t{bits}"),
         None => format!("#t{bits}"),
+    }
+}
+
+fn folded_request_key(judge: &PanelJudge) -> String {
+    let mut key = folded_rubric_key(judge.rubric_id.as_deref(), judge.sampling.temperature);
+    if let Some(top_p) = judge.sampling.top_p {
+        key.push_str(&format!("#p{}", top_p.to_bits()));
+    } else {
+        key.push_str("#pnone");
+    }
+    if let Some(seed) = judge.sampling.seed {
+        key.push_str(&format!("#s{seed}"));
+    } else {
+        key.push_str("#snone");
+    }
+    key.push_str(&format!("#mt{}", judge.effective_max_tokens()));
+    match judge.reasoning {
+        Some(JudgeReasoning::MaxTokens(tokens)) => key.push_str(&format!("#rmt{tokens}")),
+        Some(JudgeReasoning::Effort(effort)) => {
+            key.push_str(&format!("#reffort{}", reasoning_effort_token(effort)));
+        }
+        None => key.push_str("#rnone"),
+    }
+    key
+}
+
+fn reasoning_effort_token(effort: gw_schema::ReasoningEffort) -> &'static str {
+    match effort {
+        gw_schema::ReasoningEffort::None => "none",
+        gw_schema::ReasoningEffort::Minimal => "minimal",
+        gw_schema::ReasoningEffort::Low => "low",
+        gw_schema::ReasoningEffort::Medium => "medium",
+        gw_schema::ReasoningEffort::High => "high",
+        gw_schema::ReasoningEffort::Xhigh => "xhigh",
     }
 }
 
@@ -124,8 +158,8 @@ fn grade_from_cache_value(value: &Value) -> Grade {
 }
 
 /// Grade ONE judge with the never-re-spend cache: check the cache for `(content_hash, "judge",
-/// slug, folded_rubric_key(rubric_id, temperature))`; on a HIT re-hydrate the grade WITHOUT calling
-/// the provider; on a MISS call the judge once, write the result, and return it.
+/// slug, folded_request_key(judge))`; on a HIT re-hydrate the grade WITHOUT calling the provider;
+/// on a MISS call the judge once, write the result, and return it.
 ///
 /// # Errors
 /// - [`JudgeError::Storage`](crate::JudgeError::Storage) on a cache read/write fault.
@@ -139,7 +173,7 @@ pub async fn grade_one_cached<P: Provider + ?Sized>(
     candidate_render: &str,
     content_hash: &str,
 ) -> Result<Grade> {
-    let folded = folded_rubric_key(judge.rubric_id.as_deref(), judge.sampling.temperature);
+    let folded = folded_request_key(judge);
     if let Some(cached) = store
         .cache_get(content_hash, JUDGE_CACHE_KIND, &judge.slug, Some(&folded))
         .await?
@@ -329,6 +363,27 @@ mod tests {
             .unwrap();
         // Different temperature_bits → different key → a real second spend (does not hit cold's row).
         grade_one_cached(&store, &provider, &warm, "rubric", "trace", "h")
+            .await
+            .unwrap();
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn different_reasoning_budget_misses_the_cache() {
+        let store = Store::open_in_memory().await.unwrap();
+        let provider = CountingProvider::new(2, "{\"score\":0.6,\"verdict\":\"revise\"}");
+
+        let shallow = PanelJudge::new("m", "fam")
+            .with_rubric("r")
+            .with_reasoning_max_tokens(1_000);
+        let deeper = PanelJudge::new("m", "fam")
+            .with_rubric("r")
+            .with_reasoning_max_tokens(2_000);
+
+        grade_one_cached(&store, &provider, &shallow, "rubric", "trace", "h")
+            .await
+            .unwrap();
+        grade_one_cached(&store, &provider, &deeper, "rubric", "trace", "h")
             .await
             .unwrap();
         assert_eq!(provider.calls.load(Ordering::SeqCst), 2);

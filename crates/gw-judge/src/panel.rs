@@ -23,7 +23,7 @@
 use std::collections::BTreeMap;
 
 use futures::StreamExt;
-use gw_providers::{ChatRequest, Provider, ReasoningParam};
+use gw_providers::{ChatRequest, Provider, ReasoningParam, StreamDelta};
 use gw_schema::{Content, JudgeVote, Message, ReasoningEffort, Role};
 use serde::Deserialize;
 
@@ -43,6 +43,16 @@ pub enum JudgeScoring {
     IntegerLikert,
 }
 
+/// Default explicit judge reasoning budget. Judges need enough reasoning to inspect a trace, but
+/// unlike teachers they must preserve content headroom for the verdict JSON.
+pub const DEFAULT_JUDGE_REASONING_MAX_TOKENS: u32 = 2_000;
+
+/// Default combined judge completion cap, including hidden reasoning plus visible verdict content.
+pub const DEFAULT_JUDGE_MAX_TOKENS: u32 = 3_500;
+
+/// Minimum visible-content headroom reserved for the judge verdict JSON and short rationale.
+pub const MIN_JUDGE_VERDICT_TOKENS: u32 = 1_500;
+
 impl JudgeScoring {
     /// A stable token for audit (`scoring_used`).
     #[must_use]
@@ -50,6 +60,32 @@ impl JudgeScoring {
         match self {
             JudgeScoring::GEvalLogprob => "g_eval_logprob",
             JudgeScoring::IntegerLikert => "integer_likert",
+        }
+    }
+}
+
+/// The reasoning knob applied to a judge request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum JudgeReasoning {
+    /// OpenRouter effort mode. Prefer [`JudgeReasoning::MaxTokens`] for judges when possible,
+    /// because effort mode does not reserve a visible verdict budget.
+    Effort(ReasoningEffort),
+    /// Explicit reasoning-token cap.
+    MaxTokens(u32),
+}
+
+impl JudgeReasoning {
+    fn to_param(self) -> ReasoningParam {
+        match self {
+            Self::Effort(effort) => ReasoningParam::effort(effort),
+            Self::MaxTokens(max_tokens) => ReasoningParam::max_tokens(max_tokens),
+        }
+    }
+
+    fn min_overall_tokens(self) -> Option<u32> {
+        match self {
+            Self::MaxTokens(reasoning) => Some(reasoning.saturating_add(MIN_JUDGE_VERDICT_TOKENS)),
+            Self::Effort(_) => None,
         }
     }
 }
@@ -93,6 +129,10 @@ pub struct PanelJudge {
     pub scoring: JudgeScoring,
     /// Judge-call sampling.
     pub sampling: JudgeSampling,
+    /// Combined hidden-reasoning plus visible-content cap for the judge completion.
+    pub max_tokens: u32,
+    /// Judge reasoning budget/mode. Defaults to explicit bounded reasoning, not effort mode.
+    pub reasoning: Option<JudgeReasoning>,
 }
 
 impl PanelJudge {
@@ -106,6 +146,10 @@ impl PanelJudge {
             rubric_id: None,
             scoring: JudgeScoring::IntegerLikert,
             sampling: JudgeSampling::default(),
+            max_tokens: DEFAULT_JUDGE_MAX_TOKENS,
+            reasoning: Some(JudgeReasoning::MaxTokens(
+                DEFAULT_JUDGE_REASONING_MAX_TOKENS,
+            )),
         }
     }
 
@@ -128,6 +172,47 @@ impl PanelJudge {
     pub fn with_sampling(mut self, sampling: JudgeSampling) -> Self {
         self.sampling = sampling;
         self
+    }
+
+    /// Set the combined hidden-reasoning plus visible-content cap. If explicit reasoning tokens are
+    /// also configured, [`effective_max_tokens`](Self::effective_max_tokens) preserves the verdict
+    /// headroom floor even when this raw value is too low.
+    #[must_use]
+    pub fn with_max_tokens(mut self, max_tokens: u32) -> Self {
+        self.max_tokens = max_tokens;
+        self
+    }
+
+    /// Set the judge reasoning mode. Chainable.
+    #[must_use]
+    pub fn with_reasoning(mut self, reasoning: Option<JudgeReasoning>) -> Self {
+        self.reasoning = reasoning;
+        self
+    }
+
+    /// Set an explicit judge reasoning-token cap. Chainable.
+    #[must_use]
+    pub fn with_reasoning_max_tokens(self, max_tokens: u32) -> Self {
+        self.with_reasoning(Some(JudgeReasoning::MaxTokens(max_tokens)))
+    }
+
+    /// Set effort-mode reasoning for a judge. Prefer explicit max-tokens for production judges.
+    #[must_use]
+    pub fn with_reasoning_effort(self, effort: ReasoningEffort) -> Self {
+        self.with_reasoning(Some(JudgeReasoning::Effort(effort)))
+    }
+
+    /// Combined max-token cap that preserves the minimum visible verdict floor when the judge uses
+    /// an explicit reasoning budget.
+    #[must_use]
+    pub fn effective_max_tokens(&self) -> u32 {
+        self.reasoning
+            .and_then(JudgeReasoning::min_overall_tokens)
+            .map_or(self.max_tokens, |floor| self.max_tokens.max(floor))
+    }
+
+    fn reasoning_param(&self) -> Option<ReasoningParam> {
+        self.reasoning.map(JudgeReasoning::to_param)
     }
 }
 
@@ -307,8 +392,8 @@ fn parse_grade(
 
 /// Build the (non-CoT) judge [`ChatRequest`]: the rubric/system framing + the candidate trace, with
 /// the judge's sampling applied and `max_tokens` ALWAYS set (spine invariant g). The judge is asked
-/// to emit the `JudgeResponse` JSON. `reasoning_effort = xhigh` rides any judge that itself
-/// reasons (§10), never `max`.
+/// to emit the `JudgeResponse` JSON. Judges default to bounded `reasoning.max_tokens`, not `xhigh`
+/// effort, so the combined completion cap still leaves visible verdict headroom.
 #[must_use]
 pub fn build_judge_request(
     judge: &PanelJudge,
@@ -339,8 +424,10 @@ pub fn build_judge_request(
     };
     let mut req = ChatRequest::new(judge.slug.clone(), vec![system, user])
         .with_temperature(judge.sampling.temperature)
-        .with_max_tokens(4096)
-        .with_reasoning(ReasoningParam::effort(ReasoningEffort::Xhigh));
+        .with_max_tokens(judge.effective_max_tokens());
+    if let Some(reasoning) = judge.reasoning_param() {
+        req = req.with_reasoning(reasoning);
+    }
     if let Some(p) = judge.sampling.top_p {
         req = req.with_top_p(p);
     }
@@ -350,18 +437,66 @@ pub fn build_judge_request(
     req
 }
 
+struct DrainedContent {
+    content: String,
+    finish_reason: Option<String>,
+    native_finish_reason: Option<String>,
+}
+
+impl DrainedContent {
+    fn ingest(&mut self, delta: StreamDelta) {
+        if let Some(c) = delta.content {
+            self.content.push_str(&c);
+        }
+        if delta.finish_reason.is_some() {
+            self.finish_reason = delta.finish_reason;
+        }
+        if delta.native_finish_reason.is_some() {
+            self.native_finish_reason = delta.native_finish_reason;
+        }
+    }
+
+    fn hit_length_cap(&self) -> bool {
+        self.finish_reason.as_deref() == Some("length")
+            || self.native_finish_reason.as_deref() == Some("length")
+    }
+}
+
 /// Drain a judge's streamed completion into its concatenated content text. Judge calls are non-CoT
 /// (a verdict, not a reasoning trace); we only need the content. A streamed provider error is
 /// surfaced, never swallowed.
-async fn drain_content(mut stream: gw_providers::DeltaStream) -> Result<String> {
-    let mut content = String::new();
+async fn drain_content(mut stream: gw_providers::DeltaStream) -> Result<DrainedContent> {
+    let mut drained = DrainedContent {
+        content: String::new(),
+        finish_reason: None,
+        native_finish_reason: None,
+    };
     while let Some(item) = stream.next().await {
         let delta = item?;
-        if let Some(c) = delta.content {
-            content.push_str(&c);
-        }
+        drained.ingest(delta);
     }
-    Ok(content)
+    Ok(drained)
+}
+
+fn empty_completion_error(
+    judge: &PanelJudge,
+    drained: &DrainedContent,
+    max_tokens: Option<u32>,
+    reasoning: Option<ReasoningParam>,
+) -> JudgeError {
+    if drained.hit_length_cap() {
+        JudgeError::JudgeParse(format!(
+            "judge {} was truncated at max_tokens before emitting a verdict \
+             (finish_reason={:?}, native_finish_reason={:?}, max_tokens={:?}, reasoning={:?}); \
+             raise judge max_tokens or lower the judge reasoning budget",
+            judge.slug, drained.finish_reason, drained.native_finish_reason, max_tokens, reasoning
+        ))
+    } else {
+        JudgeError::JudgeParse(format!(
+            "judge {} returned an empty completion (finish_reason={:?}, native_finish_reason={:?})",
+            judge.slug, drained.finish_reason, drained.native_finish_reason
+        ))
+    }
 }
 
 /// Call ONE judge over the injected provider and parse its sealed [`Grade`]. This spends a judge
@@ -381,15 +516,16 @@ pub async fn grade_one<P: Provider + ?Sized>(
     candidate_render: &str,
 ) -> Result<Grade> {
     let req = build_judge_request(judge, rubric, candidate_render);
+    let max_tokens = req.max_tokens;
+    let reasoning = req.reasoning;
     let stream = provider.stream_chat(req).await?;
-    let text = drain_content(stream).await?;
-    if text.trim().is_empty() {
-        return Err(JudgeError::JudgeParse(format!(
-            "judge {} returned an empty completion",
-            judge.slug
-        )));
+    let drained = drain_content(stream).await?;
+    if drained.content.trim().is_empty() {
+        return Err(empty_completion_error(
+            judge, &drained, max_tokens, reasoning,
+        ));
     }
-    parse_grade(judge, &text, judge.scoring)
+    parse_grade(judge, &drained.content, judge.scoring)
 }
 
 /// Grade the whole panel in a BLIND, INDEPENDENT, SEALED first pass (§5.7): every judge is a
@@ -609,14 +745,26 @@ mod tests {
     }
 
     #[test]
-    fn judge_request_always_sets_max_tokens_and_xhigh() {
+    fn judge_request_defaults_to_bounded_reasoning_with_verdict_headroom() {
         let judge = PanelJudge::new("m", "fam");
         let req = build_judge_request(&judge, "rubric", "trace");
-        assert_eq!(req.max_tokens, Some(4096));
+        assert_eq!(req.max_tokens, Some(DEFAULT_JUDGE_MAX_TOKENS));
         assert_eq!(
             req.reasoning,
-            Some(ReasoningParam::effort(ReasoningEffort::Xhigh))
+            Some(ReasoningParam::max_tokens(
+                DEFAULT_JUDGE_REASONING_MAX_TOKENS
+            ))
         );
         assert_eq!(req.temperature, Some(0.0));
+    }
+
+    #[test]
+    fn judge_request_clamps_explicit_reasoning_to_verdict_headroom() {
+        let judge = PanelJudge::new("m", "fam")
+            .with_max_tokens(1_000)
+            .with_reasoning_max_tokens(800);
+        let req = build_judge_request(&judge, "rubric", "trace");
+        assert_eq!(req.max_tokens, Some(800 + MIN_JUDGE_VERDICT_TOKENS));
+        assert_eq!(req.reasoning, Some(ReasoningParam::max_tokens(800)));
     }
 }
