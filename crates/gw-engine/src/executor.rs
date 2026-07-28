@@ -253,6 +253,11 @@ impl Engine {
             shards: shard_count,
         });
 
+        if let Err(error) = self.seed_embedding_priors(run_id, &cancel).await {
+            mark_run_failed(&self.clients.store, &self.clients.events, run_id).await?;
+            return Err(error);
+        }
+
         let semaphore = Arc::new(Semaphore::new(self.max_in_flight as usize));
         // F2: a run-level circuit-breaker shared across shards — aborts a systemically-broken run.
         let breaker = Arc::new(CircuitBreaker::new(CIRCUIT_BREAKER_PARKS));
@@ -276,17 +281,11 @@ impl Engine {
             match handle.await {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => {
-                    self.clients
-                        .store
-                        .set_run_status(run_id, RunStatus::Failed)
-                        .await?;
+                    mark_run_failed(&self.clients.store, &self.clients.events, run_id).await?;
                     return Err(e);
                 }
                 Err(join_err) => {
-                    self.clients
-                        .store
-                        .set_run_status(run_id, RunStatus::Failed)
-                        .await?;
+                    mark_run_failed(&self.clients.store, &self.clients.events, run_id).await?;
                     return Err(EngineError::Invariant(format!(
                         "shard task panicked/cancelled: {join_err}"
                     )));
@@ -329,6 +328,48 @@ impl Engine {
             completed: report.completed,
         });
         Ok(report)
+    }
+
+    async fn seed_embedding_priors(&self, run_id: &str, cancel: &CancellationToken) -> Result<()> {
+        let records = self
+            .clients
+            .store
+            .scan(&RecordFilter::new().run_id(run_id))
+            .await?;
+        let mut vectors = Vec::new();
+        for record in records.into_iter().filter(|record| {
+            matches!(
+                record.lifecycle.state,
+                LifecycleState::Admitted | LifecycleState::Formatted | LifecycleState::Exported
+            )
+        }) {
+            if cancel.is_cancelled() {
+                tracing::warn!(
+                    run_id,
+                    "embedding-prior seeding cancelled; continuing without remaining priors"
+                );
+                break;
+            }
+            let Some(text) = crate::priors::user_turn_text(&record) else {
+                tracing::warn!(record_id = %record.record_id, "admitted record has no user turn; skipping embedding prior");
+                continue;
+            };
+            let Some(item_id) = crate::priors::record_item_id(&record.record_id) else {
+                tracing::warn!(record_id = %record.record_id, "admitted record has no seed-item identity; skipping embedding prior");
+                continue;
+            };
+            // Embed without holding the shared lock; gate snapshots remain short-lived.
+            match self.clients.embedder.embed(&text) {
+                Ok(vector) => vectors.push((item_id, vector)),
+                Err(error) => tracing::warn!(
+                    record_id = %record.record_id,
+                    %error,
+                    "failed to seed embedding prior; continuing run"
+                ),
+            }
+        }
+        crate::priors::replace(&self.clients.priors, vectors);
+        Ok(())
     }
 
     /// Drive one shard's seed items sequentially, resuming from the persisted cursor, under the shared
@@ -680,6 +721,19 @@ impl Engine {
     }
 }
 
+async fn mark_run_failed(
+    store: &gw_storage::Store,
+    events: &crate::EventSink,
+    run_id: &str,
+) -> Result<()> {
+    store.set_run_status(run_id, RunStatus::Failed).await?;
+    events.emit(EngineEvent::RunFinished {
+        run_id: run_id.to_string(),
+        completed: false,
+    });
+    Ok(())
+}
+
 fn manifest_sidecar_path(dst: &Path) -> PathBuf {
     let mut path = dst.as_os_str().to_owned();
     path.push(".manifest.json");
@@ -783,5 +837,33 @@ pub(crate) fn error_stub(
         lifecycle: Default::default(),
         hashes: Default::default(),
         cost: Default::default(),
+    }
+}
+
+#[cfg(test)]
+mod failure_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn mark_run_failed_updates_ledger_and_emits_terminal_event() {
+        let store = gw_storage::Store::open_in_memory().await.unwrap();
+        store.create_run("failed-run", "{}", None).await.unwrap();
+        let (events, mut receiver) = crate::EventSink::subscribe();
+
+        mark_run_failed(&store, &events, "failed-run")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            store.run_status("failed-run").await.unwrap().as_deref(),
+            Some("failed")
+        );
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            EngineEvent::RunFinished {
+                run_id,
+                completed: false
+            } if run_id == "failed-run"
+        ));
     }
 }

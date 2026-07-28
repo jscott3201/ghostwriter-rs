@@ -27,6 +27,7 @@
 pub mod cli;
 pub mod commands;
 pub mod config;
+mod embedder;
 pub mod seedsource;
 pub mod wire;
 

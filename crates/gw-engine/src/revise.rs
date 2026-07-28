@@ -127,8 +127,17 @@ async fn generate_retry(
     clients: &Clients,
     area: &AreaConfig,
 ) -> Result<TrainingRecord> {
-    let gated: GatedUserTurn =
-        synthesize_user_turn(seed.candidate.clone(), clients.embedder.as_ref(), &[])?;
+    // Seed-item identity is content-independent so only this item's own priors are excluded.
+    let item_id = crate::priors::record_item_id(retry_id).ok_or_else(|| {
+        EngineError::Invariant(format!("retry id has no item prefix: {retry_id}"))
+    })?;
+    let priors = crate::priors::snapshot(&clients.priors, &item_id);
+    let gated: GatedUserTurn = synthesize_user_turn(
+        seed.candidate.clone(),
+        clients.embedder.as_ref(),
+        priors.as_ref(),
+    )?;
+    drop(priors);
     if !gated.passed() {
         return Err(EngineError::Generate(
             gw_generate::GenerateError::Invariant("revise retry: user-turn QC gate failed".into()),

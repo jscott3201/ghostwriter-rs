@@ -62,6 +62,7 @@
 mod client;
 mod delta;
 mod delta_wire;
+mod embeddings;
 mod error;
 mod limiter;
 mod request;
@@ -76,6 +77,7 @@ pub use client::{
     DEFAULT_API_KEY_ENV, DEFAULT_BASE_URL, OpenRouterProvider, OpenRouterProviderBuilder,
 };
 pub use delta::{ChunkProvenance, CompletionTokensDetails, StreamDelta, Usage};
+pub use embeddings::{EmbeddingsClient, EmbeddingsClientBuilder, embedding_headers};
 pub use error::ProviderError;
 pub use limiter::RateLimiter;
 pub use request::{ChatRequest, ProviderRouting, ReasoningParam, SortStrategy, UsageRequest};

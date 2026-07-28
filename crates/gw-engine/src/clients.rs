@@ -169,6 +169,8 @@ pub struct Clients {
     pub judge: Arc<dyn Provider>,
     /// The user-turn diversity embedder.
     pub embedder: Arc<dyn Embedder + Send + Sync>,
+    /// Run-scoped admitted-turn embeddings used by the diversity gate.
+    pub(crate) priors: crate::priors::Priors,
     /// The sandbox ground-truth oracle (default [`NullSandboxOracle`](gw_judge::NullSandboxOracle)).
     pub sandbox: Arc<dyn SandboxOracle + Send + Sync>,
     /// The shared run-wide budget meter.
@@ -214,6 +216,7 @@ impl Clients {
             teacher,
             judge,
             embedder,
+            priors: crate::priors::new(),
             sandbox,
             budget,
             events,
