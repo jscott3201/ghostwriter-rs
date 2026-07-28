@@ -89,6 +89,27 @@ async fn admitted_turn_is_appended_and_duplicate_parks_at_error() {
 }
 
 #[tokio::test]
+async fn identical_text_from_distinct_seed_items_dedups_second() {
+    let store = Store::open_in_memory().await.unwrap();
+    let source = InMemorySeedSource::new(
+        vec![
+            good_candidate("byte-identical prompt"),
+            good_candidate("byte-identical prompt"),
+        ],
+        1,
+    );
+    let teacher: Arc<dyn Provider> = Arc::new(ScriptedTeacher::new(vec![good_cot(0.01)], 1));
+    let judge: Arc<dyn Provider> = Arc::new(ScriptedJudge::new(vec![&judge_body(0.95, "accept")]));
+    let clients = clients_with_embedder(store, teacher, judge, Arc::new(SameVectorEmbedder), 25.0);
+    let report = Engine::new(clients, area_k1(one_judge(), lenient_thresholds()), 1)
+        .run("exact-duplicate", &source, CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(report.admitted, 1);
+    assert_eq!(report.errored, 1);
+}
+
+#[tokio::test]
 async fn resumed_run_seeds_priors_before_gating_remaining_item() {
     let store = Store::open_in_memory().await.unwrap();
     let first_teacher: Arc<dyn Provider> = Arc::new(ScriptedTeacher::new(vec![good_cot(0.01)], 1));
@@ -247,7 +268,7 @@ async fn resumed_item_does_not_dedup_against_its_own_admitted_vector() {
         .await
         .unwrap()
         .remove(0);
-    prior.record_id = "staged-own-prior".into();
+    prior.record_id = "resume-own-s0-seed0-a9-c9".into();
     prior.provenance.run_id = "resume-own".into();
     store
         .validate_or_record_run_partition("resume-own", 1, &source.prompts_hash().unwrap())
@@ -296,7 +317,7 @@ async fn pre_cancelled_resume_stops_prior_seeding_before_embed() {
         .await
         .unwrap()
         .remove(0);
-    prior.record_id = "cancel-staged-prior".into();
+    prior.record_id = "cancel-seeding-s0-seed0-a9-c9".into();
     prior.provenance.run_id = "cancel-seeding".into();
     store
         .validate_or_record_run_partition("cancel-seeding", 1, &source.prompts_hash().unwrap())

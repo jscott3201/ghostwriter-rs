@@ -198,6 +198,12 @@ fn order_and_validate(
                 datum.index
             )));
         }
+        if datum.embedding.iter().all(|component| *component == 0.0) {
+            return Err(ProviderError::Decode(format!(
+                "embedding at index {} has zero norm",
+                datum.index
+            )));
+        }
         if datum.embedding.len() != dim {
             return Err(ProviderError::Decode(format!(
                 "embedding dimension mismatch: expected {dim}, got {}",
@@ -269,6 +275,22 @@ mod tests {
         )
         .expect_err("infinite component fails");
         assert!(error.to_string().contains("index 7"));
+    }
+
+    #[test]
+    fn all_zero_vector_names_embedding_index() {
+        let error = order_and_validate(
+            EmbeddingResponse {
+                data: vec![EmbeddingDatum {
+                    embedding: vec![0.0, -0.0],
+                    index: 4,
+                }],
+            },
+            5,
+            2,
+        )
+        .expect_err("zero-norm vector fails");
+        assert!(error.to_string().contains("index 4"));
     }
 
     #[test]

@@ -98,22 +98,26 @@ pub fn build_clients(
 ) -> anyhow::Result<Clients> {
     let embedder: Arc<dyn Embedder + Send + Sync> = match embedding {
         None => Arc::new(NullEmbedder),
-        Some(config) if config.backend == EmbeddingBackend::OpenAiCompatible => {
-            let client = EmbeddingsClient::builder()
-                .base_url(
-                    config
-                        .endpoint
-                        .as_deref()
-                        .unwrap_or(gw_schema::DEFAULT_EMBEDDING_ENDPOINT),
-                )
-                .model(&config.model)
-                .dim(config.dim)
-                .api_key_env(config.api_key_env.clone())
-                .build()
-                .context("constructing the embeddings client")?;
-            Arc::new(HttpEmbedder::new(client))
-        }
-        Some(_) => anyhow::bail!("embedding backend candle_local is not constructible in v1"),
+        Some(config) => match config.backend {
+            EmbeddingBackend::OpenAiCompatible => {
+                let client = EmbeddingsClient::builder()
+                    .base_url(
+                        config
+                            .endpoint
+                            .as_deref()
+                            .unwrap_or(gw_schema::DEFAULT_EMBEDDING_ENDPOINT),
+                    )
+                    .model(&config.model)
+                    .dim(config.dim)
+                    .api_key_env(config.api_key_env.clone())
+                    .build()
+                    .context("constructing the embeddings client")?;
+                Arc::new(HttpEmbedder::new(client))
+            }
+            EmbeddingBackend::CandleLocal => {
+                anyhow::bail!("embedding backend candle_local is not constructible in v1")
+            }
+        },
     };
     Ok(Clients::new(
         store,

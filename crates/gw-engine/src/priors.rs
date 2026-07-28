@@ -1,11 +1,13 @@
 //! Run-scoped embedding priors used by the user-turn diversity gate.
 //!
-//! Gate snapshots clone an [`Arc`] in O(1). Appends use copy-on-write and retain an item's
-//! pre-admission corpus so siblings never dedup against their own winner. Corpus growth is
-//! intentionally unbounded for the run: dedup requires the complete admitted-turn history.
+//! One canonical corpus owns every vector exactly once. Common gate snapshots clone its [`Arc`] in
+//! O(1). If an item with admitted vectors gates again, exclusion is uniformly derived as the current
+//! corpus minus that seed item's vectors. Only its linear index set is cached; the filtered vectors
+//! are temporary and never retained. Appends invalidate those lazy index caches. Corpus growth is
+//! intentionally unbounded for the run because dedup requires the complete admitted-turn history.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{Arc, RwLock},
 };
 
@@ -15,7 +17,9 @@ use gw_schema::{Content, ContentPart, Role, TrainingRecord};
 #[derive(Default)]
 pub(crate) struct PriorState {
     all: Arc<Vec<Vec<f32>>>,
-    without_item: HashMap<String, Arc<Vec<Vec<f32>>>>,
+    item_ids: Vec<String>,
+    items_with_vectors: HashSet<String>,
+    exclusion_indices: HashMap<String, Arc<Vec<usize>>>,
 }
 
 /// Shared, run-scoped embedding vectors.
@@ -25,39 +29,79 @@ pub(crate) fn new() -> Priors {
     Arc::new(RwLock::new(PriorState::default()))
 }
 
+/// Content-independent identity shared by all siblings/retries of one seed item.
+pub(crate) fn item_id(run_id: &str, shard: i64, seed: i64) -> String {
+    format!("{run_id}-s{shard}-seed{seed}")
+}
+
+pub(crate) fn record_item_id(record_id: &str) -> Option<String> {
+    record_id
+        .rsplit_once("-a")
+        .map(|(prefix, _)| prefix.to_string())
+}
+
 pub(crate) fn snapshot(priors: &Priors, item_id: &str) -> Arc<Vec<Vec<f32>>> {
-    let state = priors
-        .read()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    state
-        .without_item
-        .get(item_id)
-        .cloned()
-        .unwrap_or_else(|| Arc::clone(&state.all))
+    {
+        let state = priors
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !state.items_with_vectors.contains(item_id) {
+            return Arc::clone(&state.all);
+        }
+    }
+
+    let (all, excluded) = {
+        let mut state = priors
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let excluded = if let Some(cached) = state.exclusion_indices.get(item_id) {
+            Arc::clone(cached)
+        } else {
+            let indices = Arc::new(
+                state
+                    .item_ids
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, owner)| (owner == item_id).then_some(index))
+                    .collect(),
+            );
+            state
+                .exclusion_indices
+                .insert(item_id.to_string(), Arc::clone(&indices));
+            indices
+        };
+        (Arc::clone(&state.all), excluded)
+    };
+    Arc::new(
+        all.iter()
+            .enumerate()
+            .filter(|(index, _)| excluded.binary_search(index).is_err())
+            .map(|(_, vector)| vector.clone())
+            .collect(),
+    )
 }
 
 pub(crate) fn replace(priors: &Priors, tagged: Vec<(String, Vec<f32>)>) {
-    let all = Arc::new(
-        tagged
-            .iter()
-            .map(|(_, vector)| vector.clone())
-            .collect::<Vec<_>>(),
-    );
-    let mut without_item = HashMap::new();
-    for (seed, _) in &tagged {
-        without_item.entry(seed.clone()).or_insert_with(|| {
-            Arc::new(
-                tagged
-                    .iter()
-                    .filter(|(other, _)| other != seed)
-                    .map(|(_, vector)| vector.clone())
-                    .collect(),
-            )
-        });
-    }
+    let (item_ids, vectors): (Vec<_>, Vec<_>) = tagged.into_iter().unzip();
+    let items_with_vectors = item_ids.iter().cloned().collect();
     *priors
         .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = PriorState { all, without_item };
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = PriorState {
+        all: Arc::new(vectors),
+        item_ids,
+        items_with_vectors,
+        exclusion_indices: HashMap::new(),
+    };
+}
+
+fn insert(priors: &Priors, item_id: String, vector: Vec<f32>) {
+    let mut state = priors
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    Arc::make_mut(&mut state.all).push(vector);
+    state.item_ids.push(item_id.clone());
+    state.items_with_vectors.insert(item_id);
+    state.exclusion_indices.clear();
 }
 
 pub(crate) fn append_record(priors: &Priors, embedder: &dyn Embedder, record: &TrainingRecord) {
@@ -65,20 +109,13 @@ pub(crate) fn append_record(priors: &Priors, embedder: &dyn Embedder, record: &T
         tracing::warn!(record_id = %record.record_id, "admitted record has no textual user turn; skipping embedding prior");
         return;
     };
-    let Some(item_id) = record.generation.sibling_group_id.clone() else {
-        tracing::warn!(record_id = %record.record_id, "admitted record has no item identity; skipping embedding prior");
+    let Some(item_id) = record_item_id(&record.record_id) else {
+        tracing::warn!(record_id = %record.record_id, "admitted record has no seed-item identity; skipping embedding prior");
         return;
     };
     // Never hold the lock across the blocking embed call.
     match embedder.embed(&text) {
-        Ok(vector) => {
-            let mut state = priors
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let before = Arc::clone(&state.all);
-            state.without_item.entry(item_id).or_insert(before);
-            Arc::make_mut(&mut state.all).push(vector);
-        }
+        Ok(vector) => insert(priors, item_id, vector),
         Err(error) => tracing::warn!(
             record_id = %record.record_id,
             %error,
@@ -150,7 +187,7 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_excludes_vectors_from_same_item() {
+    fn same_item_snapshot_excludes_only_own_vectors() {
         let priors = new();
         replace(
             &priors,
@@ -165,14 +202,45 @@ mod tests {
     }
 
     #[test]
-    fn repeated_snapshots_share_the_same_corpus_allocation() {
+    fn common_snapshots_share_one_linear_corpus() {
+        let priors = new();
+        replace(
+            &priors,
+            (0..100)
+                .map(|index| (format!("item-{index}"), vec![index as f32; 8]))
+                .collect(),
+        );
+        let first = snapshot(&priors, "new-item");
+        let second = snapshot(&priors, "another-new-item");
+        assert!(Arc::ptr_eq(&first, &second));
+        let state = priors.read().unwrap();
+        assert_eq!(state.all.len(), 100);
+        assert_eq!(state.item_ids.len(), 100);
+        assert!(state.exclusion_indices.is_empty());
+    }
+
+    #[test]
+    fn exclusion_cache_retains_indices_not_vector_corpora_and_invalidates() {
         let priors = new();
         replace(
             &priors,
             vec![("a".into(), vec![1.0]), ("b".into(), vec![2.0])],
         );
-        let first = snapshot(&priors, "other");
-        let second = snapshot(&priors, "other");
-        assert!(Arc::ptr_eq(&first, &second));
+        let _ = snapshot(&priors, "a");
+        {
+            let state = priors.read().unwrap();
+            assert_eq!(state.exclusion_indices["a"].as_ref(), &vec![0]);
+        }
+        insert(&priors, "c".into(), vec![3.0]);
+        assert!(priors.read().unwrap().exclusion_indices.is_empty());
+        assert_eq!(priors.read().unwrap().all.len(), 3);
+    }
+
+    #[test]
+    fn record_item_identity_strips_attempt_and_completion_suffix() {
+        assert_eq!(
+            record_item_id("run-a-s2-seed7-a1-c3").as_deref(),
+            Some("run-a-s2-seed7")
+        );
     }
 }
