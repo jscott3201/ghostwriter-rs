@@ -188,6 +188,16 @@ fn order_and_validate(
 ) -> Result<Vec<Vec<f32>>, ProviderError> {
     let mut ordered = vec![None; expected_count];
     for datum in response.data {
+        if datum
+            .embedding
+            .iter()
+            .any(|component| !component.is_finite())
+        {
+            return Err(ProviderError::Decode(format!(
+                "embedding at index {} contains a non-finite component",
+                datum.index
+            )));
+        }
         if datum.embedding.len() != dim {
             return Err(ProviderError::Decode(format!(
                 "embedding dimension mismatch: expected {dim}, got {}",
@@ -243,6 +253,22 @@ mod tests {
         let error = parse(r#"{"data":[{"embedding":[1.0],"index":0}]}"#, 1, 2)
             .expect_err("wrong dimension fails");
         assert!(error.to_string().contains("expected 2, got 1"));
+    }
+
+    #[test]
+    fn non_finite_component_names_embedding_index() {
+        let error = order_and_validate(
+            EmbeddingResponse {
+                data: vec![EmbeddingDatum {
+                    embedding: vec![f32::INFINITY],
+                    index: 7,
+                }],
+            },
+            8,
+            1,
+        )
+        .expect_err("infinite component fails");
+        assert!(error.to_string().contains("index 7"));
     }
 
     #[test]

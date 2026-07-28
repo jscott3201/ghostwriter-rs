@@ -82,10 +82,13 @@ pub async fn open_store(config: &Config) -> anyhow::Result<Store> {
 /// Assemble the live [`Clients`] bundle from an already-opened [`Store`], a [`Provider`], the caller's
 /// [`EventSink`], and `config.budget_usd`.
 ///
-/// The teacher and judge rails share the one provider `Arc`. The embedder is the v1 [`NullEmbedder`]
-/// seam and the sandbox is the [`NullSandboxOracle`] default (both documented deferrals — see the
-/// module docs). The `EventSink` is the caller's: `EventSink::disconnected()` for a headless run, or
-/// the producing half of `EventSink::subscribe()` for the TUI.
+/// The teacher and judge rails share one provider `Arc`. The embedder is configured when an
+/// embedding section is present and otherwise uses [`NullEmbedder`]. The sandbox remains the
+/// [`NullSandboxOracle`] default. The caller supplies the event sink.
+///
+/// # Errors
+/// Returns a configuration error for an unsupported backend, missing configured key variable,
+/// invalid key/header, or HTTP-client construction failure.
 pub fn build_clients(
     store: Store,
     provider: Arc<dyn Provider>,
@@ -271,5 +274,70 @@ mod tests {
         let engine = configure_engine(Engine::new(clients, config.area_config(), 1), &config);
 
         assert_eq!(engine.on_breach(), gw_schema::BudgetBreach::Abort);
+    }
+
+    fn test_provider() -> Arc<dyn Provider> {
+        Arc::new(
+            OpenRouterProvider::builder()
+                .build_with_key("DUMMY-TEST-KEY-NOT-A-CREDENTIAL")
+                .expect("provider builds"),
+        )
+    }
+
+    #[tokio::test]
+    async fn configured_key_env_missing_names_only_variable() {
+        let store = Store::open_in_memory().await.expect("in-memory store");
+        let embedding = gw_schema::EmbeddingConfig {
+            api_key_env: Some("GW_TEST_EMBEDDING_KEY_DEFINITELY_UNSET_7C91".into()),
+            ..gw_schema::EmbeddingConfig::default()
+        };
+        let result = build_clients(
+            store,
+            test_provider(),
+            EventSink::disconnected(),
+            1.0,
+            Some(&embedding),
+        );
+        let error = match result {
+            Ok(_) => panic!("missing configured embedding key must fail"),
+            Err(error) => format!("{error:#}"),
+        };
+        assert!(error.contains("GW_TEST_EMBEDDING_KEY_DEFINITELY_UNSET_7C91"));
+        assert!(!error.contains("DUMMY-TEST-KEY"));
+    }
+
+    #[tokio::test]
+    async fn candle_local_embedding_backend_is_clean_error() {
+        let store = Store::open_in_memory().await.expect("in-memory store");
+        let embedding = gw_schema::EmbeddingConfig {
+            backend: EmbeddingBackend::CandleLocal,
+            ..gw_schema::EmbeddingConfig::default()
+        };
+        let result = build_clients(
+            store,
+            test_provider(),
+            EventSink::disconnected(),
+            1.0,
+            Some(&embedding),
+        );
+        let error = match result {
+            Ok(_) => panic!("Candle-local is unsupported"),
+            Err(error) => error.to_string(),
+        };
+        assert!(error.contains("candle_local"));
+    }
+
+    #[tokio::test]
+    async fn keyless_embedding_config_constructs_without_network() {
+        let store = Store::open_in_memory().await.expect("in-memory store");
+        let embedding = gw_schema::EmbeddingConfig::default();
+        build_clients(
+            store,
+            test_provider(),
+            EventSink::disconnected(),
+            1.0,
+            Some(&embedding),
+        )
+        .expect("keyless client construction does not perform a request");
     }
 }

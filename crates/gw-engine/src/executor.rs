@@ -248,12 +248,12 @@ impl Engine {
         let prior_spend = self.persisted_spend(run_id).await?;
         self.clients.budget.reset_to(prior_spend);
 
-        self.seed_embedding_priors(run_id).await?;
-
         self.clients.events.emit(EngineEvent::RunStarted {
             run_id: run_id.to_string(),
             shards: shard_count,
         });
+
+        self.seed_embedding_priors(run_id, &cancel).await?;
 
         let semaphore = Arc::new(Semaphore::new(self.max_in_flight as usize));
         // F2: a run-level circuit-breaker shared across shards — aborts a systemically-broken run.
@@ -333,7 +333,7 @@ impl Engine {
         Ok(report)
     }
 
-    async fn seed_embedding_priors(&self, run_id: &str) -> Result<()> {
+    async fn seed_embedding_priors(&self, run_id: &str, cancel: &CancellationToken) -> Result<()> {
         let records = self
             .clients
             .store
@@ -346,13 +346,24 @@ impl Engine {
                 LifecycleState::Admitted | LifecycleState::Formatted | LifecycleState::Exported
             )
         }) {
+            if cancel.is_cancelled() {
+                tracing::warn!(
+                    run_id,
+                    "embedding-prior seeding cancelled; continuing without remaining priors"
+                );
+                break;
+            }
             let Some(text) = crate::priors::user_turn_text(&record) else {
                 tracing::warn!(record_id = %record.record_id, "admitted record has no user turn; skipping embedding prior");
                 continue;
             };
             // Embed without holding the shared lock; gate snapshots remain short-lived.
+            let Some(item_id) = record.generation.sibling_group_id.clone() else {
+                tracing::warn!(record_id = %record.record_id, "admitted record has no item identity; skipping embedding prior");
+                continue;
+            };
             match self.clients.embedder.embed(&text) {
-                Ok(vector) => vectors.push(vector),
+                Ok(vector) => vectors.push((item_id, vector)),
                 Err(error) => tracing::warn!(
                     record_id = %record.record_id,
                     %error,
