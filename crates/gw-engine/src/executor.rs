@@ -248,6 +248,8 @@ impl Engine {
         let prior_spend = self.persisted_spend(run_id).await?;
         self.clients.budget.reset_to(prior_spend);
 
+        self.seed_embedding_priors(run_id).await?;
+
         self.clients.events.emit(EngineEvent::RunStarted {
             run_id: run_id.to_string(),
             shards: shard_count,
@@ -329,6 +331,37 @@ impl Engine {
             completed: report.completed,
         });
         Ok(report)
+    }
+
+    async fn seed_embedding_priors(&self, run_id: &str) -> Result<()> {
+        let records = self
+            .clients
+            .store
+            .scan(&RecordFilter::new().run_id(run_id))
+            .await?;
+        let mut vectors = Vec::new();
+        for record in records.into_iter().filter(|record| {
+            matches!(
+                record.lifecycle.state,
+                LifecycleState::Admitted | LifecycleState::Formatted | LifecycleState::Exported
+            )
+        }) {
+            let Some(text) = crate::priors::user_turn_text(&record) else {
+                tracing::warn!(record_id = %record.record_id, "admitted record has no user turn; skipping embedding prior");
+                continue;
+            };
+            // Embed without holding the shared lock; gate snapshots remain short-lived.
+            match self.clients.embedder.embed(&text) {
+                Ok(vector) => vectors.push(vector),
+                Err(error) => tracing::warn!(
+                    record_id = %record.record_id,
+                    %error,
+                    "failed to seed embedding prior; continuing run"
+                ),
+            }
+        }
+        crate::priors::replace(&self.clients.priors, vectors);
+        Ok(())
     }
 
     /// Drive one shard's seed items sequentially, resuming from the persisted cursor, under the shared

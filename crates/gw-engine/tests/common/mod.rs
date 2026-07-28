@@ -13,7 +13,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use gw_engine::{AreaConfig, BudgetMeter, Clients, EventSink, InMemorySeedSource};
-use gw_generate::{NullEmbedder, UserSeed, UserTurnCandidate, user_message};
+use gw_generate::{Embedder, NullEmbedder, UserSeed, UserTurnCandidate, user_message};
 use gw_judge::{AreaThresholds, NullSandboxOracle, PanelJudge};
 use gw_providers::{
     ChatRequest, CompletionTokensDetails, DeltaStream, Provider, ProviderError, StreamChatFuture,
@@ -504,6 +504,26 @@ pub fn clients(
         Arc::new(NullSandboxOracle),
         BudgetMeter::new(cap_usd),
         events,
+        "0.1.0-test",
+    )
+}
+
+/// Build test clients with a caller-supplied embedder.
+pub fn clients_with_embedder(
+    store: Store,
+    teacher: Arc<dyn Provider>,
+    judge: Arc<dyn Provider>,
+    embedder: Arc<dyn Embedder + Send + Sync>,
+    cap_usd: f64,
+) -> Clients {
+    Clients::new(
+        store,
+        teacher,
+        judge,
+        embedder,
+        Arc::new(NullSandboxOracle),
+        BudgetMeter::new(cap_usd),
+        EventSink::disconnected(),
         "0.1.0-test",
     )
 }

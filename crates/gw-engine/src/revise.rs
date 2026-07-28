@@ -127,8 +127,9 @@ async fn generate_retry(
     clients: &Clients,
     area: &AreaConfig,
 ) -> Result<TrainingRecord> {
+    let priors = crate::priors::snapshot(&clients.priors);
     let gated: GatedUserTurn =
-        synthesize_user_turn(seed.candidate.clone(), clients.embedder.as_ref(), &[])?;
+        synthesize_user_turn(seed.candidate.clone(), clients.embedder.as_ref(), &priors)?;
     if !gated.passed() {
         return Err(EngineError::Generate(
             gw_generate::GenerateError::Invariant("revise retry: user-turn QC gate failed".into()),

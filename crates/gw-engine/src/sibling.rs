@@ -329,10 +329,13 @@ async fn generate_and_persist(
     sampling: SamplingPreset,
 ) -> Result<TrainingRecord> {
     // Gate the candidate (no teacher spend if the four-bool QC gate fails).
+    // Best-effort under concurrency: simultaneous sibling groups may snapshot before either admits.
+    // Dedup failures use the existing Error/circuit-breaker path by design.
+    let priors = crate::priors::snapshot(&group.clients.priors);
     let gated: GatedUserTurn = synthesize_user_turn(
         group.seed.candidate.clone(),
         group.clients.embedder.as_ref(),
-        &[],
+        &priors,
     )?;
     if !gated.passed() {
         return Err(EngineError::Generate(

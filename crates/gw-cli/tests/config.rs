@@ -167,6 +167,44 @@ fn export_cot_defaults_to_supervised() {
 }
 
 #[test]
+fn full_embedding_section_parses_and_optional_fields_default() {
+    Jail::expect_with(|jail| {
+        jail.create_file(
+            "gw.toml",
+            r#"
+                [embedding]
+                backend = "open_ai_compatible"
+                model = "test-model"
+                dim = 3
+                index = "usearch"
+            "#,
+        )?;
+        jail.set_env("GW_EMBEDDING__DIM", "4");
+        let cfg = Config::load(Some(Path::new("gw.toml"))).expect("full embedding config");
+        let embedding = cfg.embedding.expect("embedding present");
+        assert_eq!(embedding.dim, 4);
+        assert!(embedding.endpoint.is_none());
+        assert!(embedding.api_key_env.is_none());
+        Ok(())
+    });
+}
+
+#[test]
+fn partial_embedding_section_reports_missing_required_field() {
+    Jail::expect_with(|jail| {
+        jail.create_file("gw.toml", "[embedding]\nmodel = \"test-model\"\n")?;
+        let error = Config::load(Some(Path::new("gw.toml")))
+            .expect_err("partial embedding config must fail");
+        let message = error.to_string();
+        assert!(
+            message.contains("backend") || message.contains("dim"),
+            "got: {message}"
+        );
+        Ok(())
+    });
+}
+
+#[test]
 fn api_key_is_never_read_from_the_config_file() {
     Jail::expect_with(|jail| {
         // Even if an operator MISTAKENLY puts a key-shaped field in the TOML, it must not be slurped

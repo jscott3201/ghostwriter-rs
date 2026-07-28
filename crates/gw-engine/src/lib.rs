@@ -71,6 +71,7 @@ mod error;
 mod event;
 mod executor;
 mod grade;
+mod priors;
 mod revise;
 mod seed;
 mod sibling;

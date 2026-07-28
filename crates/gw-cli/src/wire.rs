@@ -9,8 +9,7 @@
 //! | `store`    | [`Store::open`] over `config.db`                                      |
 //! | `teacher`  | [`OpenRouterProvider`] (base URL + rpm from config, KEY from env)      |
 //! | `judge`    | the SAME provider `Arc` (one endpoint for both rails in v1)            |
-//! | `embedder` | [`NullEmbedder`] (the diversity-dedup seam; a real embedder is a       |
-//! |            | tracked follow-up — see the crate report)                             |
+//! | `embedder` | configured OpenAI-compatible client, or [`NullEmbedder`] when absent   |
 //! | `sandbox`  | [`NullSandboxOracle`] (D-SANDBOX deferred per `gw-judge`)              |
 //! | `budget`   | [`BudgetMeter`] at `config.budget_usd`                                 |
 //! | `events`   | the caller's [`EventSink`] (disconnected for headless, subscribed for  |
@@ -25,14 +24,10 @@
 //! [`ProviderError::MissingApiKey`](gw_providers::ProviderError::MissingApiKey) that names only the
 //! variable, never a value.
 //!
-//! ## v1 seam: the embedder is the `NullEmbedder`
+//! ## Embeddings
 //!
-//! `gw-generate` ships [`NullEmbedder`] (a zero-vector embedder) as the only constructible
-//! [`Embedder`](gw_generate::Embedder) today — the `diverse` cosine-dedup bool is effectively disabled with it (every
-//! candidate reads as non-duplicate). A real embedding backend (a local model or an embedding
-//! endpoint) is a tracked follow-up; wiring it is a one-line swap here once a constructor exists. This
-//! is flagged prominently in the crate report; it does NOT block a live run (the other three QC bools
-//! still gate spend).
+//! An absent embedding section preserves the hermetic [`NullEmbedder`] behavior. An
+//! OpenAI-compatible section constructs the HTTP client; Candle-local remains unsupported in v1.
 
 use std::sync::Arc;
 
@@ -40,12 +35,14 @@ use anyhow::Context;
 use tokio_util::sync::CancellationToken;
 
 use gw_engine::{AreaConfig, BudgetMeter, Clients, Engine, EventSink, ExportSpec};
-use gw_generate::NullEmbedder;
+use gw_generate::{Embedder, NullEmbedder};
 use gw_judge::NullSandboxOracle;
-use gw_providers::{OpenRouterProvider, Provider};
+use gw_providers::{EmbeddingsClient, OpenRouterProvider, Provider};
+use gw_schema::EmbeddingBackend;
 use gw_storage::Store;
 
 use crate::config::Config;
+use crate::embedder::HttpEmbedder;
 
 /// The harness version stamped into provenance (the crate version).
 pub const HARNESS_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -89,23 +86,42 @@ pub async fn open_store(config: &Config) -> anyhow::Result<Store> {
 /// seam and the sandbox is the [`NullSandboxOracle`] default (both documented deferrals — see the
 /// module docs). The `EventSink` is the caller's: `EventSink::disconnected()` for a headless run, or
 /// the producing half of `EventSink::subscribe()` for the TUI.
-#[must_use]
 pub fn build_clients(
     store: Store,
     provider: Arc<dyn Provider>,
     events: EventSink,
     budget_usd: f64,
-) -> Clients {
-    Clients::new(
+    embedding: Option<&gw_schema::EmbeddingConfig>,
+) -> anyhow::Result<Clients> {
+    let embedder: Arc<dyn Embedder + Send + Sync> = match embedding {
+        None => Arc::new(NullEmbedder),
+        Some(config) if config.backend == EmbeddingBackend::OpenAiCompatible => {
+            let client = EmbeddingsClient::builder()
+                .base_url(
+                    config
+                        .endpoint
+                        .as_deref()
+                        .unwrap_or(gw_schema::DEFAULT_EMBEDDING_ENDPOINT),
+                )
+                .model(&config.model)
+                .dim(config.dim)
+                .api_key_env(config.api_key_env.clone())
+                .build()
+                .context("constructing the embeddings client")?;
+            Arc::new(HttpEmbedder::new(client))
+        }
+        Some(_) => anyhow::bail!("embedding backend candle_local is not constructible in v1"),
+    };
+    Ok(Clients::new(
         store,
         Arc::clone(&provider), // teacher rail
         provider,              // judge rail (same endpoint in v1)
-        Arc::new(NullEmbedder),
+        embedder,
         Arc::new(NullSandboxOracle),
         BudgetMeter::new(budget_usd),
         events,
         HARNESS_VERSION,
-    )
+    ))
 }
 
 /// Build the [`Engine`] end-to-end: open the store, build the provider (KEY from env), assemble the
@@ -126,7 +142,13 @@ pub async fn build_engine(
 ) -> anyhow::Result<(Engine, Store)> {
     let store = open_store(config).await?;
     let provider = build_provider(config)?;
-    let clients = build_clients(store.clone(), provider, events, config.budget_usd);
+    let clients = build_clients(
+        store.clone(),
+        provider,
+        events,
+        config.budget_usd,
+        config.embedding.as_ref(),
+    )?;
     let area: AreaConfig = config.area_config();
     let engine = configure_engine(Engine::new(clients, area, max_in_flight), config);
     Ok((engine, store))
@@ -177,7 +199,9 @@ mod tests {
             Arc::clone(&provider),
             EventSink::disconnected(),
             12.5,
-        );
+            None,
+        )
+        .expect("clients build");
 
         // Both rails are the SAME provider Arc in v1.
         assert!(Arc::ptr_eq(&clients.teacher, &clients.judge));
@@ -237,7 +261,8 @@ mod tests {
                 .expect("provider builds with an explicit test key"),
         );
         let store = Store::open_in_memory().await.expect("in-memory store");
-        let clients = build_clients(store, provider, EventSink::disconnected(), 1.0);
+        let clients = build_clients(store, provider, EventSink::disconnected(), 1.0, None)
+            .expect("clients build");
         let config = Config {
             on_breach: gw_schema::BudgetBreach::Abort,
             ..Config::default()

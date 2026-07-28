@@ -33,7 +33,7 @@ use serde::{Deserialize, Serialize};
 
 use gw_engine::AreaConfig;
 use gw_judge::{AreaThresholds, PanelJudge};
-use gw_schema::{BudgetBreach, CotPolicy, ReasoningEffort, TrlFormat};
+use gw_schema::{BudgetBreach, CotPolicy, EmbeddingConfig, ReasoningEffort, TrlFormat};
 
 /// The default SQLite store path when none is configured.
 pub const DEFAULT_DB_PATH: &str = "gw-run.sqlite";
@@ -61,6 +61,8 @@ pub struct Config {
     pub area: AreaSettings,
     /// Optional end-of-run Parquet shard export configuration.
     pub export: Option<ExportSettings>,
+    /// Optional OpenAI-compatible embedding configuration.
+    pub embedding: Option<EmbeddingConfig>,
 }
 
 impl Default for Config {
@@ -75,6 +77,7 @@ impl Default for Config {
             frame_ms: 33,
             area: AreaSettings::default(),
             export: None,
+            embedding: None,
         }
     }
 }

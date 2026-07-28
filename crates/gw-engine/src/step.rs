@@ -363,6 +363,9 @@ async fn persist_envelope_and_advance(
         .store
         .advance_lifecycle(&rec.record_id, to, detail)
         .await?;
+    if to == LifecycleState::Admitted {
+        crate::priors::append_record(&clients.priors, clients.embedder.as_ref(), rec);
+    }
     clients.events.emit(EngineEvent::StateAdvanced {
         record_id: rec.record_id.clone(),
         to,
