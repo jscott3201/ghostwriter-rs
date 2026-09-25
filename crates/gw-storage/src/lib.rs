@@ -23,8 +23,9 @@
 //!   [`create_run`](Store::create_run), [`set_run_status`](Store::set_run_status),
 //!   [`checkpoint`](Store::checkpoint), and [`resume_cursor`](Store::resume_cursor) for crash
 //!   recovery.
-//! - **export** — [`export_parquet`] / [`export_parquet_bytes`]: a columnar dump of admitted
-//!   records to Parquet, returning a [`gw_schema::ExportManifest`].
+//! - **export** — [`export_parquet`] / [`export_parquet_bytes`]: a lossless columnar dump of
+//!   admitted records to Parquet (one canonical `messages_json` column per row, versioned by
+//!   [`gw_schema::ExportSchemaVersion`]), returning a [`gw_schema::ExportManifest`].
 //!
 //! ## Scope (v1)
 //!

@@ -79,7 +79,9 @@ pub use cost::Cost;
 pub use hashes::Hashes;
 
 // --- §3 / §4.3 export contracts ---
-pub use export::{CorpusDiversityStats, CotPolicy, ExportManifest, MultiTurnLoss, TrlFormat};
+pub use export::{
+    CorpusDiversityStats, CotPolicy, ExportManifest, ExportSchemaVersion, MultiTurnLoss, TrlFormat,
+};
 
 // --- §6.3 DPO preference export ---
 pub use preference::{PreferenceRecord, PreferenceSide};
