@@ -71,8 +71,9 @@ fn check_field(field: Option<&str>, role: Role) -> Result<()> {
     Ok(())
 }
 
-/// The concatenated clean text of a [`Content`] (text parts only), for scanning.
-fn content_str(content: &Content) -> Option<String> {
+/// The concatenated clean text of a [`Content`] (text parts only), for scanning. An explicitly
+/// absent value ([`Content::Null`]) has no text to scan, so it yields `None`.
+pub(crate) fn content_str(content: &Content) -> Option<String> {
     match content {
         Content::Text(s) => Some(s.clone()),
         Content::Parts(parts) => Some(
@@ -85,6 +86,7 @@ fn content_str(content: &Content) -> Option<String> {
                 .collect::<Vec<_>>()
                 .join(""),
         ),
+        Content::Null => None,
     }
 }
 
@@ -99,6 +101,7 @@ mod tests {
             reasoning: reasoning.map(str::to_owned),
             reasoning_details: None,
             tool_calls: None,
+            tool_call_id: None,
             name: None,
         }
     }

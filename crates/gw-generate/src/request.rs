@@ -243,6 +243,7 @@ mod tests {
             reasoning: None,
             reasoning_details: None,
             tool_calls: None,
+            tool_call_id: None,
             name: None,
         }
     }

@@ -149,6 +149,8 @@ fn candidate_prompt_text(candidate: &UserTurnCandidate) -> Result<String> {
     match &candidate.message.content {
         Content::Text(text) => Ok(text.trim().to_string()),
         Content::Parts(_) => Ok(serde_json::to_string(&candidate.message.content)?),
+        // No content means no prompt text; the caller treats empty as a filtering signal.
+        Content::Null => Ok(String::new()),
     }
 }
 

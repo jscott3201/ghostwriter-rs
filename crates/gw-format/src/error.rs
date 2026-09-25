@@ -59,6 +59,13 @@ pub enum FormatError {
     /// `prompt_hash`, or a record with no assistant turn to project).
     #[error("projection error: {0}")]
     Projection(String),
+
+    /// A tool-call / tool-result identity violation (INVARIANT i): a dangling or duplicate call
+    /// id, a result arriving before its call, or a result whose link is ambiguous because several
+    /// same-named calls are declared. Carries the offending message index and the reason — the
+    /// check never guesses a link from a function name.
+    #[error("tool identity error: {0}")]
+    ToolIdentity(String),
 }
 
 /// Convenience alias for results returned by `gw-format` operations.
@@ -109,5 +116,12 @@ mod tests {
                 .to_string()
                 .contains("mismatch")
         );
+    }
+
+    #[test]
+    fn tool_identity_renders_message() {
+        let e = FormatError::ToolIdentity("messages[2] is a dangling result link".into());
+        assert!(e.to_string().contains("tool identity error"));
+        assert!(e.to_string().contains("messages[2]"));
     }
 }

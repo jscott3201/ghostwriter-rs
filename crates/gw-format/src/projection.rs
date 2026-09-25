@@ -158,7 +158,8 @@ fn final_assistant_side(
     Ok((idx, side))
 }
 
-/// The clean text of a [`Content`] (mirrors [`crate::render()`]'s flattening).
+/// The clean text of a [`Content`] (mirrors [`crate::render()`]'s flattening). An explicitly
+/// absent value ([`Content::Null`]) flattens to the empty string, matching the render targets.
 fn content_text(content: &Content) -> String {
     match content {
         Content::Text(s) => s.clone(),
@@ -170,6 +171,7 @@ fn content_text(content: &Content) -> String {
             })
             .collect::<Vec<_>>()
             .join(""),
+        Content::Null => String::new(),
     }
 }
 
@@ -187,6 +189,7 @@ mod tests {
             reasoning: reasoning.map(str::to_owned),
             reasoning_details: None,
             tool_calls: None,
+            tool_call_id: None,
             name: None,
         }
     }

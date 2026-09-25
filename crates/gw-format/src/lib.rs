@@ -30,8 +30,12 @@
 //! - **render** — [`render()`]: dispatch one `&[Message]` into a [`gw_schema::TrlFormat`] under a
 //!   [`gw_schema::CotPolicy`]. Byte-exact Gemma-4 (via an embedded `minijinja` template), ChatML,
 //!   ShareGPT, OpenAI-messages, Harmony, and TRL prompt-completion.
-//! - **ingest** — [`ingest_openrouter`] (one OpenAI/OpenRouter assistant message →
-//!   [`gw_schema::Message`]) and [`strip_channel_tokens`] (the round-trip stripper).
+//! - **ingest** — [`ingest_openrouter`] (one OpenAI/OpenRouter chat message →
+//!   [`gw_schema::Message`], populating `tool_calls` / `tool_call_id` and normalizing
+//!   string-encoded tool arguments once) and [`strip_channel_tokens`] (the round-trip stripper).
+//! - **tool_links** — [`validate_tool_links()`]: the tool-call/result identity admission check
+//!   (INVARIANT i). A separate, explicit step: a text-only conversation declares no tool fields and
+//!   is never rejected by it.
 //! - **projection** — [`project_sft`] (admitted record → [`SftProjection`]) and
 //!   [`project_preference`] (admitted + rejected sibling → [`gw_schema::PreferenceRecord`]).
 //!
@@ -54,6 +58,7 @@
 //!         reasoning: None,
 //!         reasoning_details: None,
 //!         tool_calls: None,
+//!         tool_call_id: None,
 //!         name: None,
 //!     },
 //!     Message {
@@ -62,6 +67,7 @@
 //!         reasoning: Some("10*8=80, 2*8=16, 80+16=96".into()),
 //!         reasoning_details: None,
 //!         tool_calls: None,
+//!         tool_call_id: None,
 //!         name: None,
 //!     },
 //! ];
@@ -74,9 +80,11 @@ mod error;
 mod ingest;
 mod projection;
 mod render;
+mod tool_links;
 mod validate;
 
 pub use error::{FormatError, Result};
 pub use ingest::{ingest_openrouter, strip_channel_tokens};
 pub use projection::{SftProjection, project_preference, project_sft};
 pub use render::render;
+pub use tool_links::validate_tool_links;

@@ -20,6 +20,17 @@
 //! with [`GenerateError::TruncatedReasoning`] when reasoning was being emitted and the stream ended
 //! on `length`, so a truncated CoT is never handed back for admission. The caller retries with a
 //! larger budget or routes to `revising`.
+//!
+//! ## Boundary: the live teacher stream is still text-only
+//!
+//! [`AccumulatedStream::ingest_payload`] hands ingest `content` + the flat `reasoning` only,
+//! because the streaming delta type deliberately does not model `tool_calls` / `tool_call_id`
+//! (see `gw-providers::delta`, which streams `n=1`). So a turn produced by THIS path is text-only
+//! and its `content` is always the explicit string the provider streamed — never
+//! [`Content::Null`]. The tool fields are populated on the non-streaming ingest boundary
+//! (`gw_format::ingest_openrouter`, which does parse them), so a captured/imported trajectory keeps
+//! its identity; making the live teacher emit tool calls is a provider-delta change, deliberately
+//! out of scope here.
 
 use futures::StreamExt;
 use serde_json::json;
@@ -29,9 +40,16 @@ use gw_schema::{Content, Message, ReasoningDetail};
 
 use crate::error::{GenerateError, Result};
 
-/// `true` when a [`Message`]'s content is empty text (the ingested shape for a content-less turn).
+/// `true` when a [`Message`]'s content carries no text (the ingested shape for a content-less
+/// turn). An explicitly absent value ([`Content::Null`]) counts as content-less too: a structured
+/// refusal arrives with a null body and must still be folded into the output. Multimodal parts are
+/// never treated as content-less (they carry an image/audio payload a refusal fold would erase).
 fn message_content_is_empty(message: &Message) -> bool {
-    matches!(&message.content, Content::Text(t) if t.is_empty())
+    match &message.content {
+        Content::Text(t) => t.is_empty(),
+        Content::Null => true,
+        Content::Parts(_) => false,
+    }
 }
 
 /// The accumulated, still-raw result of draining a teacher stream. [`into_turn`] converts it into a

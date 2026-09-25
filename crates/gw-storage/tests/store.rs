@@ -51,6 +51,7 @@ fn record(
                 reasoning: None,
                 reasoning_details: None,
                 tool_calls: None,
+                tool_call_id: None,
                 name: None,
             },
             Message {
@@ -59,6 +60,7 @@ fn record(
                 reasoning: Some("12*8 = 96".into()),
                 reasoning_details: None,
                 tool_calls: None,
+                tool_call_id: None,
                 name: None,
             },
         ],

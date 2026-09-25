@@ -52,6 +52,7 @@ async fn minimax_m3_via_novita_streams_reasoning() {
             reasoning: None,
             reasoning_details: None,
             tool_calls: None,
+            tool_call_id: None,
             name: None,
         }],
     )

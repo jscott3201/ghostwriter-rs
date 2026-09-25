@@ -230,6 +230,7 @@ mod tests {
                 reasoning: Some("work".into()),
                 reasoning_details: None,
                 tool_calls: None,
+                tool_call_id: None,
                 name: None,
             }],
             tools: None,

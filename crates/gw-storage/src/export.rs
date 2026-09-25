@@ -84,10 +84,16 @@ fn resolved_record_hash(rec: &TrainingRecord) -> Result<String> {
 }
 
 /// Flatten a [`Content`] to plain text (multimodal parts serialize structurally).
+///
+/// `Content::Null` flattens to the empty string here — the export projection is role+content only
+/// and therefore cannot express an absent value (nor tool calls, names or result links). That loss
+/// is owned by the lossless-export work, which replaces this projection wholesale; it is noted here
+/// only so the arm is a deliberate, visible degradation rather than an accident.
 fn content_text(c: &Content) -> String {
     match c {
         Content::Text(t) => t.clone(),
         Content::Parts(parts) => serde_json::to_string(parts).unwrap_or_default(),
+        Content::Null => String::new(),
     }
 }
 

@@ -2,8 +2,9 @@
 //!
 //! This is the `sft_modal.py` ingest shape: one clean `content` per turn, with `reasoning` a
 //! sibling key on assistant turns (rendered under [`CotPolicy`]; NEVER inlined into `content`,
-//! INVARIANT-a). `tool_calls` and `name` are preserved verbatim. Output is a pretty-printed JSON
-//! document.
+//! INVARIANT-a). `tool_calls`, `tool_call_id` and `name` are preserved verbatim, so a tool
+//! trajectory round-trips through this target with its result links intact (INVARIANT i). Output is
+//! a pretty-printed JSON document.
 
 use serde_json::{Map, Value, json};
 
@@ -45,6 +46,11 @@ pub(crate) fn build(messages: &[Message], cot: CotPolicy) -> Value {
                     "tool_calls".into(),
                     serde_json::to_value(tool_calls).unwrap_or(Value::Null),
                 );
+            }
+            // The result link (INVARIANT i) rides the wire verbatim, so a downstream consumer sees
+            // WHICH call each tool result answers instead of re-inferring it from the function name.
+            if let Some(tool_call_id) = &msg.tool_call_id {
+                obj.insert("tool_call_id".into(), json!(tool_call_id));
             }
             Value::Object(obj)
         })

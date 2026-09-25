@@ -1,0 +1,106 @@
+{
+  "format": "ghostwriter-tool-trajectory-fixture-v1",
+  "task_id": "synthetic-tool-pairing",
+  "note": [
+    "Hand-authored SYNTHETIC fixture. No competition task, reference fix, hidden test or model output.",
+    "Ported from a small trajectory reference suite: one conversation with two SAME-NAME tool calls",
+    "(read-a / read-b), distinct arguments, and the results arriving in REVERSED order.",
+    "`messages` is the provider wire shape that gw_format::ingest_openrouter consumes; the expected",
+    "canonical gw_schema::Message[] is asserted explicitly in tests/tool_identity.rs (not duplicated",
+    "here, so the expectation is not circular). This file is the message fixture for the normalization",
+    "contract: null content stays null, string-encoded arguments become an object with raw_arguments",
+    "retained, and each tool result keeps its explicit tool_call_id.",
+    "The conformance fixture's `source_extension` block is an unknown provider field: the canonical",
+    "type cannot interpret it and gw-format has no raw-payload capture, so it is NOT preserved. That",
+    "gap is recorded here rather than hidden — see the `known_loss` note below."
+  ],
+  "messages": [
+    {
+      "role": "system",
+      "content": "Inspect a toy module and preserve tool-result identity."
+    },
+    {
+      "role": "user",
+      "content": "Read two regions; quoted text: \"λ\"; newline follows\nend."
+    },
+    {
+      "role": "assistant",
+      "content": null,
+      "reasoning": "Two regions; the ids distinguish them.",
+      "tool_calls": [
+        {
+          "id": "read-a",
+          "type": "function",
+          "function": {
+            "name": "read_file",
+            "arguments": { "filepath": "toy.py", "start_line": 1, "end_line": 2 }
+          }
+        },
+        {
+          "id": "read-b",
+          "type": "function",
+          "function": {
+            "name": "read_file",
+            "arguments": "{\"filepath\": \"toy.py\", \"start_line\": 20, \"end_line\": 22}"
+          }
+        }
+      ],
+      "source_extension": { "present": true }
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "read-b",
+      "name": "read_file",
+      "content": "{\"status\": \"error\", \"error_type\": \"FileError\", \"details\": {\"exit_code\": 1, \"message\": \"synthetic failure\"}}"
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "read-a",
+      "name": "read_file",
+      "content": "{\"status\": \"ok\", \"content\": \"def toy():\\n    return \\\"λ\\\"\\n\", \"is_truncated\": true, \"end_line\": 2}"
+    },
+    {
+      "role": "assistant",
+      "content": "The second read failed; no repair or verification is claimed.",
+      "reasoning": "Region 20 was unreadable; stop rather than claim success."
+    }
+  ],
+  "reasoning_variants": {
+    "note": "Absent / exposed / summary reasoning on a null-content tool-calling turn. A summary-only",
+    "note_2": "turn is NOT upgraded to exposed full thought: the stored kind is the kind observed.",
+    "absent": {
+      "role": "assistant",
+      "content": null,
+      "tool_calls": [
+        { "id": "c-absent", "type": "function", "function": { "name": "read_file", "arguments": {} } }
+      ]
+    },
+    "exposed": {
+      "role": "assistant",
+      "content": null,
+      "reasoning": "exposed plaintext chain of thought",
+      "reasoning_details": [
+        { "type": "reasoning.text", "text": "exposed plaintext chain of thought", "index": 0 }
+      ],
+      "tool_calls": [
+        { "id": "c-exposed", "type": "function", "function": { "name": "read_file", "arguments": {} } }
+      ]
+    },
+    "summary": {
+      "role": "assistant",
+      "content": null,
+      "reasoning_details": [
+        { "type": "reasoning.summary", "summary": "a provider-supplied summary, not full thought", "index": 0 }
+      ],
+      "tool_calls": [
+        { "id": "c-summary", "type": "function", "function": { "name": "read_file", "arguments": {} } }
+      ]
+    }
+  },
+  "known_loss": {
+    "field": "messages[2].source_extension",
+    "why": "Unknown provider field. gw-schema has no extension bag and gw-format captures no raw",
+    "why_2": "provider payload for the teacher turn, so an unrecognized field has nowhere to live.",
+    "status": "NOT representable yet. Do not assume the canonical record is a superset of the wire form."
+  }
+}
