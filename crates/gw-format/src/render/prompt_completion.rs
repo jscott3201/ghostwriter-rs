@@ -12,6 +12,13 @@
 //! an assistant turn, a contiguous tail-split would leak trailing user/tool turns into `completion`
 //! and supervise them as if the model wrote them — silent corruption. So this renderer requires the
 //! final message to be an assistant turn and returns [`FormatError::Projection`] otherwise.
+//!
+//! ## Tool fidelity
+//!
+//! This is a TOOL-FAITHFUL route: every turn in `prompt` and `completion` is an OpenAI message
+//! object, so `tool_calls` and the `tool_call_id` result links survive the split intact
+//! ([`crate::render()`] never refuses a tool trajectory for this target). The final-turn rule above
+//! still applies: a tool trajectory that ends on a tool result is not a prompt/completion pair.
 
 use serde_json::{Value, json};
 

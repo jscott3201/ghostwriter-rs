@@ -11,6 +11,11 @@
 //! a best-effort name match. It is deliberately NOT wired into [`render`](crate::render()) — a
 //! text-only conversation declares no tool fields at all and must keep validating exactly as
 //! before, so this check is an explicit, separate admission step rather than a global gate.
+//!
+//! It is also not the same check as the render boundary's tool guard: that guard only asks "can
+//! this template represent the signals at all", while this asks "is the pairing itself sound". A
+//! trajectory can be unrepresentable for a target (refused by
+//! [`FormatError::UnsupportedToolCalls`]) while also having a sound identity, and vice versa.
 
 use std::collections::BTreeSet;
 

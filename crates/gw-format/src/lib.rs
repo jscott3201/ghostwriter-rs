@@ -26,7 +26,9 @@
 //!
 //! ## Layout
 //!
-//! - **error** — [`FormatError`], the single typed error (no `anyhow`).
+//! - **error** — [`FormatError`], the single typed error (no `anyhow`), plus the
+//!   [`ToolSignal`] / [`ToolCallRecovery`] values that make its tool-trajectory diagnostic
+//!   machine-readable.
 //! - **render** — [`render()`]: dispatch one `&[Message]` into a [`gw_schema::TrlFormat`] under a
 //!   [`gw_schema::CotPolicy`]. Byte-exact Gemma-4 (via an embedded `minijinja` template), ChatML,
 //!   ShareGPT, OpenAI-messages, Harmony, and TRL prompt-completion.
@@ -38,6 +40,19 @@
 //!   is never rejected by it.
 //! - **projection** — [`project_sft`] (admitted record → [`SftProjection`]) and
 //!   [`project_preference`] (admitted + rejected sibling → [`gw_schema::PreferenceRecord`]).
+//!
+//! ## Tool trajectories fail closed at the render boundary (INVARIANT i)
+//!
+//! [`Gemma4`](gw_schema::TrlFormat::Gemma4), [`ChatML`](gw_schema::TrlFormat::ChatML),
+//! [`ShareGpt`](gw_schema::TrlFormat::ShareGpt) and [`Harmony`](gw_schema::TrlFormat::Harmony) have
+//! no slot for `tool_calls`, a `tool_call_id` link, or a tool-turn pairing. [`render()`] refuses
+//! such a conversation BEFORE dispatching, with [`FormatError::UnsupportedToolCalls`] naming the
+//! route, the dropped signal and the recovery path — the canonical `messages_json` export column
+//! plus an external consumer that owns the model's official chat template. The two tool-faithful
+//! routes, [`OpenAiMessages`](gw_schema::TrlFormat::OpenAiMessages) and
+//! [`TrlPromptCompletion`](gw_schema::TrlFormat::TrlPromptCompletion), are never refused: they keep
+//! the calls and the result links verbatim. A text-only conversation declares no tool fields and
+//! renders on every target exactly as before.
 //!
 //! ## Gemma-4 token bytes (MUST diff-verify)
 //!
@@ -83,7 +98,7 @@ mod render;
 mod tool_links;
 mod validate;
 
-pub use error::{FormatError, Result};
+pub use error::{FormatError, Result, ToolCallRecovery, ToolSignal};
 pub use ingest::{ingest_openrouter, strip_channel_tokens};
 pub use projection::{SftProjection, project_preference, project_sft};
 pub use render::render;

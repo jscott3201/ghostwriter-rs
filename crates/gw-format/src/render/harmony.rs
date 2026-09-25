@@ -12,10 +12,14 @@
 //! omitted and only the `final` channel is emitted. Harmony channel tokens are SYMMETRIC
 //! (`<|channel|>`), unlike Gemma-4.
 //!
-//! v1 omissions: assistant `tool_calls` are **dropped** (the Harmony `commentary` tool channel is
-//! out of scope; only [`OpenAiMessages`](gw_schema::TrlFormat::OpenAiMessages) preserves
-//! `tool_calls`), and [`Content::Parts`](gw_schema::Content::Parts) is flattened to text (an
-//! image/audio-only turn renders empty content). Noted for a future tool / multimodal corpus.
+//! v1 omissions: a tool trajectory never reaches this renderer — [`crate::render()`] fails closed
+//! with [`FormatError::UnsupportedToolCalls`](crate::FormatError::UnsupportedToolCalls) because the
+//! Harmony `commentary` tool channel is out of scope and there is nowhere to carry `tool_calls`,
+//! the `tool_call_id` result link or a tool-turn pairing
+//! ([`OpenAiMessages`](gw_schema::TrlFormat::OpenAiMessages) and
+//! [`TrlPromptCompletion`](gw_schema::TrlFormat::TrlPromptCompletion) preserve them). And
+//! [`Content::Parts`](gw_schema::Content::Parts) is flattened to text (an image/audio-only turn
+//! renders empty content). Noted for a future multimodal corpus.
 
 use std::fmt::Write as _;
 
