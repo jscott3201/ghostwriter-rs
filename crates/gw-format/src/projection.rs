@@ -51,8 +51,10 @@ pub struct SftProjection {
 ///
 /// # Errors
 ///
-/// Propagates [`crate::render()`] errors (incl. the prompt-completion final-turn guard), and
-/// returns [`FormatError::Projection`] if:
+/// Propagates [`crate::render()`] errors — including the tool guard
+/// ([`FormatError::UnsupportedToolCalls`]: a tool trajectory projected onto a target with no tool
+/// representation fails closed here, the same place it would fail at a direct `render` call) and the
+/// prompt-completion final-turn guard — and returns [`FormatError::Projection`] if:
 /// - the record has no assistant turn to supervise (nothing to learn from); or
 /// - `target` is [`TrlFormat::TrlPromptCompletion`] with `multi_turn_loss == AllAssistant` and the
 ///   record has MORE THAN ONE assistant turn — prompt-completion can only supervise the FINAL
@@ -179,7 +181,8 @@ fn content_text(content: &Content) -> String {
 mod tests {
     use super::*;
     use gw_schema::{
-        Generation, Hashes, Judging, Lifecycle, Message, Provenance, TeacherRef, Verification,
+        FunctionCall, Generation, Hashes, Judging, Lifecycle, Message, Provenance, TeacherRef,
+        ToolCall, Verification,
     };
 
     fn msg(role: Role, content: &str, reasoning: Option<&str>) -> Message {
@@ -356,6 +359,81 @@ mod tests {
         // The guard is prompt-completion-specific: conversational targets supervise all
         // assistant turns natively, so AllAssistant + multi-turn is fine.
         let rec = two_turn_record();
+        assert!(
+            project_sft(
+                &rec,
+                TrlFormat::OpenAiMessages,
+                CotPolicy::Supervised,
+                MultiTurnLoss::AllAssistant,
+            )
+            .is_ok()
+        );
+    }
+
+    /// The real pipeline route: an admitted record with a tool trajectory, projected for export.
+    /// A target that cannot represent it must fail closed HERE, not hand a trainer bytes in which
+    /// the tool turn has become prose.
+    #[test]
+    fn sft_projection_fails_closed_on_a_tool_trajectory_for_a_dropping_target() {
+        let mut rec = record("a", "h1", "96", "12*8", 0.9);
+        rec.messages = vec![
+            msg(Role::User, "read two regions", None),
+            Message {
+                role: Role::Assistant,
+                content: Content::Null,
+                reasoning: Some("two reads".into()),
+                reasoning_details: None,
+                tool_calls: Some(vec![ToolCall {
+                    id: Some("read-a".into()),
+                    function: FunctionCall {
+                        name: "read_file".into(),
+                        arguments: serde_json::json!({"start_line": 1}),
+                        raw_arguments: None,
+                    },
+                }]),
+                tool_call_id: None,
+                name: None,
+            },
+            Message {
+                role: Role::Tool,
+                content: Content::Text("ok".into()),
+                reasoning: None,
+                reasoning_details: None,
+                tool_calls: None,
+                tool_call_id: Some("read-a".into()),
+                name: Some("read_file".into()),
+            },
+            msg(Role::Assistant, "the second read failed", Some("report it")),
+        ];
+        for target in [
+            TrlFormat::Gemma4,
+            TrlFormat::ChatML,
+            TrlFormat::ShareGpt,
+            TrlFormat::Harmony,
+        ] {
+            let err = project_sft(
+                &rec,
+                target,
+                CotPolicy::Supervised,
+                MultiTurnLoss::AllAssistant,
+            )
+            .unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    FormatError::UnsupportedToolCalls {
+                        target: t,
+                        ref signals,
+                        index: 1,
+                        ..
+                    } if t == target
+                        && signals.contains(&crate::ToolSignal::ToolCalls)
+                        && signals.contains(&crate::ToolSignal::ToolRole)
+                ),
+                "{target:?}: {err:?}"
+            );
+        }
+        // The same record still projects for a tool-faithful target.
         assert!(
             project_sft(
                 &rec,

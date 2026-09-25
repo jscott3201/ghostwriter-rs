@@ -27,9 +27,13 @@
 //! - The upstream `<|think|>` thinking-enable marker (injected at the first system turn) is **NOT**
 //!   emitted: this renderer folds the system turn away entirely, so there is no system turn to
 //!   carry it. Thinking is instead expressed per-`model`-turn via the thought wrapper.
-//! - Assistant `tool_calls` are **dropped** (not rendered): the Gemma-4 tool-call DSL is out of
-//!   scope for v1. Only [`OpenAiMessages`](gw_schema::TrlFormat::OpenAiMessages) preserves
-//!   `tool_calls`. Noted for a future tool corpus.
+//! - The Gemma-4 tool-call DSL is out of scope for v1. A conversation that declares `tool_calls`, a
+//!   `tool_call_id` link, or a [`Role::Tool`] turn does NOT reach this renderer at all:
+//!   [`crate::render()`] fails closed with
+//!   [`FormatError::UnsupportedToolCalls`] because this
+//!   template has nowhere to put them and would silently render a tool trajectory as prose. The
+//!   `Role::Tool` arm below is therefore unreachable through the public entry point; it remains a
+//!   defensive mapping, not a data path.
 //! - [`Content::Parts`](gw_schema::Content::Parts) is flattened to its text segments; an
 //!   image/audio-only turn renders as empty content. Noted for a future multimodal corpus.
 //!
@@ -105,7 +109,9 @@ fn build_turns(messages: &[Message], cot: CotPolicy) -> Result<Vec<Gemma4Turn>> 
                 }
             }
             Role::User | Role::Tool => {
-                // Tool results are surfaced as user-side content in this minimal v1 renderer.
+                // A `Role::Tool` turn never arrives here through `crate::render()` (the tool guard
+                // refuses the whole conversation first); this mapping is defensive only. Tool
+                // results are surfaced as user-side content.
                 let content = match pending_system.take() {
                     Some(sys) if !sys.is_empty() => format!("{sys}\n\n{text}"),
                     _ => text,

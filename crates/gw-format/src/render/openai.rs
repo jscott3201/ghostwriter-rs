@@ -5,6 +5,11 @@
 //! INVARIANT-a). `tool_calls`, `tool_call_id` and `name` are preserved verbatim, so a tool
 //! trajectory round-trips through this target with its result links intact (INVARIANT i). Output is
 //! a pretty-printed JSON document.
+//!
+//! This is one of the two TOOL-FAITHFUL routes: [`crate::render()`] never refuses a tool
+//! trajectory here. Note the documented content policy — a `Content::Null` body (the tool-calling
+//! turn) renders as `""` while the calls ride alongside it, so the null-vs-empty distinction lives
+//! in the stored record and the canonical export column, not in these bytes.
 
 use serde_json::{Map, Value, json};
 

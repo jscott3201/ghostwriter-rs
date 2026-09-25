@@ -284,16 +284,27 @@ different value would re-partition the space and duplicate or orphan records).
 
 ## Export targets & CoT policy
 
-`--format` selects the chat template recorded in the manifest:
+`--format` records the target chat template in the export manifest. The Parquet shard itself is a
+**columnar dump of the canonical conversation, not a pre-rendered template** — the target bytes are
+produced downstream from the manifest plus the conversation column:
 
 | `--format` | Target |
 |---|---|
-| `gemma4` | Gemma-4, byte-exact (pinned chat template). |
+| `gemma4` | Gemma-4. Token bytes are transcribed from the research spec and golden-file tested; they are **pending a byte-for-byte diff-verify against the official pinned `chat_template.jinja`** before production SFT (nothing fetches the template at runtime). The system turn is folded into the following `user` turn and the upstream `<\|think\|>` marker is not emitted. |
 | `chat-ml` | ChatML. |
 | `sharegpt` | ShareGPT. |
 | `openai-messages` | OpenAI `messages` conversational. |
 | `harmony` | gpt-oss Harmony channels. |
 | `trl-prompt-completion` | TRL prompt/completion. |
+
+**Tool trajectories.** `openai-messages` and `trl-prompt-completion` carry `tool_calls` and each
+tool result's `tool_call_id` verbatim. The other four targets (`gemma4`, `chat-ml`, `sharegpt`,
+`harmony`) have nowhere to put them, so rendering a tool conversation for one **fails closed** with
+a structured error naming the route, the dropped signal and the first offending message — it never
+emits a training target in which a tool turn has been flattened into prose. The supported way to get
+a tool-faithful target is to export the canonical `messages_json` conversation and apply the model's
+official chat template in a consumer that owns that template. Text-only conversations are unaffected
+on every target.
 
 `--cot` controls how the captured reasoning is projected:
 
@@ -301,7 +312,12 @@ different value would re-partition the space and duplicate or orphan records).
 - **`masked`** — reasoning is rendered but masked out of the loss.
 - **`stripped`** — reasoning is dropped (answer-only).
 
-The export is a columnar Parquet dump (`messages` + `reasoning`) plus a manifest; the CoT policy is
+The export is a columnar Parquet dump plus a manifest. One `messages_json` column holds the canonical
+`Message[]` JSON in conversation order, losslessly: the `content` variant (including `null`),
+`reasoning`, `reasoning_details`, `tool_calls` and the `tool_call_id` links all survive, so a
+consumer decodes it straight back into `Message[]`. (The historical v1 `{role, content}` +
+parallel `reasoning_json` pair was lossy — `reasoning_json` is gone, and `column_schema_version` in
+the manifest records which contract a shard was written under.) The CoT policy and the target are
 recorded as manifest metadata so a downstream trainer applies the matching loss mask and template.
 
 ---
