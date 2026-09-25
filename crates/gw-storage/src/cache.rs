@@ -39,7 +39,8 @@ fn canonical_bytes(value: &Value) -> Result<Vec<u8>> {
 /// [`gw_schema::Hashes::record_hash`]).
 ///
 /// The hash is built ONLY from content-bearing fields — `schema_version`, `training_area`,
-/// sorted `tags`, the per-turn `(role, content, reasoning, reasoning_details, tool_calls, name)`,
+/// sorted `tags`, the per-turn `(role, content, reasoning, reasoning_details, tool_calls,
+/// tool_call_id, name)`,
 /// and `tools` — and EXCLUDES every non-content field: `record_id`, `provenance`, `generation`,
 /// `verification`, `judging`, `reasoning_quality`, `lifecycle` (including the mutating `state`),
 /// `hashes`, `cost`, and `dataset_version`. So two byte-identical regenerations hash equal
@@ -76,13 +77,19 @@ pub fn record_hash(rec: &TrainingRecord) -> Result<String> {
 }
 
 /// The content projection of one message used by [`record_hash`]: role + clean content + flat
-/// reasoning text + a CONTENT-ONLY projection of `reasoning_details` + `tool_calls` + `name`.
+/// reasoning text + a CONTENT-ONLY projection of `reasoning_details` + `tool_calls` + the
+/// `tool_call_id` result link + `name`.
 ///
 /// `reasoning_details` is verbatim CoT content (the Verify-gate substrate) — a record can carry
 /// its whole chain-of-thought in `reasoning_details[].text` with flat `reasoning = None`, so it
 /// MUST contribute to the hash, but only its content payload (`text` / `summary` / `data`) plus
 /// the variant discriminant — the volatile `id` / `index` / `signature` / `format` are excluded.
 /// `name` (speaker / tool name) is content too: distinct speakers / tool names must not collide.
+///
+/// `tool_call_id` is the RESULT LINK (INVARIANT i) and is content: two trajectories whose messages
+/// are byte-identical except for which call each result answers are DIFFERENT trajectories, so
+/// collapsing them here would let the exact-dedup key merge them and the "never re-spend" cache
+/// hand back the wrong record.
 ///
 /// # Errors
 /// Returns [`StorageError::Serde`](crate::StorageError::Serde) if a content part fails to
@@ -100,6 +107,7 @@ fn message_content_value(m: &Message) -> Result<Value> {
         "reasoning": m.reasoning,
         "reasoning_details": reasoning_details,
         "tool_calls": m.tool_calls,
+        "tool_call_id": m.tool_call_id,
         "name": m.name,
     }))
 }
@@ -184,6 +192,9 @@ fn content_value(c: &Content) -> Result<Value> {
     match c {
         Content::Text(t) => Ok(Value::String(t.clone())),
         Content::Parts(parts) => Ok(serde_json::to_value(parts)?),
+        // An explicitly-absent value hashes as JSON `null`, so a turn that emitted nothing and a
+        // turn that emitted `""` can never collide in the dedup key.
+        Content::Null => Ok(Value::Null),
     }
 }
 

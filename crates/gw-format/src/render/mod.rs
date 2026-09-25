@@ -71,6 +71,9 @@ pub fn render(messages: &[Message], target: TrlFormat, cot: CotPolicy) -> Result
 
 /// The clean text of a [`Content`]. `Parts` are flattened to their concatenated text segments
 /// (image/audio refs carry no training text), so callers always see leak-free final-answer text.
+/// [`Content::Null`] flattens to the empty string: every render target frames content as a
+/// string, so a tool-calling turn (whose only output is `tool_calls`) renders an empty body. The
+/// null-vs-empty distinction is preserved in the stored record, not in the rendered bytes.
 pub(crate) fn content_text(content: &Content) -> String {
     match content {
         Content::Text(s) => s.clone(),
@@ -82,6 +85,7 @@ pub(crate) fn content_text(content: &Content) -> String {
             })
             .collect::<Vec<_>>()
             .join(""),
+        Content::Null => String::new(),
     }
 }
 
@@ -131,6 +135,7 @@ mod tests {
             reasoning: Some("cot".into()),
             reasoning_details: None,
             tool_calls: None,
+            tool_call_id: None,
             name: None,
         };
         assert_eq!(

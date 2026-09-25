@@ -142,6 +142,8 @@ fn user_turn_text_from_messages(messages: &[gw_schema::Message]) -> Option<Strin
                 })
                 .collect::<Vec<_>>()
                 .join(""),
+            // A user turn with no content has no prompt text to embed or dedup on.
+            Content::Null => String::new(),
         })?;
     (!text.is_empty()).then_some(text)
 }
@@ -159,6 +161,7 @@ mod tests {
             reasoning: None,
             reasoning_details: None,
             tool_calls: None,
+            tool_call_id: None,
             name: None,
         }]
     }

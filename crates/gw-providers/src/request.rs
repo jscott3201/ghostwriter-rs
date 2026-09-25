@@ -317,6 +317,7 @@ mod tests {
             reasoning: None,
             reasoning_details: None,
             tool_calls: None,
+            tool_call_id: None,
             name: None,
         }
     }
@@ -532,5 +533,81 @@ mod tests {
         assert_eq!(v["provider"]["order"][1], "parasail");
         // ordered() leaves fallbacks at OpenRouter default → omitted.
         assert!(v["provider"].get("allow_fallbacks").is_none());
+    }
+
+    // --- tool-result identity on the wire (INVARIANT i) ---------------------------------------
+
+    fn tool_result(id: Option<&str>, name: &str, content: &str) -> Message {
+        Message {
+            role: Role::Tool,
+            content: Content::Text(content.into()),
+            reasoning: None,
+            reasoning_details: None,
+            tool_calls: None,
+            tool_call_id: id.map(str::to_owned),
+            name: Some(name.into()),
+        }
+    }
+
+    fn call_turn() -> Message {
+        Message {
+            role: Role::Assistant,
+            content: Content::Null,
+            reasoning: None,
+            reasoning_details: None,
+            tool_calls: Some(vec![
+                gw_schema::ToolCall {
+                    id: Some("read-a".into()),
+                    function: gw_schema::FunctionCall {
+                        name: "read_file".into(),
+                        arguments: serde_json::json!({ "start_line": 1 }),
+                        raw_arguments: None,
+                    },
+                },
+                gw_schema::ToolCall {
+                    id: Some("read-b".into()),
+                    function: gw_schema::FunctionCall {
+                        name: "read_file".into(),
+                        arguments: serde_json::json!({ "start_line": 20 }),
+                        raw_arguments: None,
+                    },
+                },
+            ]),
+            tool_call_id: None,
+            name: None,
+        }
+    }
+
+    /// The passback path re-sends the canonical conversation, so the RESULT LINK must be on the
+    /// outgoing body: two results of the same function stay distinguishable to the provider.
+    #[test]
+    fn chat_request_carries_the_result_link_on_the_wire() {
+        let req = ChatRequest::new(
+            "m",
+            vec![
+                call_turn(),
+                tool_result(Some("read-b"), "read_file", "err"),
+                tool_result(Some("read-a"), "read_file", "ok"),
+            ],
+        );
+        let v: Value = serde_json::to_value(&req).unwrap();
+        let msgs = v["messages"].as_array().unwrap();
+        // The assistant turn declares both calls; a null content is the tool-calling shape.
+        assert_eq!(msgs[0]["content"], Value::Null);
+        assert_eq!(msgs[0]["tool_calls"][0]["id"], "read-a");
+        assert_eq!(msgs[0]["tool_calls"][1]["id"], "read-b");
+        // Each result names its call on the wire, in reversed arrival order.
+        assert_eq!(msgs[1]["tool_call_id"], "read-b");
+        assert_eq!(msgs[2]["tool_call_id"], "read-a");
+        // A turn with no link emits no key at all (absent, not null).
+        assert!(msgs[0].get("tool_call_id").is_none());
+    }
+
+    #[test]
+    fn a_result_without_a_link_sends_no_tool_call_id_key() {
+        let req = ChatRequest::new("m", vec![tool_result(None, "read_file", "ok")]);
+        let v: Value = serde_json::to_value(&req).unwrap();
+        assert!(v["messages"][0].get("tool_call_id").is_none());
+        assert_eq!(v["messages"][0]["name"], "read_file");
     }
 }

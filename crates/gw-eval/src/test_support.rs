@@ -35,6 +35,7 @@ pub fn scored_sibling(
             reasoning: Some("because".into()),
             reasoning_details: None,
             tool_calls: None,
+            tool_call_id: None,
             name: None,
         }],
         tools: None,

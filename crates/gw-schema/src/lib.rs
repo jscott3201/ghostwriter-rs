@@ -176,6 +176,7 @@ mod tests {
             reasoning: None,
             reasoning_details: None,
             tool_calls: None,
+            tool_call_id: None,
             name: None,
         };
         assert_eq!(
@@ -199,6 +200,7 @@ mod tests {
                 reasoning: Some("12*8=96".into()),
                 reasoning_details: None,
                 tool_calls: None,
+                tool_call_id: None,
                 name: None,
             }],
             tools: None,

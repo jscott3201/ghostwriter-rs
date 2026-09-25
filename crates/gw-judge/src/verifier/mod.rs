@@ -119,11 +119,12 @@ fn has_reasoning_text(m: &Message) -> bool {
     })
 }
 
-/// The clean content text of a message (empty for multimodal parts — a refusal is always text).
+/// The clean content text of a message (empty for multimodal parts and for an explicitly absent
+/// value — a refusal is always text).
 fn content_text(m: &Message) -> &str {
     match &m.content {
         Content::Text(t) => t.as_str(),
-        Content::Parts(_) => "",
+        Content::Parts(_) | Content::Null => "",
     }
 }
 
@@ -462,6 +463,7 @@ mod tests {
                 None
             },
             tool_calls: None,
+            tool_call_id: None,
             name: None,
         }
     }

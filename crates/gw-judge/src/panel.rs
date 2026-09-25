@@ -412,6 +412,7 @@ pub fn build_judge_request(
         reasoning: None,
         reasoning_details: None,
         tool_calls: None,
+        tool_call_id: None,
         name: None,
     };
     let user = Message {
@@ -420,6 +421,7 @@ pub fn build_judge_request(
         reasoning: None,
         reasoning_details: None,
         tool_calls: None,
+        tool_call_id: None,
         name: None,
     };
     let mut req = ChatRequest::new(judge.slug.clone(), vec![system, user])

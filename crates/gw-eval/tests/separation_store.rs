@@ -35,6 +35,7 @@ fn sibling(
                 reasoning: None,
                 reasoning_details: None,
                 tool_calls: None,
+                tool_call_id: None,
                 name: None,
             },
             Message {
@@ -43,6 +44,7 @@ fn sibling(
                 reasoning: Some("reasoning".into()),
                 reasoning_details: None,
                 tool_calls: None,
+                tool_call_id: None,
                 name: None,
             },
         ],

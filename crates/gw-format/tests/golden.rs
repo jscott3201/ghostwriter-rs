@@ -17,6 +17,7 @@ fn m(role: Role, content: &str, reasoning: Option<&str>) -> Message {
         reasoning: reasoning.map(str::to_owned),
         reasoning_details: None,
         tool_calls: None,
+        tool_call_id: None,
         name: None,
     }
 }

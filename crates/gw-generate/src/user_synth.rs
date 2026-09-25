@@ -139,6 +139,8 @@ impl UserTurnCandidate {
                 })
                 .collect::<Vec<_>>()
                 .join(""),
+            // An explicitly absent user turn has no text to embed or control-token-scan.
+            Content::Null => String::new(),
         }
     }
 }
@@ -278,6 +280,7 @@ pub fn user_message(text: impl Into<String>) -> Message {
         reasoning: None,
         reasoning_details: None,
         tool_calls: None,
+        tool_call_id: None,
         name: None,
     }
 }

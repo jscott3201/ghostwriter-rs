@@ -280,6 +280,7 @@ mod tests {
                 reasoning: Some("12*8=96".into()),
                 reasoning_details: None,
                 tool_calls: None,
+                tool_call_id: None,
                 name: None,
             },
             refusal: None,
@@ -340,6 +341,44 @@ mod tests {
         // INVARIANT-a: reasoning is a sibling, content is clean.
         assert_eq!(rec.messages[1].content, Content::Text("96".into()));
         assert_eq!(rec.messages[1].reasoning.as_deref(), Some("12*8=96"));
+    }
+
+    /// The producer's final step must MOVE the ingested turn, not rebuild it — otherwise a tool
+    /// trajectory's `tool_calls` / result link would be silently dropped between ingest and the
+    /// stored record (the "field added but never populated" failure mode).
+    #[test]
+    fn an_ingested_tool_turn_reaches_the_record_with_its_calls_intact() {
+        let g = gated(VerificationKind::NumericMatch, true);
+        let mut t = turn();
+        t.message = Message {
+            role: Role::Assistant,
+            content: Content::Null,
+            reasoning: Some("two reads needed".into()),
+            reasoning_details: None,
+            tool_calls: Some(vec![gw_schema::ToolCall {
+                id: Some("read-a".into()),
+                function: gw_schema::FunctionCall {
+                    name: "read_file".into(),
+                    arguments: serde_json::json!({"start_line": 1}),
+                    raw_arguments: Some("{\"start_line\": 1}".into()),
+                },
+            }]),
+            tool_call_id: None,
+            name: None,
+        };
+        let rec = assemble(&ctx(), &g, t, teacher_ref(), generation(), None);
+        let assistant = &rec.messages[1];
+        assert_eq!(assistant.content, Content::Null);
+        let calls = assistant
+            .tool_calls
+            .as_ref()
+            .expect("calls survive assembly");
+        assert_eq!(calls[0].id.as_deref(), Some("read-a"));
+        assert_eq!(
+            calls[0].function.raw_arguments.as_deref(),
+            Some("{\"start_line\": 1}"),
+            "the retained raw wire text survives assembly"
+        );
     }
 
     #[test]
