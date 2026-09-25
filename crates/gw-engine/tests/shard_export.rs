@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use arrow::array::{Array, StringArray};
 use common::*;
 use gw_engine::{Engine, EngineEvent, EventSink, ExportSpec};
-use gw_schema::{CotPolicy, ExportManifest, LifecycleState, TrlFormat, Verdict};
+use gw_schema::{CotPolicy, ExportManifest, LifecycleState, Message, TrlFormat, Verdict};
 use gw_storage::{RecordFilter, Store};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use tokio::sync::mpsc::Receiver;
@@ -91,6 +91,30 @@ fn exported_record_ids(dst: &Path) -> Vec<String> {
     ids
 }
 
+/// Decode the on-disk shard's single conversation column back into canonical turns — the real
+/// file, not the in-memory buffer, so the write path is what gets verified.
+fn exported_messages(dst: &Path) -> Vec<Message> {
+    let file = std::fs::File::open(dst).unwrap();
+    let reader = ParquetRecordBatchReaderBuilder::try_new(file)
+        .unwrap()
+        .build()
+        .unwrap();
+    let mut turns = Vec::new();
+    for batch in reader {
+        let batch = batch.unwrap();
+        let column = batch
+            .column_by_name("messages_json")
+            .expect("shards carry the canonical conversation column")
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        for i in 0..column.len() {
+            turns.extend(serde_json::from_str::<Vec<Message>>(column.value(i)).unwrap());
+        }
+    }
+    turns
+}
+
 fn accepting_engine(
     store: Store,
     cap_usd: f64,
@@ -154,6 +178,23 @@ async fn completed_run_writes_parquet_manifest_and_export_event_before_finish() 
     );
     assert_eq!(sidecar_manifest.target, TrlFormat::ChatML);
     assert_eq!(sidecar_manifest.cot_policy, CotPolicy::Masked);
+    assert_eq!(
+        sidecar_manifest.column_schema_version,
+        gw_schema::ExportSchemaVersion::CURRENT,
+        "the sidecar names the column contract a reader needs"
+    );
+
+    // The file on disk must decode back into the same conversation the store holds, field for
+    // field — the sidecar claim is only worth something if the bytes agree with it.
+    let stored = store
+        .scan(&RecordFilter::new().run_id("run-export"))
+        .await
+        .unwrap();
+    let stored_messages: Vec<Message> = stored
+        .iter()
+        .flat_map(|record| record.messages.clone())
+        .collect();
+    assert_eq!(exported_messages(&dst), stored_messages);
 
     let events = drain_events(&mut rx);
     let event_manifest = exported_manifest(&events).expect("ShardExported emitted");

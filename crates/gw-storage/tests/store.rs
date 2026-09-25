@@ -559,6 +559,11 @@ async fn parquet_export_round_trips() {
     assert_eq!(manifest.n_admitted, 2, "only admitted records are written");
     assert_eq!(manifest.target, TrlFormat::ChatML);
     assert_eq!(manifest.cot_policy, gw_schema::CotPolicy::Supervised);
+    assert_eq!(
+        manifest.column_schema_version,
+        gw_schema::ExportSchemaVersion::CURRENT,
+        "the manifest names the shard's column contract"
+    );
     assert!(!manifest.build_inputs_hash.is_empty());
 
     // Read the parquet bytes back and assert row count + columns.
@@ -575,7 +580,10 @@ async fn parquet_export_round_trips() {
         assert!(schema.field_with_name("record_id").is_ok());
         assert!(schema.field_with_name("record_hash").is_ok());
         assert!(schema.field_with_name("messages_json").is_ok());
-        assert!(schema.field_with_name("reasoning_json").is_ok());
+        assert!(
+            schema.field_with_name("reasoning_json").is_err(),
+            "the parallel reasoning column is gone: it could only agree with messages_json by index"
+        );
         assert!(schema.field_with_name("judge_aggregate").is_ok());
         // The record_id column should hold the two admitted ids.
         let ids = batch

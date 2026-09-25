@@ -230,6 +230,7 @@ mod tests {
                 EngineEvent::ShardExported {
                     run_id: "r".into(),
                     manifest: gw_schema::ExportManifest {
+                        column_schema_version: gw_schema::ExportSchemaVersion::CURRENT,
                         target: gw_schema::TrlFormat::ChatML,
                         cot_policy: gw_schema::CotPolicy::Supervised,
                         dataset_version: None,

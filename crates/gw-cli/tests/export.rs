@@ -12,7 +12,7 @@ mod common;
 
 use gw_cli::cli::{ExportArgs, ExportCot, ExportFormat};
 use gw_cli::commands::export::export;
-use gw_schema::Verdict;
+use gw_schema::{Content, Message, Role, Verdict};
 use gw_storage::{RecordFilter, Store, export_parquet_bytes};
 
 use common::{admit, cleanup_db, record, seed_store, unique_temp_path};
@@ -181,6 +181,91 @@ async fn export_without_run_filter_exports_every_admitted_record() {
         "both runs' admitted records exported"
     );
     drop(reopened);
+
+    let _ = std::fs::remove_file(&out);
+    cleanup_db(&db);
+}
+
+/// The handler's FILE must carry the lossless conversation, not just a valid Parquet envelope. A
+/// tool trajectory is exported through the real CLI path, and the artifact is compared byte-for-byte
+/// with the storage exporter's in-memory encode of the same corpus — which `gw-storage`'s export
+/// suite decodes back into the identical `Message[]`. If the file ever lost a result link, the two
+/// would diverge here. (`gw-cli` deliberately has no arrow/parquet dev-dependency; the column-level
+/// decode lives with the crate that owns the writer.)
+#[tokio::test]
+async fn cli_export_file_matches_the_lossless_in_memory_shard() {
+    let db = unique_temp_path("export-identity.sqlite");
+    let out = unique_temp_path("export-identity.parquet");
+
+    let mut tool = record(
+        "tool-1",
+        "run-1",
+        Some(Verdict::Admit),
+        Some(0.9),
+        true,
+        "tools",
+    );
+    // A tool result carrying the explicit result link: the field the export must not flatten away.
+    tool.messages.push(Message {
+        role: Role::Tool,
+        content: Content::Text("{\"status\": \"ok\"}".into()),
+        reasoning: None,
+        reasoning_details: None,
+        tool_calls: None,
+        tool_call_id: Some("read-b".into()),
+        name: Some("read_file".into()),
+    });
+    let rejected = record(
+        "reject-1",
+        "run-1",
+        Some(Verdict::Reject),
+        Some(0.1),
+        false,
+        "tools",
+    );
+    let store = seed_store(&db, "run-1", &[tool.clone(), rejected]).await;
+    admit(&store, "tool-1").await;
+    drop(store);
+
+    let args = ExportArgs {
+        db: db.clone(),
+        out: out.clone(),
+        run_id: Some("run-1".into()),
+        format: ExportFormat::Gemma4,
+        cot: ExportCot::Supervised,
+    };
+    export(args).await.expect("export handler runs");
+
+    // The same corpus through the in-memory exporter.
+    let reopened = Store::open(&db).await.expect("reopen store");
+    let scanned = reopened
+        .scan(&RecordFilter::new().run_id("run-1"))
+        .await
+        .expect("scan");
+    let (expected_bytes, expected_manifest) = export_parquet_bytes(
+        &scanned,
+        gw_schema::TrlFormat::Gemma4,
+        gw_schema::CotPolicy::Supervised,
+    )
+    .await
+    .expect("in-memory export");
+    assert_eq!(expected_manifest.n_admitted, 1, "the reject stays out");
+    assert_eq!(
+        expected_manifest.column_schema_version,
+        gw_schema::ExportSchemaVersion::CURRENT
+    );
+    drop(reopened);
+
+    let written = std::fs::read(&out).expect("read the handler's file");
+    assert_eq!(
+        &written[..4],
+        PARQUET_MAGIC,
+        "the CLI artifact is a Parquet file"
+    );
+    assert_eq!(
+        written, expected_bytes,
+        "the CLI artifact must be the same shard the storage exporter encodes"
+    );
 
     let _ = std::fs::remove_file(&out);
     cleanup_db(&db);
