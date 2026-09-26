@@ -237,6 +237,7 @@ pub async fn export_parquet(
 /// #             judge_models: vec![], harness_version: "0.1.0".into(), git_commit: None },
 /// #         generation: Default::default(),
 /// #         verification_contract: None,
+/// #         execution_evidence: None,
 /// #         verification: Default::default(),
 /// #         judging: gw_schema::Judging { verdict: Some(Verdict::Admit), aggregate: Some(0.9),
 /// #             ..Default::default() },

@@ -32,6 +32,7 @@ mod config;
 mod cost;
 mod decontam;
 mod embedding;
+mod execution_evidence;
 mod export;
 mod generation;
 mod hashes;
@@ -61,6 +62,11 @@ pub use generation::{Generation, ReasoningEffort};
 
 // --- §1.6 verification (deterministic rail) ---
 pub use verification::{Check, CheckKind, Verification};
+
+// --- §1.6 precomputed execution ground truth (the `execution_evidence` verifier check) ---
+pub use execution_evidence::{
+    EvidenceBinding, ExecutionEvidence, ExecutionOutcome, TestCase, TestStatus,
+};
 
 // --- §1.7 judging (LLM panel rail) + folded judge sampling policy ---
 pub use judging::{JudgeSampling, JudgeVote, Judging, Verdict};
@@ -119,6 +125,10 @@ mod tests {
         assert_eq!(j(&CheckKind::Sandbox), "\"sandbox\"");
         assert_eq!(j(&CheckKind::Language), "\"language\"");
         assert_eq!(j(&Verdict::NeedsReview), "\"needs_review\"");
+        assert_eq!(j(&ExecutionOutcome::Passed), "\"passed\"");
+        assert_eq!(j(&ExecutionOutcome::Failed), "\"failed\"");
+        assert_eq!(j(&ExecutionOutcome::Unknown), "\"unknown\"");
+        assert_eq!(j(&TestStatus::Skipped), "\"skipped\"");
         assert_eq!(
             j(&LifecycleState::AssistantGenerated),
             "\"assistant_generated\""
@@ -227,6 +237,25 @@ mod tests {
                 ..Default::default()
             },
             verification_contract: None,
+            // A carried execution report round-trips with the envelope: the persisted report IS the
+            // record of which external evidence decided this candidate, so it must survive serde
+            // exactly as the verifier read it.
+            execution_evidence: Some(ExecutionEvidence {
+                outcome: ExecutionOutcome::Unknown,
+                required_tests: vec!["tests::test_behavior".into()],
+                cases: vec![TestCase {
+                    node: "tests::test_behavior".into(),
+                    status: TestStatus::Skipped,
+                }],
+                exit_code: None,
+                errors: vec![],
+                source_ref: Some("report://local".into()),
+                binding: EvidenceBinding {
+                    task: "run-1".into(),
+                    attempt: "01J8".into(),
+                    patch_hash: "abc123".into(),
+                },
+            }),
             verification: Verification::default(),
             judging: Judging::default(),
             reasoning_quality: None,

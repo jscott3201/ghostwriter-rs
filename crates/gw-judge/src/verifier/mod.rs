@@ -26,17 +26,33 @@
 //! the correct behavior IS a refusal: [`refusal_check`] PASSES a refusal and FAILS a compliance
 //! (non-refusal). This inverts the usual sense, so a complied-with adversarial prompt is a hard
 //! verifier reject.
+//!
+//! ## Precomputed execution evidence (the third input axis)
+//!
+//! Some trajectories are only decidable by RUNNING them. The harness never executes anything itself:
+//! an external evaluator produces an [`ExecutionEvidence`] report out of process and the record
+//! carries it, and [`evidence`] adapts that report into a check. A proven failure is authoritative
+//! (hard reject, before any panel spend); an undecidable report blocks admission so the record is
+//! held for review instead of being admitted — or outvoted — on a panel score. Report SHAPE validation
+//! (was the report parseable, does it even describe a test suite) belongs to the evaluator that owns
+//! the report; this rail sees the parsed result and stays conservative about what it cannot read.
 
 use gw_schema::{
-    Check, CheckKind, Content, Message, Oracle, Role, Verification, VerificationContract,
-    VerificationKind,
+    Check, CheckKind, Content, EvidenceBinding, ExecutionEvidence, Message, Oracle, Role,
+    Verification, VerificationContract, VerificationKind,
 };
 
 mod answer;
+pub mod evidence;
 
 use answer::{AnswerComparison, compare_answer};
+use evidence::execution_evidence_check;
 
 use crate::decision::{Decision, DecisionReason, Verdict};
+
+/// The check name the precomputed-execution adapter contributes. Stable so an operator (and the
+/// engine's re-derivation from the persisted block) can identify the check by name.
+pub const EXECUTION_EVIDENCE_CHECK: &str = "execution_evidence";
 
 /// The inputs a verifier needs from a candidate trace, gathered so the rail stays a pure function of
 /// data (no `TrainingRecord` coupling — the engine adapts a record into this view).
@@ -59,6 +75,15 @@ pub struct VerifierInput<'a> {
     /// oracle is exact and the rule comparator is known-complete. The reasoning-present Verify gate
     /// and decontam are ALWAYS authoritative regardless of this flag.
     pub rule_only_authoritative: bool,
+    /// PRECOMPUTED execution ground truth for this candidate, already produced out of process and
+    /// carried on the envelope. `None` ⇒ this record has no execution axis and the evidence check is
+    /// INERT (contributes no check and blocks nothing) — the same shape as a `None` contract being
+    /// judge-only. The harness never executes anything to produce one.
+    pub execution_evidence: Option<&'a ExecutionEvidence>,
+    /// The task/attempt/patch key of the candidate this run is verifying. The carried evidence is
+    /// bound to the key it was computed against and a mismatch is never followed (see the
+    /// `verifier::evidence` adapter). Ignored when `execution_evidence` is `None`.
+    pub evidence_key: EvidenceBinding,
 }
 
 /// The ground-truth source for [`Oracle::SandboxExecution`]: run a reference query/tool and return
@@ -85,6 +110,32 @@ impl SandboxOracle for NullSandboxOracle {
     }
 }
 
+/// The source of PRECOMPUTED execution evidence for a candidate, keyed by the task/attempt/patch it
+/// was produced against. Injected so the engine can resolve a report the harness never produces
+/// itself, and so this crate stays free of any execution dependency — the mirror of
+/// [`SandboxOracle`], except nothing is executed here: the report already exists.
+///
+/// Implementations MUST be keyed lookups, not producers: resolving the same key twice returns the
+/// same report, so re-verifying an edge (crash-resume) can never resolve a different verdict. A
+/// backend that runs an external evaluator is responsible for that idempotence.
+pub trait ExecutionEvidenceSource {
+    /// The report for `key`, or `None` when this candidate has no execution axis (or no report was
+    /// produced for it) — which leaves the evidence check inert.
+    fn evidence(&self, key: &EvidenceBinding) -> Option<ExecutionEvidence>;
+}
+
+/// An [`ExecutionEvidenceSource`] that has nothing — the default when no evaluator is wired. Every
+/// candidate is then evidence-free, so the execution check is inert and behaviour is exactly the
+/// pre-evidence pipeline.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NullExecutionEvidenceSource;
+
+impl ExecutionEvidenceSource for NullExecutionEvidenceSource {
+    fn evidence(&self, _key: &EvidenceBinding) -> Option<ExecutionEvidence> {
+        None
+    }
+}
+
 /// The grade produced by the verifier rail: the per-grade [`Verdict`] plus the [`Verification`]
 /// block to persist. A `Reject` here is the hard gate.
 #[derive(Debug, Clone, PartialEq)]
@@ -102,6 +153,15 @@ impl VerifierGrade {
     #[must_use]
     pub fn is_hard_reject(&self) -> bool {
         !self.verification.all_passed
+    }
+
+    /// `true` when a deterministic check could not decide the record AND the record must not be
+    /// admitted on a panel score. Such a record routes to `NeedsReview` instead of judge rescue: an
+    /// undecidable deterministic axis is never outvoted. Distinct from [`Self::is_hard_reject`],
+    /// which means a failure WAS proven.
+    #[must_use]
+    pub fn blocks_admission(&self) -> bool {
+        self.verification.needs_review.is_some()
     }
 }
 
@@ -360,14 +420,17 @@ fn answer_match_check(cmp: AnswerComparison, rule_only_authoritative: bool) -> (
 
 /// Run the deterministic Verifier rail over `input`, using `sandbox` for any
 /// [`Oracle::SandboxExecution`] ground truth (default [`NullSandboxOracle`] when no sandbox is
-/// wired). Pure otherwise.
+/// wired) and adapting any carried [`ExecutionEvidence`] into its check. Pure otherwise.
 ///
 /// Order: the reasoning-present hard gate ALWAYS runs first (it is independent of the contract and
 /// is ALWAYS authoritative); then the contract's correctness check (answer-match / refusal-expected
-/// / schema) where one exists. `all_passed` is the AND of every check's `passed`. The returned
-/// [`Verdict`] is `Reject` on any HARD fail (the reasoning gate, or an answer non-match ONLY when
-/// `rule_only_authoritative`), `Uncertain` when an answer axis was undecided OR an advisory
-/// non-match routed to judge rescue (`rescue_negatives`, JUDGE-DESIGN §1.1), else `Accept`.
+/// / schema) where one exists; then the precomputed execution check where evidence is carried. The
+/// execution axis is independent of the contract — a candidate's code can be run even when its
+/// answer is judge-only — and it is INERT when no evidence is carried. `all_passed` is the AND of
+/// every check's `passed`. The returned [`Verdict`] is `Reject` on any HARD fail (the reasoning gate,
+/// a proven execution failure, or an answer non-match ONLY when `rule_only_authoritative`), else
+/// `Uncertain` when an undecidable execution report blocked admission or an answer axis was
+/// undecided / routed to judge rescue (`rescue_negatives`, JUDGE-DESIGN §1.1), else `Accept`.
 #[must_use]
 pub fn run_verifier<S: SandboxOracle + ?Sized>(
     input: &VerifierInput<'_>,
@@ -412,9 +475,23 @@ pub fn run_verifier<S: SandboxOracle + ?Sized>(
         }
     }
 
+    // 3. The PRECOMPUTED execution axis, where the record carries an external evaluator's report.
+    // Independent of the contract: a candidate's code can be run even when its answer is
+    // judge-only. A proven failure hard-fails (the same authoritative gate as the reasoning check);
+    // an undecidable report blocks admission instead of routing to judge rescue.
+    let mut admission_blocked = false;
+    if let Some((check, _verdict, blocked)) = execution_evidence_check(input) {
+        admission_blocked = blocked;
+        checks.push(check);
+    }
+
     let all_passed = checks.iter().all(|c| c.passed);
     let verdict = if !all_passed {
         Verdict::Reject
+    } else if admission_blocked {
+        // Nothing proved the work. Deliberately NOT judge rescue: a panel score cannot stand in for
+        // ground truth the deterministic rail could not obtain, so the record is held for review.
+        Verdict::Uncertain
     } else if uncertain {
         // Reasoning gate held, but the answer axis had no oracle — defer to the judge rescue path.
         Verdict::Uncertain
@@ -427,7 +504,16 @@ pub fn run_verifier<S: SandboxOracle + ?Sized>(
 
     VerifierGrade {
         verdict,
-        verification: Verification { checks, all_passed },
+        verification: Verification {
+            checks,
+            all_passed,
+            needs_review: admission_blocked.then(|| {
+                format!(
+                    "{EXECUTION_EVIDENCE_CHECK}: the carried execution report did not decide the \
+                     candidate; admission is blocked until it does"
+                )
+            }),
+        },
     }
 }
 
@@ -480,6 +566,8 @@ mod tests {
             cot_required: cot,
             contract,
             rule_only_authoritative: false,
+            execution_evidence: None,
+            evidence_key: EvidenceBinding::default(),
         }
     }
 

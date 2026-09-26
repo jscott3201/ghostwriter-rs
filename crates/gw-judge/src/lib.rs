@@ -81,6 +81,7 @@ pub use panel::{
     grade_one, grade_panel,
 };
 pub use verifier::{
+    EXECUTION_EVIDENCE_CHECK, ExecutionEvidenceSource, NullExecutionEvidenceSource,
     NullSandboxOracle, SandboxOracle, VerifierGrade, VerifierInput, reasoning_present_check,
     run_verifier, verifier_reject_decision,
 };

@@ -43,7 +43,7 @@ use gw_judge::{
     CorrelationMatrix, GradeOutcome, HybridGrader, NullSandboxOracle, VerifierInput,
     grade_panel_cached, run_verifier,
 };
-use gw_schema::{CotPolicy, LifecycleState, TrainingRecord, TrlFormat};
+use gw_schema::{CotPolicy, EvidenceBinding, LifecycleState, TrainingRecord, TrlFormat};
 use gw_storage::record_hash;
 use tokio_util::sync::CancellationToken;
 
@@ -186,7 +186,44 @@ pub async fn drive_to_judged(
     )))
 }
 
-/// `AssistantGenerated → Verified`: run the deterministic verifier rail (pure + injected sandbox).
+/// The task/attempt/patch key an execution-evidence report must be bound to in order to be
+/// applicable to `rec`.
+///
+/// `task` is the run, `attempt` is the record (a bounded-revise retry is a DISTINCT record id, so
+/// a retry never inherits its parent's reports), and `patch_hash` is a content hash of the produced
+/// candidate. Deriving all three from the envelope is what makes a stale or cross-attempt report
+/// detectable without trusting the report's own claim about itself.
+///
+/// # Errors
+/// Propagates a [`gw_storage`] hashing error (a content field that cannot be canonicalized).
+pub fn evidence_key(rec: &TrainingRecord) -> Result<EvidenceBinding> {
+    Ok(EvidenceBinding {
+        task: rec.provenance.run_id.clone(),
+        attempt: rec.record_id.clone(),
+        patch_hash: gw_storage::completion_hash(&rec.messages)?,
+    })
+}
+
+/// Resolve the precomputed execution report for `rec`, preferring the keyed source and falling back
+/// to whatever the envelope already carries.
+///
+/// The source is a lookup keyed by the very patch hash it must match, so a report it returns cannot
+/// be stale. The envelope fallback covers a crash-resume of the `verify` edge (the report was
+/// already resolved and persisted) and a source that is no longer available; a carried report whose
+/// binding no longer matches is classified `Unknown` by the verifier, never followed.
+fn resolve_execution_evidence(
+    rec: &TrainingRecord,
+    clients: &Clients,
+    key: &EvidenceBinding,
+) -> Option<gw_schema::ExecutionEvidence> {
+    clients
+        .execution_evidence
+        .evidence(key)
+        .or_else(|| rec.execution_evidence.clone())
+}
+
+/// `AssistantGenerated → Verified`: run the deterministic verifier rail (pure + injected sandbox +
+/// any injected execution-evidence source).
 ///
 /// The per-record `VerificationContract` (kind + oracle) is threaded in from the record envelope
 /// (`rec.verification_contract`, carried from the user-turn candidate by `gw-generate::assemble`), so
@@ -198,11 +235,18 @@ pub async fn drive_to_judged(
 /// (`None`) or an `Oracle::None` contract is judge-only for the answer axis; the reasoning gate still
 /// applies. `rule_only_authoritative` (off by default) governs whether a rule non-match hard-rejects
 /// or routes to judge rescue (`rescue_negatives`).
+///
+/// The PRECOMPUTED execution axis runs independently of the contract: a candidate whose correctness
+/// is only knowable by running it carries an external evaluator's report on the envelope, and the
+/// report is resolved (and then persisted) here so the verdict survives the crash-resume of this
+/// edge. The harness never executes anything itself.
 async fn verify(
     rec: TrainingRecord,
     clients: &Clients,
     area: &AreaConfig,
 ) -> Result<TrainingRecord> {
+    let key = evidence_key(&rec)?;
+    let execution_evidence = resolve_execution_evidence(&rec, clients, &key);
     let input = VerifierInput {
         messages: &rec.messages,
         reasoning_tokens: rec.cost.reasoning_tokens,
@@ -211,11 +255,17 @@ async fn verify(
         // wrong-answer record is caught on the deterministic rail, not silently admitted on the panel.
         contract: rec.verification_contract.as_ref(),
         rule_only_authoritative: area.rule_only_authoritative,
+        execution_evidence: execution_evidence.as_ref(),
+        evidence_key: key,
     };
     let grade = run_verifier(&input, clients.sandbox.as_ref());
 
-    // Persist the verification block onto the envelope, then advance the lifecycle.
+    // Persist the verification block AND the resolved execution report onto the envelope, then
+    // advance the lifecycle. Persisting the report is what makes a crash-resume of THIS edge
+    // re-verify to the same verdict from data alone, and it leaves the operator an audit trail of
+    // which report decided the record.
     let mut updated = rec;
+    updated.execution_evidence = execution_evidence;
     updated.verification = grade.verification;
     persist_envelope_and_advance(&updated, clients, LifecycleState::Verified, None).await?;
     reload(updated, clients).await
@@ -229,13 +279,17 @@ async fn judge(
     area: &AreaConfig,
 ) -> Result<TrainingRecord> {
     // The verifier rail already ran; re-derive its grade from the persisted verification block so the
-    // hard gate is honored without re-running (pure).
+    // hard gate is honored without re-running (pure). The block carries BOTH signals: a proven
+    // failure (`all_passed == false`) and an undecidable deterministic axis (`needs_review`).
     let verifier_grade = crate::grade::verifier_grade_from_verification(&rec, area);
 
-    // Short-circuit: a verifier hard reject sinks the record regardless of the panel (no judge spend).
-    let outcome = if verifier_grade.is_hard_reject() {
+    // Short-circuit on a verifier hard reject — a proven failure sinks the record regardless of the
+    // panel (no judge spend) — and on a record the deterministic rail could not decide: a panel
+    // score is not a substitute for ground truth that could not be obtained, so such a record is
+    // held for review without spending a judge token either.
+    let outcome = if verifier_grade.is_hard_reject() || verifier_grade.blocks_admission() {
         let grader = HybridGrader::new(area.thresholds);
-        // An empty correlation matrix is fine here (the panel is never consulted on a hard reject).
+        // An empty correlation matrix is fine here (the panel is never consulted in either case).
         grader.grade(
             Some(&verifier_grade),
             &[],

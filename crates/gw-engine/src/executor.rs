@@ -831,6 +831,7 @@ pub(crate) fn error_stub(
         },
         generation: Default::default(),
         verification_contract: Some(candidate.contract.clone()),
+        execution_evidence: None,
         verification: Default::default(),
         judging: Default::default(),
         reasoning_quality: None,

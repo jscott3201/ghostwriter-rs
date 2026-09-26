@@ -50,6 +50,10 @@ pub enum DecisionReason {
     /// A deterministic verifier hard-failed (`Verification.all_passed == false`); authoritative over
     /// any panel score.
     VerifierReject,
+    /// A deterministic axis could not decide the record (`Verification.needs_review` is set) and the
+    /// panel is NOT a substitute for the ground truth it could not obtain. The record is held for
+    /// review; it is never admitted on a panel score, however high.
+    VerifierUndecided,
     /// The aggregate cleared the area accept threshold.
     AboveThreshold,
     /// The aggregate fell in the revise band `[reject_below, accept_threshold)`.
@@ -70,6 +74,7 @@ impl DecisionReason {
     pub fn as_str(self) -> &'static str {
         match self {
             DecisionReason::VerifierReject => "verifier_reject",
+            DecisionReason::VerifierUndecided => "verifier_undecided",
             DecisionReason::AboveThreshold => "above_threshold",
             DecisionReason::ReviseBand => "revise_band",
             DecisionReason::BelowThreshold => "below_threshold",
@@ -86,6 +91,7 @@ fn every_reason_token_round_trips() {
     // A guard so a new DecisionReason variant cannot ship without a token.
     for r in [
         DecisionReason::VerifierReject,
+        DecisionReason::VerifierUndecided,
         DecisionReason::AboveThreshold,
         DecisionReason::ReviseBand,
         DecisionReason::BelowThreshold,

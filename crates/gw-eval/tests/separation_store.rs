@@ -67,9 +67,10 @@ fn sibling(
         },
         generation: Generation::default(),
         verification_contract: None,
+        execution_evidence: None,
         verification: Verification {
-            checks: vec![],
             all_passed,
+            ..Default::default()
         },
         judging: Judging {
             aggregate,

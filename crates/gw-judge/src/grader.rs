@@ -153,6 +153,35 @@ impl HybridGrader {
 
         let verification = verifier.map(|v| v.verification.clone()).unwrap_or_default();
 
+        // 1b. A deterministic axis that could not decide BLOCKS admission and is NOT handed to the
+        // panel: a panel score cannot stand in for ground truth the deterministic rail could not
+        // obtain, so a high-scoring panel must not turn "unproven" into an admit. The record is held
+        // for review. This is distinct from (and strictly softer than) the hard reject above, which
+        // means a failure WAS proven. `aggregate: None` so `rederive_verdict` reproduces this
+        // Escalate on the reconcile edge instead of re-banding a panel score into an admit.
+        if let Some(v) = verifier
+            && v.blocks_admission()
+        {
+            let decision = Decision::Escalate {
+                to: EscalateTo::Verifier,
+                reason: DecisionReason::VerifierUndecided,
+            };
+            let judging = Judging {
+                panel: panel.iter().map(Grade::to_vote).collect(),
+                aggregate: None,
+                agreement: None,
+                n_eff: None,
+                verdict: decision.to_schema_verdict(),
+                verdict_reason: Some(decision.reason().as_str().to_string()),
+                threshold_at_decision: Some(self.thresholds.accept_threshold),
+            };
+            return Ok(GradeOutcome {
+                decision,
+                judging,
+                verification,
+            });
+        }
+
         // The verifier passed (or is absent). The panel decides the remainder.
         if panel.is_empty() {
             return Err(JudgeError::EmptyPanel(
@@ -296,17 +325,29 @@ pub fn rederive_verdict(judging: &Judging, thresholds: AreaThresholds) -> Result
     // re-derives to its recorded verdict — there is no aggregate to threshold. The stored
     // verdict_reason is preserved so a ConservativeTie is not re-attributed as a VerifierReject.
     let Some(aggregate) = judging.aggregate else {
-        let reject_reason = match judging.verdict_reason.as_deref() {
-            Some("conservative_tie") => DecisionReason::ConservativeTie,
-            _ => DecisionReason::VerifierReject,
+        // A block with no aggregate carries its terminal verdict; the recorded reason is preserved so
+        // it is not re-attributed (a ConservativeTie must not become a VerifierReject, and a
+        // record held for an undecidable deterministic axis must not become "correlated judges").
+        let recorded = if judging.verdict_reason.as_deref()
+            == Some(DecisionReason::ConservativeTie.as_str())
+        {
+            DecisionReason::ConservativeTie
+        } else if judging.verdict_reason.as_deref()
+            == Some(DecisionReason::VerifierUndecided.as_str())
+        {
+            DecisionReason::VerifierUndecided
+        } else {
+            DecisionReason::VerifierReject
         };
         return match judging.verdict {
-            Some(gw_schema::Verdict::Reject) => Ok(Decision::Reject {
-                reason: reject_reason,
-            }),
+            Some(gw_schema::Verdict::Reject) => Ok(Decision::Reject { reason: recorded }),
             Some(gw_schema::Verdict::NeedsReview) => Ok(Decision::Escalate {
-                to: EscalateTo::Human,
-                reason: DecisionReason::CorrelatedJudges,
+                to: match recorded {
+                    // The panel was never consulted; the deterministic rail could not decide.
+                    DecisionReason::VerifierUndecided => EscalateTo::Verifier,
+                    _ => EscalateTo::Human,
+                },
+                reason: recorded,
             }),
             Some(gw_schema::Verdict::Admit) | None => Err(JudgeError::Invariant(
                 "judging block has no aggregate to re-derive a verdict from".into(),
@@ -354,8 +395,8 @@ mod tests {
         VerifierGrade {
             verdict: Verdict::Accept,
             verification: Verification {
-                checks: vec![],
                 all_passed: true,
+                ..Default::default()
             },
         }
     }
@@ -364,10 +405,65 @@ mod tests {
         VerifierGrade {
             verdict: Verdict::Reject,
             verification: Verification {
-                checks: vec![],
                 all_passed: false,
+                ..Default::default()
             },
         }
+    }
+
+    /// A deterministic axis that could not decide BLOCKS admission: the panel is not a substitute
+    /// for ground truth the deterministic rail could not obtain, so a glowing panel must escalate
+    /// to review rather than admit. And the persisted block carries no aggregate, so the reconcile
+    /// edge re-derives the same hold instead of re-banding the score into an admit.
+    #[test]
+    fn verifier_undecided_escalates_and_never_admits_on_a_high_panel() {
+        let verifier = VerifierGrade {
+            verdict: Verdict::Accept,
+            verification: Verification {
+                checks: vec![],
+                all_passed: true,
+                needs_review: Some("execution_evidence: undecided".into()),
+            },
+        };
+        let panel = vec![
+            grade("a", 0.99, Verdict::Accept),
+            grade("b", 0.99, Verdict::Accept),
+            grade("c", 0.99, Verdict::Accept),
+        ];
+        let r = crate::consensus::CorrelationMatrix::uniform_offdiagonal(3, 0.7);
+        let grader = HybridGrader::new(AreaThresholds::default());
+        let out = grader
+            .grade(Some(&verifier), &panel, &[], Some("math"), &r)
+            .unwrap();
+        assert!(
+            matches!(out.decision, Decision::Escalate { .. }),
+            "an undecidable deterministic axis must escalate, got {:?}",
+            out.decision
+        );
+        assert_eq!(out.judging.verdict, Some(SchemaVerdict::NeedsReview));
+        assert_eq!(
+            out.judging.aggregate, None,
+            "no aggregate is persisted, so reconcile cannot re-band the score into an admit"
+        );
+        // The reconcile edge reproduces the same hold (and the same reason).
+        let rederived = rederive_verdict(&out.judging, AreaThresholds::default()).unwrap();
+        assert_eq!(rederived, out.decision);
+    }
+
+    /// A record with no execution axis is untouched: `needs_review` unset means the panel decides.
+    #[test]
+    fn a_plain_verifier_pass_still_hands_the_record_to_the_panel() {
+        let panel = vec![
+            grade("a", 0.9, Verdict::Accept),
+            grade("b", 0.85, Verdict::Accept),
+            grade("c", 0.88, Verdict::Accept),
+        ];
+        let r = CorrelationMatrix::identity(3);
+        let grader = HybridGrader::new(AreaThresholds::default());
+        let out = grader
+            .grade(Some(&verifier_pass()), &panel, &[], Some("math"), &r)
+            .unwrap();
+        assert!(matches!(out.decision, Decision::Accept { .. }));
     }
 
     /// Mandatory test 5: a verifier REJECT sinks the record even with a high panel score.
