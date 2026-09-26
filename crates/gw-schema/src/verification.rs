@@ -9,6 +9,16 @@ pub struct Verification {
     #[serde(default)]
     pub checks: Vec<Check>,
     pub all_passed: bool,
+    /// Set (with the reason) when a deterministic check could not decide the record AND the record
+    /// must NOT be admitted on a panel score. The panel is never consulted for such a record: the
+    /// engine routes it to `NeedsReview` instead of judge rescue, so an undecidable deterministic
+    /// axis can never be outvoted. `None` is the ordinary case (a plain Accept hands the remainder
+    /// to the panel).
+    ///
+    /// Persisted so the `Verified → Judged` edge re-derives the block WITHOUT re-running the rail —
+    /// the same reason [`Verification::all_passed`] is persisted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub needs_review: Option<String>,
 }
 
 /// One deterministic check result, e.g. `"rust_compiles"`, `"json_valid"`,

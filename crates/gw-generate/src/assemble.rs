@@ -96,6 +96,10 @@ pub fn assemble(
         // run the answer-correctness check (incl. on a crash-resume of the verify edge). `Oracle::None`
         // contracts are kept verbatim — the rail treats a None oracle as judge-only, not a silent pass.
         verification_contract: Some(gated.candidate.contract.clone()),
+        // A freshly assembled candidate carries NO precomputed execution report: the report is
+        // produced against the finished candidate's content, so the engine's verify edge resolves it
+        // by key (and persists it) rather than the seed claiming one up front.
+        execution_evidence: None,
         verification: Default::default(),
         judging: Default::default(),
         reasoning_quality: None,

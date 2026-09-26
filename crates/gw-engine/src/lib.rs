@@ -87,7 +87,7 @@ pub use executor::{Engine, ExportSpec, RunReport};
 pub use grade::{correlation_prior, decision_from_judging, verifier_grade_from_verification};
 pub use seed::{InMemorySeedSource, SeedItem, SeedSource, record_id};
 pub use sibling::{GroupOutcome, run_group};
-pub use step::{drive, drive_to_judged, is_terminal, step};
+pub use step::{drive, drive_to_judged, evidence_key, is_terminal, step};
 
 // Re-export the revise entrypoint under a stable path.
 pub use revise::revise_once;

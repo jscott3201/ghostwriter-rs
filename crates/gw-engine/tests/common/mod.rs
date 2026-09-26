@@ -14,12 +14,15 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use gw_engine::{AreaConfig, BudgetMeter, Clients, EventSink, InMemorySeedSource};
 use gw_generate::{Embedder, NullEmbedder, UserSeed, UserTurnCandidate, user_message};
-use gw_judge::{AreaThresholds, NullSandboxOracle, PanelJudge};
+use gw_judge::{AreaThresholds, ExecutionEvidenceSource, NullSandboxOracle, PanelJudge};
 use gw_providers::{
     ChatRequest, CompletionTokensDetails, DeltaStream, Provider, ProviderError, StreamChatFuture,
     StreamDelta, Usage,
 };
-use gw_schema::{Oracle, ReasoningDetail, VerificationContract, VerificationKind};
+use gw_schema::{
+    EvidenceBinding, ExecutionEvidence, ExecutionOutcome, Oracle, ReasoningDetail, TestCase,
+    TestStatus, VerificationContract, VerificationKind,
+};
 use gw_storage::Store;
 
 /// One streamed `reasoning.text` detail block (how a real OpenRouter teacher emits structured CoT).
@@ -555,4 +558,97 @@ pub fn area_rule_authoritative(judges: Vec<PanelJudge>, thresholds: AreaThreshol
 /// A one-item, one-shard seed source for the common single-record test.
 pub fn one_item_source() -> InMemorySeedSource {
     InMemorySeedSource::new(vec![good_candidate("What is 12*8?")], 1)
+}
+
+/// The required-test node key used by the hand-authored execution reports.
+pub const EVIDENCE_NODE: &str = "tests.test_demo::test_behavior";
+
+/// A HAND-AUTHORED precomputed execution report, bound to `key` by construction.
+///
+/// This stands in for the report an out-of-process evaluator produces: the harness itself executes
+/// nothing. `build` receives the engine's own key for the candidate, so a well-behaved source
+/// reports exactly about the candidate under test; a source that wants to model a stale or
+/// cross-attempt report deliberately rewrites the binding itself.
+pub struct ScriptedEvidence {
+    build: Box<EvidenceBuilder>,
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+/// Resolves the engine's key for a candidate to the report that candidate earned (or to `None` when
+/// it earned none).
+pub type EvidenceBuilder = dyn Fn(&EvidenceBinding) -> Option<ExecutionEvidence> + Send + Sync;
+
+impl ScriptedEvidence {
+    /// A source that resolves `key` through `build`. `build` returning `None` leaves the execution
+    /// axis inert for that candidate (as an area with no evaluator wired would be).
+    pub fn new(
+        build: impl Fn(&EvidenceBinding) -> Option<ExecutionEvidence> + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            build: Box::new(build),
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    /// How many times the source was consulted (once per `verify` of a record, including a
+    /// crash-resume of that edge).
+    pub fn call_count(&self) -> usize {
+        self.calls.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl ExecutionEvidenceSource for ScriptedEvidence {
+    fn evidence(&self, key: &EvidenceBinding) -> Option<ExecutionEvidence> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        (self.build)(key)
+    }
+}
+
+/// A hand-authored report against `key`: the stated [`ExecutionOutcome`], the required nodes, what
+/// each node reported, the exit code, and no report-level errors.
+pub fn hand_report(
+    key: &EvidenceBinding,
+    outcome: ExecutionOutcome,
+    required: &[&str],
+    cases: &[(&str, TestStatus)],
+    exit_code: Option<i32>,
+) -> ExecutionEvidence {
+    ExecutionEvidence {
+        outcome,
+        required_tests: required.iter().map(|n| (*n).to_string()).collect(),
+        cases: cases
+            .iter()
+            .map(|(node, status)| TestCase {
+                node: (*node).to_string(),
+                status: *status,
+            })
+            .collect(),
+        exit_code,
+        errors: vec![],
+        source_ref: Some("hand-authored://local".into()),
+        binding: key.clone(),
+    }
+}
+
+/// The healthy report: the required node ran and passed, and the run exited zero.
+pub fn passing_report(key: &EvidenceBinding) -> ExecutionEvidence {
+    hand_report(
+        key,
+        ExecutionOutcome::Passed,
+        &[EVIDENCE_NODE],
+        &[(EVIDENCE_NODE, TestStatus::Passed)],
+        Some(0),
+    )
+}
+
+/// A report whose run demonstrably failed: the required node reported a failure and the exit was
+/// nonzero.
+pub fn failing_report(key: &EvidenceBinding) -> ExecutionEvidence {
+    hand_report(
+        key,
+        ExecutionOutcome::Failed,
+        &[EVIDENCE_NODE],
+        &[(EVIDENCE_NODE, TestStatus::Failed)],
+        Some(1),
+    )
 }

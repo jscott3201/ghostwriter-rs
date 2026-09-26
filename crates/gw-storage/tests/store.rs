@@ -86,6 +86,7 @@ fn record(
             ..Default::default()
         },
         verification_contract: None,
+        execution_evidence: None,
         verification: Default::default(),
         judging,
         reasoning_quality: None,

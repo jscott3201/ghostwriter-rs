@@ -233,6 +233,7 @@ mod tests {
             },
             generation: Generation::default(),
             verification_contract: None,
+            execution_evidence: None,
             verification: Verification::default(),
             judging: Judging {
                 aggregate: Some(agg),

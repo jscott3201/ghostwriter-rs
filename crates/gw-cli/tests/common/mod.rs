@@ -120,6 +120,7 @@ pub fn record(
         },
         generation: Default::default(),
         verification_contract: None,
+        execution_evidence: None,
         verification,
         judging,
         reasoning_quality: None,

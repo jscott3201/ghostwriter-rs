@@ -28,7 +28,9 @@
 use std::sync::Arc;
 
 use gw_generate::Embedder;
-use gw_judge::{AreaThresholds, PanelJudge, SandboxOracle};
+use gw_judge::{
+    AreaThresholds, ExecutionEvidenceSource, NullExecutionEvidenceSource, PanelJudge, SandboxOracle,
+};
 use gw_providers::Provider;
 use gw_storage::Store;
 
@@ -173,6 +175,10 @@ pub struct Clients {
     pub(crate) priors: crate::priors::Priors,
     /// The sandbox ground-truth oracle (default [`NullSandboxOracle`](gw_judge::NullSandboxOracle)).
     pub sandbox: Arc<dyn SandboxOracle + Send + Sync>,
+    /// The PRECOMPUTED execution-evidence source (default [`NullExecutionEvidenceSource`], which
+    /// resolves nothing and leaves the execution axis inert). A keyed lookup — the harness never
+    /// executes anything itself; the report already exists.
+    pub execution_evidence: Arc<dyn ExecutionEvidenceSource + Send + Sync>,
     /// The shared run-wide budget meter.
     pub budget: BudgetMeter,
     /// The observability event sink.
@@ -218,11 +224,23 @@ impl Clients {
             embedder,
             priors: crate::priors::new(),
             sandbox,
+            execution_evidence: Arc::new(NullExecutionEvidenceSource),
             budget,
             events,
             harness_version: harness_version.into(),
             git_commit: None,
         }
+    }
+
+    /// Set the precomputed execution-evidence source. Chainable. The default resolves nothing, so
+    /// an area with no evaluator wired behaves exactly as it did before the execution axis existed.
+    #[must_use]
+    pub fn with_execution_evidence_source(
+        mut self,
+        source: Arc<dyn ExecutionEvidenceSource + Send + Sync>,
+    ) -> Self {
+        self.execution_evidence = source;
+        self
     }
 
     /// Set the git commit stamped into provenance. Chainable.

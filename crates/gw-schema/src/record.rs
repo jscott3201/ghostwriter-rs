@@ -6,6 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::cost::Cost;
+use crate::execution_evidence::ExecutionEvidence;
 use crate::generation::Generation;
 use crate::hashes::Hashes;
 use crate::judging::Judging;
@@ -47,6 +48,14 @@ pub struct TrainingRecord {
     /// hard gate still applies regardless. Additive + optional: absent on records that carry no contract.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verification_contract: Option<VerificationContract>,
+    /// PRECOMPUTED execution ground truth for a trajectory whose correctness is only knowable by
+    /// running it (a code patch against its required tests). Produced OUT OF PROCESS and carried
+    /// here; the harness performs no execution of its own. The verifier's `execution_evidence` check
+    /// adapts it into a deterministic verdict, and it is bound to the exact task/attempt/patch it was
+    /// computed against so it is never followed across candidates. `None` ⇒ this record carries no
+    /// execution axis (the evidence check is inert, exactly as a `None` contract is judge-only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_evidence: Option<ExecutionEvidence>,
     #[serde(default)]
     pub verification: Verification,
     #[serde(default)]

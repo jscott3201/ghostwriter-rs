@@ -137,8 +137,8 @@ mod tests {
     fn verifier_grade_reflects_all_passed() {
         let mut rec = sample_record();
         rec.verification = Verification {
-            checks: vec![],
             all_passed: true,
+            ..Default::default()
         };
         let g = verifier_grade_from_verification(&rec, &area());
         assert!(!g.is_hard_reject());
@@ -252,6 +252,7 @@ mod tests {
             },
             generation: Generation::default(),
             verification_contract: None,
+            execution_evidence: None,
             verification: Verification::default(),
             judging: Default::default(),
             reasoning_quality: None,
