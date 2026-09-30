@@ -8,10 +8,30 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+/// Whether a candidate may enter automatic admission or must remain available for human review.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AdmissionIntent {
+    /// Admit when verifier and panel safeguards pass.
+    #[default]
+    Automatic,
+    /// Collect and grade, but hold an otherwise admitted candidate for human review.
+    ReviewOnly,
+}
+
+impl AdmissionIntent {
+    fn is_automatic(&self) -> bool {
+        *self == Self::Automatic
+    }
+}
+
 /// Persisted panel grades + the derived verdict + the threshold at decision time, so admission
 /// is re-derivable under a new threshold WITHOUT re-judging.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct Judging {
+    /// Persisted collection intent. Review-only records cannot become admitted by rederivation.
+    #[serde(default, skip_serializing_if = "AdmissionIntent::is_automatic")]
+    pub admission_intent: AdmissionIntent,
     #[serde(default)]
     pub panel: Vec<JudgeVote>,
     /// SP/BTS + calibration-weighted — NEVER plain mean. (INVARIANT f)
@@ -23,6 +43,10 @@ pub struct Judging {
     /// Effective sample size after correlation-adjusted calibration weighting (JUDGE-DESIGN §5.5).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub n_eff: Option<f64>,
+    /// Number of non-uncertain votes used for aggregate and effective-count computation. Historical
+    /// rows without this evidence use the full stored panel count conservatively on rederivation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decisive_count: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verdict: Option<Verdict>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -93,5 +117,19 @@ impl Default for JudgeSampling {
             top_p: None,
             seed: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn historical_judging_without_new_evidence_preserves_its_json_shape() {
+        let original = r#"{"panel":[],"verdict":"reject"}"#;
+        let restored: Judging = serde_json::from_str(original).unwrap();
+        assert_eq!(restored.admission_intent, AdmissionIntent::Automatic);
+        assert_eq!(restored.decisive_count, None);
+        assert_eq!(serde_json::to_string(&restored).unwrap(), original);
     }
 }

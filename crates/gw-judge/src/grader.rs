@@ -17,7 +17,7 @@
 //! [`HybridGrader::grade`] populates a [`GradeOutcome`] carrying both the [`Decision`] and the
 //! [`Judging`] block to persist.
 
-use gw_schema::{Judging, Verification};
+use gw_schema::{AdmissionIntent, Judging, Verification};
 
 use crate::calibration::{CalibrationParams, calibration_weights};
 use crate::consensus::{CorrelationMatrix, agreement, effective_n, weighted_aggregate};
@@ -94,6 +94,8 @@ pub struct GradeOutcome {
 /// cache) and handed to [`grade`](HybridGrader::grade), keeping this composition step free of I/O.
 #[derive(Debug, Clone)]
 pub struct HybridGrader {
+    /// Collection intent persisted with every grade; review-only cannot automatically admit.
+    pub admission_intent: AdmissionIntent,
     /// Per-area admission bands + correlation-guard floors.
     pub thresholds: AreaThresholds,
     /// Calibration softmax coefficients.
@@ -105,9 +107,17 @@ impl HybridGrader {
     #[must_use]
     pub fn new(thresholds: AreaThresholds) -> Self {
         Self {
+            admission_intent: AdmissionIntent::Automatic,
             thresholds,
             calibration: CalibrationParams::default(),
         }
+    }
+
+    /// Select the collection intent without changing score or effective-count safeguards.
+    #[must_use]
+    pub fn with_admission_intent(mut self, intent: AdmissionIntent) -> Self {
+        self.admission_intent = intent;
+        self
     }
 
     /// Grade one candidate from an ALREADY-COMPUTED verifier grade (rail 1) and panel grades (rail
@@ -136,6 +146,8 @@ impl HybridGrader {
         {
             let decision = verifier_reject_decision();
             let judging = Judging {
+                admission_intent: self.admission_intent,
+                decisive_count: None,
                 panel: panel.iter().map(Grade::to_vote).collect(),
                 aggregate: None,
                 agreement: None,
@@ -167,6 +179,8 @@ impl HybridGrader {
                 reason: DecisionReason::VerifierUndecided,
             };
             let judging = Judging {
+                admission_intent: self.admission_intent,
+                decisive_count: None,
                 panel: panel.iter().map(Grade::to_vote).collect(),
                 aggregate: None,
                 agreement: None,
@@ -183,6 +197,7 @@ impl HybridGrader {
         }
 
         // The verifier passed (or is absent). The panel decides the remainder.
+        self.thresholds.validate()?;
         if panel.is_empty() {
             return Err(JudgeError::EmptyPanel(
                 "no verifier hard-reject and no panel grades; nothing can decide the record".into(),
@@ -247,6 +262,8 @@ impl HybridGrader {
                 reason: DecisionReason::ConservativeTie,
             };
             let judging = Judging {
+                admission_intent: self.admission_intent,
+                decisive_count: Some(0),
                 panel: persisted_votes,
                 aggregate: None,
                 agreement: agreement(&panel.iter().map(|g| g.score).collect::<Vec<_>>()).ok(),
@@ -295,7 +312,10 @@ impl HybridGrader {
                 self.thresholds.band(aggregate)
             };
 
+        let decision = decision.with_admission_intent(self.admission_intent);
         let judging = Judging {
+            admission_intent: self.admission_intent,
+            decisive_count: Some(kd),
             panel: persisted_votes,
             aggregate: Some(aggregate),
             agreement: Some(agree),
@@ -316,11 +336,16 @@ impl HybridGrader {
 /// different verdicts with zero model calls. A `NeedsReview` / escalate that was forced by the
 /// correlation guard stays escalated (the guard does not depend on the threshold). A block with no
 /// stored aggregate (e.g. a verifier hard-reject) re-derives to the verifier reject it recorded.
+/// New grades record the decisive count used by the live guard. Historical rows without that count
+/// use the full panel conservatively. Persisted review-only intent still prevents admission when
+/// the live thresholds are relaxed.
 ///
 /// # Errors
 /// Returns [`JudgeError::Invariant`] if the block carries neither an aggregate nor a persisted
-/// verdict (it was never graded).
+/// verdict (it was never graded), supplied decisive-count evidence is inconsistent, or numeric
+/// evidence or thresholds used for admission are invalid.
 pub fn rederive_verdict(judging: &Judging, thresholds: AreaThresholds) -> Result<Decision> {
+    let decisive_count = crate::preflight::persisted_decisive_count(judging)?;
     // A block with no aggregate (a verifier hard-reject, or an all-Uncertain conservative tie)
     // re-derives to its recorded verdict — there is no aggregate to threshold. The stored
     // verdict_reason is preserved so a ConservativeTie is not re-attributed as a VerifierReject.
@@ -355,9 +380,16 @@ pub fn rederive_verdict(judging: &Judging, thresholds: AreaThresholds) -> Result
         };
     };
 
+    thresholds.validate()?;
+    if !aggregate.is_finite() || !(0.0..=1.0).contains(&aggregate) {
+        return Err(JudgeError::Invariant(
+            "persisted aggregate must be finite and within [0,1]".into(),
+        ));
+    }
+
     // Re-apply the correlation guard from the stored n_eff (the guard is threshold-independent).
     if let Some(n_eff) = judging.n_eff {
-        let k = judging.panel.len().max(1) as f64;
+        let k = decisive_count as f64;
         if n_eff / k < thresholds.min_n_eff_ratio || n_eff < thresholds.min_n_eff {
             return Ok(Decision::Escalate {
                 to: EscalateTo::Human,
@@ -365,7 +397,9 @@ pub fn rederive_verdict(judging: &Judging, thresholds: AreaThresholds) -> Result
             });
         }
     }
-    Ok(thresholds.band(aggregate))
+    Ok(thresholds
+        .band(aggregate)
+        .with_admission_intent(judging.admission_intent))
 }
 
 #[cfg(test)]

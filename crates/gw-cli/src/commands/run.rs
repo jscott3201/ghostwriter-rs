@@ -35,6 +35,9 @@ pub fn effective_config(args: &RunArgs) -> anyhow::Result<Config> {
     if let Some(k) = args.k {
         config.area.k = k;
     }
+    if let Some(intent) = args.admission_intent {
+        config.area.admission_intent = intent.into();
+    }
     config.validate_run_control()?;
     Ok(config)
 }
@@ -88,6 +91,7 @@ mod tests {
 
     fn run_args() -> RunArgs {
         RunArgs {
+            admission_intent: None,
             config: None,
             db: Some(PathBuf::from("/tmp/override.sqlite")),
             run_id: "r1".into(),

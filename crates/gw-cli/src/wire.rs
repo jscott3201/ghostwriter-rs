@@ -147,6 +147,9 @@ pub async fn build_engine(
     events: EventSink,
     max_in_flight: u32,
 ) -> anyhow::Result<(Engine, Store)> {
+    let area: AreaConfig = config.area_config();
+    area.assess_admission()
+        .context("validating panel admission settings")?;
     let store = open_store(config).await?;
     let provider = build_provider(config)?;
     let clients = build_clients(
@@ -156,7 +159,6 @@ pub async fn build_engine(
         config.budget_usd,
         config.embedding.as_ref(),
     )?;
-    let area: AreaConfig = config.area_config();
     let engine = configure_engine(Engine::new(clients, area, max_in_flight), config);
     Ok((engine, store))
 }

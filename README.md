@@ -144,7 +144,7 @@ Prove that the square root of 2 is irrational.
 Design a rate limiter for an API gateway and justify the algorithm.
 ```
 
-**3. Write a config** (`gw.toml`) — see the [reference](#configuration) below:
+**3. Write a review-only config** (`gw.toml`) — see the [reference](#configuration) below:
 
 ```toml
 db         = "gw-run.sqlite"
@@ -152,6 +152,7 @@ budget_usd = 5.0
 
 [area]
 training_area = "reasoning"
+admission_intent = "review_only"
 teacher_slug  = "z-ai/glm-5.2"
 cot_required  = true
 k             = 3
@@ -166,13 +167,9 @@ min_n_eff        = 1.5
 slug   = "deepseek/deepseek-v4-pro"
 family = "deepseek"
 
-[export]
-out    = "out/dataset.parquet"
-format = "chat-ml"
-cot    = "supervised"
 ```
 
-**4. Run it** — generate, grade, admit, and persist; the report prints when it finishes:
+**4. Run it** — generate, grade, and persist candidates for review; the report prints when it finishes:
 
 ```sh
 gw gen run --config gw.toml --run-id demo-001 --prompts prompts.txt \
@@ -183,10 +180,16 @@ Prefer a live dashboard? Swap `run` for `tui`. Crashed or interrupted? Re-run th
 with the **same** `--prompts` and `--shards` to resume — already-committed work is skipped and the
 teacher is never re-spent.
 
-**5. Export** the admitted records to Parquet (a pure, provider-free step you can re-run any time):
+The quickstart keeps the conservative correlation prior and effective-count floor. Its single judge
+cannot clear that floor, so collection explicitly uses `review_only`. Otherwise admitted candidates
+stay at `NeedsReview`; no admitted dataset is produced. The `k = 3` setting generates three candidate
+answers per prompt and does not add judges.
+
+**5. Export an automatic-admission run** after configuring an attainable panel as described below.
+Export is a pure, provider-free step you can repeat:
 
 ```sh
-gw gen export --db gw-run.sqlite --out out/dataset.parquet --run-id demo-001 \
+gw gen export --db gw-run.sqlite --out out/dataset.parquet --run-id automatic-001 \
   --format chat-ml --cot supervised
 ```
 
@@ -198,7 +201,8 @@ target template, CoT policy, dataset version, and record counts.
 ## Configuration
 
 Configuration is layered, lowest precedence first: **built-in defaults → TOML file (`--config`) →
-`GW_`-prefixed environment variables → CLI flags**. A missing file still yields a runnable shape.
+`GW_`-prefixed environment variables → CLI flags**. Defaults deserialize without a file, but generation
+requires a nonempty judge panel and a valid admission configuration before any provider is constructed.
 
 ```toml
 # ─── run-wide ───────────────────────────────────────────────────────────────
@@ -211,6 +215,7 @@ provider_rpm      = 60          # per-lane requests/min for the rate limiter
 # ─── the training area: what to generate and how to grade it ────────────────
 [area]
 training_area = "reasoning"     # stamped into provenance + the record-id prefix
+admission_intent = "review_only" # explicit collection mode; default is "automatic"
 teacher_slug  = "z-ai/glm-5.2"  # any OpenRouter chat model that emits reasoning
 cot_required  = true            # require chain-of-thought (a hard Verify gate)
 k             = 3               # best-of-k fan-out (default 1; clamped to >= 1)
@@ -257,7 +262,49 @@ Notes:
   table — set one or the other, not both. The same holds for per-judge `reasoning_max_tokens` /
   `reasoning_effort`.
 - Any field can be overridden by an env var (`GW_BUDGET_USD=10.0`) or, for the common knobs, a CLI
-  flag (`--budget-usd`, `--k`, `--shards`, `--on-breach`).
+  flag (`--budget-usd`, `--k`, `--shards`, `--on-breach`, `--admission-intent`). The intent environment
+  setting is `GW_AREA__ADMISSION_INTENT=review_only`; its CLI spelling is `--admission-intent review-only`.
+
+### Admission preflight
+
+Automatic admission is the default intent. Before credentials or provider calls, the resolved panel
+must be nonempty, score bands must satisfy finite `0 <= reject_below <= accept_threshold <= 1`, and
+the effective-count floors must be finite and in range (`min_n_eff >= 0`, ratio in `[0,1]`). The
+correlation prior is finite in `[0,1]` and must be positive and nonidentity for multiple judges.
+
+Under equal cold-start weights, `d` decisive votes have
+`n_eff = d / (1 + (d - 1) * correlation_rho)`. Preflight considers every `d` from one through the
+number of judges, because uncertain votes are excluded. Some `d` must meet both the absolute and
+relative floors. The default prior `0.7` and absolute floor `1.5` cannot do so, even with a larger
+panel. `review_only` bypasses this attainability check while keeping all numeric safeguards. Its
+intent is stored with each candidate; otherwise admitted candidates remain `NeedsReview` on replay
+and rederivation. Verifier hard failures still reject.
+
+**An attainable example under an assumed prior:** the following two-judge panel assumes `rho = 0.2`.
+Two decisive judges then give `n_eff = 1.667` and `n_eff/d = 0.833`, clearing both stated floors.
+This is a declared assumption, not measured calibration or evidence of judge independence. Use a
+new run ID, such as `automatic-001`, when collecting under this configuration.
+
+```toml
+[area]
+admission_intent = "automatic"
+correlation_rho = 0.2
+k = 3                         # candidate answers per prompt; there are two judges below
+
+[area.thresholds]
+accept_threshold = 0.80
+reject_below = 0.60
+min_n_eff = 1.5
+min_n_eff_ratio = 0.7
+
+[[area.judges]]
+slug = "deepseek/deepseek-v4-pro"
+family = "deepseek"
+
+[[area.judges]]
+slug = "z-ai/glm-5.2"
+family = "glm"
+```
 
 ---
 

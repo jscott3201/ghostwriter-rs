@@ -69,7 +69,7 @@ pub use execution_evidence::{
 };
 
 // --- §1.7 judging (LLM panel rail) + folded judge sampling policy ---
-pub use judging::{JudgeSampling, JudgeVote, Judging, Verdict};
+pub use judging::{AdmissionIntent, JudgeSampling, JudgeVote, Judging, Verdict};
 
 // --- §1.13 reasoning quality (per-step CoT) ---
 pub use reasoning_quality::{ReasoningQuality, StepAggregation, StepVerdict};

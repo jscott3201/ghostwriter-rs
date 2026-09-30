@@ -288,7 +288,8 @@ async fn judge(
     // score is not a substitute for ground truth that could not be obtained, so such a record is
     // held for review without spending a judge token either.
     let outcome = if verifier_grade.is_hard_reject() || verifier_grade.blocks_admission() {
-        let grader = HybridGrader::new(area.thresholds);
+        let grader =
+            HybridGrader::new(area.thresholds).with_admission_intent(area.intent_for(&rec));
         // An empty correlation matrix is fine here (the panel is never consulted in either case).
         grader.grade(
             Some(&verifier_grade),
@@ -316,6 +317,7 @@ async fn grade_and_consense(
     area: &AreaConfig,
     verifier_grade: gw_judge::VerifierGrade,
 ) -> Result<GradeOutcome> {
+    area.assess_admission()?;
     let content_hash = record_hash(rec)?;
     let candidate_render = gw_format::render(
         &rec.messages,
@@ -334,7 +336,7 @@ async fn grade_and_consense(
     .await?;
 
     let r = crate::grade::correlation_prior(panel.len(), area.correlation_rho)?;
-    let grader = HybridGrader::new(area.thresholds);
+    let grader = HybridGrader::new(area.thresholds).with_admission_intent(area.intent_for(rec));
     let outcome = grader.grade(
         Some(&verifier_grade),
         &panel,
@@ -358,11 +360,16 @@ pub const REVISE_RETRY_TAG: &str = "revise_retry";
 /// `attempt = 1` retry) that judges `Revise` AGAIN is mapped straight to `Rejected` — it never writes
 /// a SECOND `Revising` transition. So there is exactly one `revising` per logical record.
 async fn reconcile(
-    rec: TrainingRecord,
+    mut rec: TrainingRecord,
     clients: &Clients,
     area: &AreaConfig,
 ) -> Result<TrainingRecord> {
     let decision = crate::grade::decision_from_judging(&rec, area)?;
+    rec.judging.admission_intent = area.intent_for(&rec);
+    if rec.judging.admission_intent == gw_schema::AdmissionIntent::ReviewOnly {
+        rec.judging.verdict = decision.to_schema_verdict();
+        rec.judging.verdict_reason = Some(decision.reason().as_str().into());
+    }
     let already_revised = rec.tags.iter().any(|t| t == REVISE_RETRY_TAG);
     let (to, detail) = match (&decision, already_revised) {
         // A second revise on the retry is downgraded to a conservative terminal Reject (the bound).

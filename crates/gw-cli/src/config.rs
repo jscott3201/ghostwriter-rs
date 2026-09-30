@@ -1,9 +1,10 @@
 //! The figment-layered run configuration (CONFIG.md: TOML file → env → clap overrides).
 //!
-//! [`Config`] is the effective, validated configuration a `gen run` / `gen tui` / `gen replay` reads.
+//! [`Config`] is the layered configuration a `gen run` / `gen tui` / `gen replay` reads. Admission
+//! preflight runs on the resolved area after CLI overrides, before live provider construction.
 //! It is assembled by [`Config::load`] from three layers, lowest precedence first:
 //!
-//! 1. **the built-in [`Default`]** (so a missing file still yields a runnable shape);
+//! 1. **the built-in [`Default`]** (so a missing file still yields a deserializable shape);
 //! 2. **a TOML file** (`--config`), if supplied;
 //! 3. **environment variables** prefixed `GW_` (e.g. `GW_BUDGET_USD=5.0`), via figment's `Env`.
 //!
@@ -33,7 +34,9 @@ use serde::{Deserialize, Serialize};
 
 use gw_engine::AreaConfig;
 use gw_judge::{AreaThresholds, PanelJudge};
-use gw_schema::{BudgetBreach, CotPolicy, EmbeddingConfig, ReasoningEffort, TrlFormat};
+use gw_schema::{
+    AdmissionIntent, BudgetBreach, CotPolicy, EmbeddingConfig, ReasoningEffort, TrlFormat,
+};
 
 /// The default SQLite store path when none is configured.
 pub const DEFAULT_DB_PATH: &str = "gw-run.sqlite";
@@ -101,6 +104,8 @@ pub struct ExportSettings {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AreaSettings {
+    /// Automatic admission or explicit review-only collection (numeric safeguards still apply).
+    pub admission_intent: AdmissionIntent,
     /// The training-area name (stamped into provenance + the record id prefix).
     pub training_area: String,
     /// The teacher model slug.
@@ -117,7 +122,8 @@ pub struct AreaSettings {
     pub cot_required: bool,
     /// Best-of-k fan-out size (clamped to >= 1 by the engine).
     pub k: u32,
-    /// The cold-start inter-judge correlation prior `rho` (NEVER identity for `k > 1`).
+    /// The cold-start inter-judge correlation prior `rho` (nonidentity for multiple judges,
+    /// independently of generation's best-of-k setting).
     pub correlation_rho: f64,
     /// The judge panel.
     pub judges: Vec<JudgeSettings>,
@@ -138,6 +144,7 @@ pub struct AreaSettings {
 impl Default for AreaSettings {
     fn default() -> Self {
         Self {
+            admission_intent: AdmissionIntent::Automatic,
             training_area: "general".to_string(),
             teacher_slug: "z-ai/glm-5.2".to_string(),
             teacher_max_tokens: None,
@@ -348,6 +355,7 @@ impl Config {
             &self.area.rubric,
         )
         .with_k(self.area.k)
+        .with_admission_intent(self.area.admission_intent)
         .with_correlation_rho(self.area.correlation_rho)
         .with_cot_required(self.area.cot_required)
         .with_thresholds(self.area.thresholds.into());
@@ -366,13 +374,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn defaults_are_runnable_without_a_file() {
+    fn defaults_load_without_a_file_but_need_a_generation_panel() {
         let cfg = Config::load(None).expect("defaults load");
         assert_eq!(cfg.db, PathBuf::from(DEFAULT_DB_PATH));
         assert_eq!(cfg.provider_base_url, gw_providers::DEFAULT_BASE_URL);
         assert_eq!(cfg.on_breach, BudgetBreach::Drain);
         assert_eq!(cfg.area.k, gw_engine::DEFAULT_K);
         assert!(cfg.export.is_none());
+        assert!(cfg.area_config().assess_admission().is_err());
     }
 
     #[test]

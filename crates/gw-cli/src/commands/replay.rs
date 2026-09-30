@@ -25,6 +25,9 @@ pub async fn replay(args: ReplayArgs) -> anyhow::Result<()> {
     if let Some(db) = &args.db {
         config.db = db.clone();
     }
+    if let Some(intent) = args.admission_intent {
+        config.area.admission_intent = intent.into();
+    }
     config.validate_run_control()?;
     let source = FileSeedSource::from_prompts_file(&args.prompts, args.shards)?;
 
@@ -39,7 +42,7 @@ pub async fn replay(args: ReplayArgs) -> anyhow::Result<()> {
         .context("resuming the engine run")?;
 
     println!(
-        "resumed run {} {} — admitted {}, rejected {}, errored {}",
+        "resumed run {} {} — admitted {}, rejected {}, needs_review {}, errored {}",
         args.run_id,
         if report.completed {
             "completed"
@@ -48,6 +51,7 @@ pub async fn replay(args: ReplayArgs) -> anyhow::Result<()> {
         },
         report.admitted,
         report.rejected,
+        report.needs_review,
         report.errored,
     );
     Ok(())
