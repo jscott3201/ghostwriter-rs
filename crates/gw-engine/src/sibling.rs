@@ -349,9 +349,12 @@ async fn generate_and_persist(
     let priors = crate::priors::snapshot(&group.clients.priors, &item_id);
     let gated: GatedUserTurn = synthesize_user_turn(
         group.seed.candidate.clone(),
-        group.clients.embedder.as_ref(),
+        &group
+            .clients
+            .embedder_for(rid, gw_schema::AttemptPurpose::CandidateQc),
         priors.as_ref(),
-    )?;
+    )
+    .await?;
     drop(priors);
     if !gated.passed() {
         return Err(EngineError::Generate(
@@ -442,7 +445,13 @@ async fn generate_assistant_with_truncation_retry(
     call: &TeacherCall,
     control: RunControl<'_>,
 ) -> Result<GeneratedTeacherAttempt> {
-    let err = match generate_assistant(clients.teacher.as_ref(), gated, call).await {
+    let err = match generate_assistant(
+        &clients.teacher_for(rid, gw_schema::AttemptPurpose::Initial),
+        gated,
+        call,
+    )
+    .await
+    {
         Ok(turn) => {
             return Ok(GeneratedTeacherAttempt {
                 turn,
@@ -467,7 +476,13 @@ async fn generate_assistant_with_truncation_retry(
 
     let mut retry = call.clone();
     retry.max_tokens = retry_tokens;
-    match generate_assistant(clients.teacher.as_ref(), gated, &retry).await {
+    match generate_assistant(
+        &clients.teacher_for(rid, gw_schema::AttemptPurpose::TruncationRetry),
+        gated,
+        &retry,
+    )
+    .await
+    {
         Ok(turn) => Ok(GeneratedTeacherAttempt { turn, call: retry }),
         Err(err @ GenerateError::TruncatedReasoning { cost_usd, .. }) => {
             charge_truncated_attempt(clients, rid, cost_usd);

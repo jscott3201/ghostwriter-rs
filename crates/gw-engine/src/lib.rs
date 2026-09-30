@@ -63,6 +63,7 @@
 //! so unit + integration tests run over fakes + `Store::open_in_memory` — NO network, deterministic. A
 //! live test is `#[ignore]` + key-gated.
 
+mod attempts;
 mod budget;
 mod checkpoint;
 mod clients;

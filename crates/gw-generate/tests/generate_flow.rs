@@ -158,6 +158,7 @@ async fn assistant_assembly_keeps_reasoning_a_sibling_of_clean_content() {
         &NullEmbedder,
         &[],
     )
+    .await
     .unwrap();
     assert!(gated.passed());
 
@@ -212,7 +213,9 @@ async fn gate_failure_blocks_teacher_spend() {
     // candidate not-answerable, then assert the exploding provider is NEVER polled.
     let mut cand = candidate("dup", VerificationKind::NumericMatch);
     cand.answerable = false;
-    let gated = synthesize_user_turn(cand, &NullEmbedder, &[]).unwrap();
+    let gated = synthesize_user_turn(cand, &NullEmbedder, &[])
+        .await
+        .unwrap();
     assert!(!gated.passed());
 
     let call = TeacherCall::new(
@@ -240,6 +243,7 @@ async fn best_of_k_fan_out_produces_distinct_indexed_siblings() {
         &NullEmbedder,
         &[],
     )
+    .await
     .unwrap();
 
     let mut records = Vec::new();
@@ -314,6 +318,7 @@ async fn truncated_cot_fails_loud() {
         &NullEmbedder,
         &[],
     )
+    .await
     .unwrap();
     let call = TeacherCall::new(
         Teacher::Glm52.slug(),
@@ -335,7 +340,9 @@ async fn adversarial_refusal_expected_turn_is_gated_in_and_generates() {
         VerificationKind::RefusalExpected,
     );
     cand.in_scope = false;
-    let gated = synthesize_user_turn(cand, &NullEmbedder, &[]).unwrap();
+    let gated = synthesize_user_turn(cand, &NullEmbedder, &[])
+        .await
+        .unwrap();
     assert!(gated.passed());
 
     let refusal_script = vec![StreamDelta {
@@ -374,7 +381,9 @@ async fn structured_refusal_field_lands_in_assembled_record_content() {
         VerificationKind::RefusalExpected,
     );
     cand.in_scope = false;
-    let gated = synthesize_user_turn(cand, &NullEmbedder, &[]).unwrap();
+    let gated = synthesize_user_turn(cand, &NullEmbedder, &[])
+        .await
+        .unwrap();
 
     let refusal_script = vec![StreamDelta {
         refusal: Some("I won't delete production data.".into()),

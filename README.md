@@ -10,8 +10,8 @@
 ghostwriter-rs drives a **teacher** model to produce full chain-of-thought reasoning, runs each
 trace through a deterministic **verifier** and a model **judge panel**, admits only the traces that
 earn it, and exports the winners as a model-agnostic supervised-fine-tuning (SFT) dataset. The whole
-run is event-sourced: it spends a budget you set, resumes after a crash without re-spending the
-teacher, and records the full provenance of every decision.
+run persists lifecycle transitions, reuses completed teacher outputs on resume, and records the
+model requests and grading evidence it observes.
 
 It is built for one job — **minting high-quality reasoning data you can trust** — and it treats every
 expensive call (teacher, judge) as something to be budgeted, graded, and accounted for.
@@ -32,7 +32,7 @@ onto a few modes. ghostwriter-rs makes the quality bar **explicit and enforced**
 - a **judge panel** scores each trace against a rubric, and consensus is discounted when judges are
   correlated (so nine lookalike judges don't masquerade as nine independent votes);
 - **best-of-k** generates several candidates per prompt and admits only the best;
-- a hard **budget** governs spend, with a defined policy for what happens when it's reached.
+- a **budget threshold** limits new dispatch using the current accounting projection.
 
 The output is a self-contained Parquet dataset with an embedded manifest, ready to render into the
 chat template of your target student model.
@@ -265,6 +265,66 @@ For independent version-1 identity implementations:
 
 ---
 
+## Physical request receipts
+
+Engine runs record physical chat and embedding attempts in SQLite. Each built-in HTTP client
+awaits a durable intent immediately before its POST, after any rate-limit wait. An intent failure
+prevents that request. Intentional chat retries each receive a new receipt; automatic redirects
+and reqwest protocol retries are disabled for chat and embeddings. The HTTP/2 regression fixture
+enables HTTP/2 only in test builds and exercises a real `REFUSED_STREAM` response through the
+same client-builder retry policy.
+
+A receipt binds the run and a fresh launch ID to an optional shard, intended record, role, purpose,
+requested model, sanitized endpoint, exact request-body digest and retry ordinal. Intended records
+need not exist yet. Context travels outside the serialized model request, so it does not alter
+teacher sampling or judge-cache fingerprints. The captured response identifiers describe what the
+backend reported; absent model revisions remain absent.
+
+| Role | Purposes |
+|---|---|
+| Teacher | Initial generation, truncation retry, revision |
+| Judge | One panel member's grade |
+| Embedding | Candidate QC, newly admitted prior, prior rebuilt on resume |
+
+`Store::model_attempts(run_id)` returns receipts. `Store::model_launches(run_id)` returns the actual
+injected clients' capabilities assessed at each launch. Custom implementations default to
+`Unknown`; `NullEmbedder` explicitly performs no model requests. A declaration is a cooperative
+extension contract. Wrapping a logical call or accepting a no-op callback does not establish its
+hidden transmission behavior. Direct provider calls outside an observed engine context have no
+run-owned receipt.
+
+Usage fields are optional evidence. A reported zero differs from missing cost, and negative,
+non-finite or malformed cost is invalid. Counts accept unsigned integers and integer strings;
+fractional or overflowing counts are marked invalid. Metadata extraction is independent of the
+teacher, judge and vector parsers, including malformed output. An observed SSE response continues
+to drain metadata after its first content-decoding error and returns that original error after
+transport settles. Repeated cumulative snapshots are never added together; contradictory values
+remain visible. Token deltas with unchanged metadata do not write the database.
+
+Transport settlement and output interpretation are separate: a completed HTTP response can
+contain an invalid grade or truncated reasoning. Elapsed milliseconds measure wall time from the
+persisted intent to settlement; they do not measure GPU compute. Accounting failures are fatal
+and cannot become an automatic resend or a skipped prior-building warning. A committed admission
+remains recorded if its subsequent prior embedding fails.
+
+Request observation uses short write transactions. Concurrent unknown-priced calls can progress
+within the engine's existing shard and sibling bounds. Embedding calls are asynchronous, including
+the candidate gate, so a waiting candidate does not suspend an active sibling stream.
+
+**Current accounting limits:** this receipt layer records attempts without certifying complete
+run-wide history. Existing creation APIs leave history explicitly `Unknown`, including an empty
+ledger. Complete-from-creation qualification requires a future atomic run/coverage initialization.
+The current CLI/TUI budget and restart summaries still use legacy record-derived totals, which
+omit some requests. Receipt-based monetary admission, replay totals, cache-origin links and
+reporting remain to be integrated. A dispatch threshold cannot guarantee an invoice ceiling.
+
+Dropping a request performs no background persistence or drain. Process loss after intent leaves
+an unresolved receipt: it may or may not have transmitted. Resuming does not establish remote
+exactly-once execution. The current SQLite durability settings and receipts do not constitute
+power-loss qualification or provider-invoice reconciliation.
+
+---
+
 ## Configuration
 
 Configuration is layered, lowest precedence first: **built-in defaults → TOML file (`--config`) →
@@ -274,7 +334,7 @@ requires a nonempty judge panel and a valid admission configuration before any p
 ```toml
 # ─── run-wide ───────────────────────────────────────────────────────────────
 db          = "gw-run.sqlite"   # SQLite store: run state, queue, provenance
-budget_usd  = 5.0               # hard spend cap — the primary guard (default 5.0)
+budget_usd  = 5.0               # legacy dispatch threshold; see accounting limits below
 on_breach   = "drain"           # at the cap: "drain" (let in-flight finish) | "abort"
 provider_base_url = "https://openrouter.ai/api/v1"   # OpenAI-compatible endpoint
 provider_rpm      = 60          # per-lane requests/min for the rate limiter

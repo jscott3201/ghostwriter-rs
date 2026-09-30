@@ -11,12 +11,15 @@ use std::sync::Arc;
 use reqwest::Client as HttpClient;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue, RETRY_AFTER};
 
+use crate::CallObservation;
 use crate::error::ProviderError;
 use crate::limiter::RateLimiter;
+use crate::observation::ActiveAttempt;
 use crate::request::ChatRequest;
 use crate::retry::{RetryPolicy, retry};
 use crate::sse::decode_sse;
 use crate::{DeltaStream, Provider, StreamChatFuture};
+use gw_schema::TransportOutcome;
 
 /// The default OpenRouter base URL.
 pub const DEFAULT_BASE_URL: &str = "https://openrouter.ai/api/v1";
@@ -33,6 +36,8 @@ pub struct OpenRouterProviderBuilder {
     title: Option<String>,
     rpm: u32,
     policy: RetryPolicy,
+    #[cfg(test)]
+    http2_prior_knowledge: bool,
 }
 
 impl Default for OpenRouterProviderBuilder {
@@ -44,11 +49,19 @@ impl Default for OpenRouterProviderBuilder {
             title: None,
             rpm: 60,
             policy: RetryPolicy::default(),
+            #[cfg(test)]
+            http2_prior_knowledge: false,
         }
     }
 }
 
 impl OpenRouterProviderBuilder {
+    #[cfg(test)]
+    pub(crate) fn http2_for_test(mut self) -> Self {
+        self.http2_prior_knowledge = true;
+        self
+    }
+
     /// Override the OpenAI-compatible base URL (e.g. an OMLX local endpoint). Trailing slashes
     /// are trimmed.
     #[must_use]
@@ -130,6 +143,15 @@ impl OpenRouterProviderBuilder {
 
         let http = HttpClient::builder()
             .default_headers(headers)
+            .redirect(reqwest::redirect::Policy::none())
+            .retry(reqwest::retry::never());
+        #[cfg(test)]
+        let http = if self.http2_prior_knowledge {
+            http.http2_prior_knowledge()
+        } else {
+            http
+        };
+        let http = http
             .build()
             .map_err(|e| ProviderError::Config(format!("http client build failed: {e}")))?;
 
@@ -187,44 +209,104 @@ impl OpenRouterProvider {
 
     /// Issue the POST and return the raw response, classifying non-2xx statuses (and parsing a
     /// `Retry-After` on 429) into [`ProviderError`]. Retried by the caller.
-    async fn send_once(&self, req: &ChatRequest) -> Result<reqwest::Response, ProviderError> {
+    async fn send_once(
+        &self,
+        req: &ChatRequest,
+        body: &[u8],
+        observation: Option<&CallObservation>,
+        ordinal: u32,
+    ) -> Result<(reqwest::Response, Option<ActiveAttempt>), ProviderError> {
         self.limiter.until_ready().await;
-        let resp = self
-            .http
-            .post(self.completions_url())
-            .json(req)
-            .send()
-            .await
-            .map_err(ProviderError::from)?;
-
-        let status = resp.status();
+        let endpoint = self.completions_url();
+        let mut attempt = match observation {
+            Some(call) => Some(call.begin(body, &req.model, &endpoint, ordinal).await?),
+            None => None,
+        };
+        let response = self.http.post(&endpoint).body(body.to_vec()).send().await;
+        let response = match response {
+            Ok(response) => response,
+            Err(error) => {
+                let error = ProviderError::from(error);
+                if let Some(attempt) = attempt {
+                    attempt
+                        .settle(TransportOutcome::Failed, None, Some(error.to_string()))
+                        .await?;
+                }
+                return Err(error);
+            }
+        };
+        let status = response.status();
         if status.is_success() {
-            return Ok(resp);
+            return Ok((response, attempt));
         }
-        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-            let retry_after = parse_retry_after(resp.headers());
-            return Err(ProviderError::RateLimited { retry_after });
+        let retry_after = parse_retry_after(response.headers());
+        let bytes = response.bytes().await;
+        let error = match bytes {
+            Ok(bytes) => {
+                if let Some(attempt) = &mut attempt
+                    && let Some(metadata) = crate::metadata::extract_json(&bytes)
+                {
+                    attempt.metadata(metadata).await.map_err(|error| {
+                        error.with_primary(format!("http status {}", status.as_u16()))
+                    })?;
+                }
+                if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                    ProviderError::RateLimited { retry_after }
+                } else {
+                    ProviderError::from_status(
+                        status.as_u16(),
+                        Some(truncate(&String::from_utf8_lossy(&bytes), 512)),
+                    )
+                }
+            }
+            Err(error) => ProviderError::from(error),
+        };
+        if let Some(attempt) = attempt {
+            attempt
+                .settle(
+                    TransportOutcome::HttpError,
+                    Some(status.as_u16()),
+                    Some(error.to_string()),
+                )
+                .await?;
         }
-        let code = status.as_u16();
-        let body = resp.text().await.ok().map(|b| truncate(&b, 512));
-        Err(ProviderError::from_status(code, body))
+        Err(error)
     }
 
-    /// The async body of [`Provider::stream_chat`], factored out so the trait method can box it.
-    async fn stream_chat_impl(&self, req: ChatRequest) -> Result<DeltaStream, ProviderError> {
-        // Retry the *connection* (governed + backed off); once a 2xx response is in hand, the
-        // stream itself is decoded. A mid-stream reset surfaces as a terminal item to the
-        // consumer (the engine decides whether to re-dispatch the whole job).
-        let response = retry(self.policy, || self.send_once(&req)).await?;
-        let byte_stream = response.bytes_stream();
-        let decoded = decode_sse(byte_stream);
-        Ok(Box::pin(decoded))
+    async fn stream_chat_impl(
+        &self,
+        req: ChatRequest,
+        observation: Option<CallObservation>,
+    ) -> Result<DeltaStream, ProviderError> {
+        let body = serde_json::to_vec(&req).map_err(|e| ProviderError::Config(e.to_string()))?;
+        let mut ordinal = 0;
+        let (response, attempt) = retry(self.policy, || {
+            let index = ordinal;
+            ordinal += 1;
+            self.send_once(&req, &body, observation.as_ref(), index)
+        })
+        .await?;
+        match attempt {
+            Some(attempt) => Ok(crate::observed_sse::stream(response, attempt)),
+            None => Ok(Box::pin(decode_sse(response.bytes_stream()))),
+        }
     }
 }
 
 impl Provider for OpenRouterProvider {
+    fn accounting_capability(&self) -> gw_schema::AccountingCapability {
+        gw_schema::AccountingCapability::PhysicalAttemptsV1
+    }
+    fn stream_chat_observed(
+        &self,
+        req: ChatRequest,
+        observation: CallObservation,
+    ) -> StreamChatFuture<'_> {
+        Box::pin(self.stream_chat_impl(req, Some(observation)))
+    }
+
     fn stream_chat(&self, req: ChatRequest) -> StreamChatFuture<'_> {
-        Box::pin(self.stream_chat_impl(req))
+        Box::pin(self.stream_chat_impl(req, None))
     }
 }
 

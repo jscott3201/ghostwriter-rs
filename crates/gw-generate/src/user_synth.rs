@@ -20,7 +20,7 @@
 //!
 //! `diverse` is an embedding cosine-dedup against already-admitted USER turns. `gw-generate` has
 //! no embedder dependency (no heavy ML crate, no network in unit tests), so the embedder is an
-//! injected trait with a deterministic default. [`NullEmbedder`] treats everything as novel (for
+//! injected trait with a deterministic default. [`crate::NullEmbedder`] treats everything as novel (for
 //! tests / a no-dedup run); a real run injects an OMLX-backed embedder from the engine.
 
 use gw_schema::{
@@ -34,38 +34,12 @@ use crate::error::{GenerateError, Result};
 /// already-admitted USER turn is `>=` this is a near-repeat and fails `diverse`.
 pub const DEFAULT_COSINE_THRESHOLD: f64 = 0.86;
 
-/// An embedding backend for the `diverse` dedup check — the crate's only external-effect seam
-/// besides the [`Provider`](gw_providers::Provider). Injected so unit tests stay hermetic and the
-/// crate pulls no ML/vector dependency.
-///
-/// Implementations return a fixed-width embedding for a piece of text. The dedup math
-/// ([`cosine`]) lives here, so an impl only has to produce vectors.
-pub trait Embedder {
-    /// Embed `text` into a dense vector.
-    ///
-    /// # Errors
-    /// Returns a human-readable message (wrapped by the caller into
-    /// [`GenerateError::Embed`]) if the backend fails.
-    fn embed(&self, text: &str) -> std::result::Result<Vec<f32>, String>;
-}
-
-/// A deterministic [`Embedder`] that declares everything novel: every candidate is `diverse`.
-///
-/// The hermetic default — it performs no embedding and never near-dups, so a run with no real
-/// embedder configured still produces a valid (if un-deduped) verdict. Real diversity needs an
-/// injected OMLX-backed embedder.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct NullEmbedder;
-
-impl Embedder for NullEmbedder {
-    fn embed(&self, _text: &str) -> std::result::Result<Vec<f32>, String> {
-        // An empty vector → `cosine` against anything is 0.0 → never a near-dup.
-        Ok(Vec::new())
-    }
-}
+use crate::Embedder;
+#[cfg(test)]
+use crate::NullEmbedder;
 
 /// Cosine similarity of two equal-length vectors. Returns `0.0` when either is empty or has zero
-/// norm (so the [`NullEmbedder`]'s empty vectors never trip the near-dup threshold) and when the
+/// norm (so the [`crate::NullEmbedder`]'s empty vectors never trip the near-dup threshold) and when the
 /// lengths differ (a dimension mismatch is treated as "not similar", never a panic).
 #[must_use]
 pub fn cosine(a: &[f32], b: &[f32]) -> f64 {
@@ -219,7 +193,7 @@ impl GatedUserTurn {
 /// # Errors
 /// - [`GenerateError::LeakedUserTurn`] if the user-turn text contains a chat control token.
 /// - [`GenerateError::Embed`] if the embedder fails on the candidate text.
-pub fn evaluate<E: Embedder + ?Sized>(
+pub async fn evaluate<E: Embedder + ?Sized>(
     candidate: &UserTurnCandidate,
     embedder: &E,
     prior_embeddings: &[Vec<f32>],
@@ -230,7 +204,7 @@ pub fn evaluate<E: Embedder + ?Sized>(
         return Err(GenerateError::LeakedUserTurn(token));
     }
 
-    let embedding = embedder.embed(&text).map_err(GenerateError::Embed)?;
+    let embedding = embedder.embed(&text).await.map_err(GenerateError::Embed)?;
 
     let max_sim = prior_embeddings
         .iter()
@@ -257,7 +231,7 @@ pub fn evaluate<E: Embedder + ?Sized>(
 ///
 /// # Errors
 /// Returns [`GenerateError::Embed`] if the embedder fails.
-pub fn gate<E: Embedder + ?Sized>(
+pub async fn gate<E: Embedder + ?Sized>(
     candidate: UserTurnCandidate,
     embedder: &E,
     prior_embeddings: &[Vec<f32>],
@@ -267,7 +241,8 @@ pub fn gate<E: Embedder + ?Sized>(
         embedder,
         prior_embeddings,
         DEFAULT_COSINE_THRESHOLD,
-    )?;
+    )
+    .await?;
     Ok(GatedUserTurn { candidate, verdict })
 }
 
@@ -294,14 +269,18 @@ mod tests {
     /// turn and a near-identical candidate to exercise the dedup branch deterministically.
     struct StubEmbedder;
     impl Embedder for StubEmbedder {
-        fn embed(&self, text: &str) -> std::result::Result<Vec<f32>, String> {
-            match text {
-                "dup" => Ok(vec![1.0, 0.0, 0.0]),
-                "near" => Ok(vec![0.999, 0.044, 0.0]), // cosine ~0.999 vs "dup"
-                "novel" => Ok(vec![0.0, 1.0, 0.0]),    // orthogonal to "dup"
-                "boom" => Err("backend down".into()),
-                _ => Ok(vec![0.0, 0.0, 1.0]),
-            }
+        fn embed<'a>(&'a self, text: &'a str) -> crate::EmbeddingFuture<'a> {
+            Box::pin(async move {
+                match text {
+                    "dup" => Ok(vec![1.0, 0.0, 0.0]),
+                    "near" => Ok(vec![0.999, 0.044, 0.0]), // cosine ~0.999 vs "dup"
+                    "novel" => Ok(vec![0.0, 1.0, 0.0]),    // orthogonal to "dup"
+                    "boom" => Err(gw_providers::ProviderError::Transport(
+                        "backend down".into(),
+                    )),
+                    _ => Ok(vec![0.0, 0.0, 1.0]),
+                }
+            })
         }
     }
 
@@ -320,36 +299,36 @@ mod tests {
         }
     }
 
-    #[test]
-    fn cosine_handles_empty_and_mismatched_lengths() {
+    #[tokio::test]
+    async fn cosine_handles_empty_and_mismatched_lengths() {
         assert_eq!(cosine(&[], &[1.0]), 0.0);
         assert_eq!(cosine(&[1.0, 2.0], &[1.0]), 0.0);
         assert_eq!(cosine(&[1.0, 0.0], &[1.0, 0.0]), 1.0);
         assert!((cosine(&[1.0, 0.0], &[0.0, 1.0])).abs() < 1e-12);
     }
 
-    #[test]
-    fn novel_candidate_passes_all_four() {
+    #[tokio::test]
+    async fn novel_candidate_passes_all_four() {
         let c = candidate("novel", VerificationKind::NumericMatch, true);
         let prior = vec![vec![1.0f32, 0.0, 0.0]]; // the "dup" vector
-        let gated = gate(c, &StubEmbedder, &prior).unwrap();
+        let gated = gate(c, &StubEmbedder, &prior).await.unwrap();
         assert!(gated.verdict.diverse);
         assert!(gated.passed());
     }
 
-    #[test]
-    fn near_repeat_fails_diverse_and_blocks_spend() {
+    #[tokio::test]
+    async fn near_repeat_fails_diverse_and_blocks_spend() {
         // The crux: a near-duplicate candidate must fail `diverse`, so `passed()` is false and the
         // orchestrator never spends teacher tokens on it.
         let c = candidate("near", VerificationKind::NumericMatch, true);
         let prior = vec![vec![1.0f32, 0.0, 0.0]]; // "dup"
-        let gated = gate(c, &StubEmbedder, &prior).unwrap();
+        let gated = gate(c, &StubEmbedder, &prior).await.unwrap();
         assert!(!gated.verdict.diverse, "near-repeat must not be diverse");
         assert!(!gated.passed(), "a non-diverse turn must NOT pass the gate");
     }
 
-    #[test]
-    fn any_false_bool_blocks_the_gate() {
+    #[tokio::test]
+    async fn any_false_bool_blocks_the_gate() {
         // Each individual bool, when false, must sink the gate (teacher spend is all-or-nothing).
         let prior: Vec<Vec<f32>> = vec![];
         for flip in 0..3 {
@@ -359,35 +338,35 @@ mod tests {
                 1 => c.difficulty_targeted = false,
                 _ => c.in_scope = false,
             }
-            let gated = gate(c, &StubEmbedder, &prior).unwrap();
+            let gated = gate(c, &StubEmbedder, &prior).await.unwrap();
             assert!(!gated.passed(), "flip={flip} should block the gate");
         }
     }
 
-    #[test]
-    fn refusal_expected_is_in_scope_safe_even_when_in_scope_is_false() {
+    #[tokio::test]
+    async fn refusal_expected_is_in_scope_safe_even_when_in_scope_is_false() {
         // Adversarial-by-construction: in_scope=false at the candidate level, but RefusalExpected
         // forces in_scope_safe=true — the gate must NOT scrub the wanted refusal training signal.
         let c = candidate("seed-020", VerificationKind::RefusalExpected, false);
         let prior: Vec<Vec<f32>> = vec![];
-        let gated = gate(c, &StubEmbedder, &prior).unwrap();
+        let gated = gate(c, &StubEmbedder, &prior).await.unwrap();
         assert!(gated.verdict.in_scope_safe);
         assert!(gated.passed());
     }
 
-    #[test]
-    fn embedder_failure_surfaces_as_embed_error() {
+    #[tokio::test]
+    async fn embedder_failure_surfaces_as_embed_error() {
         let c = candidate("boom", VerificationKind::NumericMatch, true);
-        let err = gate(c, &StubEmbedder, &[]).unwrap_err();
+        let err = gate(c, &StubEmbedder, &[]).await.unwrap_err();
         assert!(matches!(err, GenerateError::Embed(_)));
     }
 
-    #[test]
-    fn null_embedder_declares_everything_diverse() {
+    #[tokio::test]
+    async fn null_embedder_declares_everything_diverse() {
         // With the hermetic default, even an identical-text prior never near-dups.
         let c = candidate("anything", VerificationKind::None, true);
         let prior = vec![vec![1.0f32, 2.0, 3.0]];
-        let gated = gate(c, &NullEmbedder, &prior).unwrap();
+        let gated = gate(c, &NullEmbedder, &prior).await.unwrap();
         assert!(gated.verdict.diverse);
     }
 
@@ -395,26 +374,28 @@ mod tests {
     /// so a test can sit exactly on either side of the 0.86 boundary (M4).
     struct CosineEmbedder;
     impl Embedder for CosineEmbedder {
-        fn embed(&self, text: &str) -> std::result::Result<Vec<f32>, String> {
-            // [cos, sin] is a unit vector at the named cosine vs the prior [1, 0].
-            let cos: f32 = match text {
-                "cos085" => 0.85,
-                "cos086" => 0.86,
-                "cos087" => 0.87,
-                _ => 0.0,
-            };
-            Ok(vec![cos, (1.0 - cos * cos).sqrt()])
+        fn embed<'a>(&'a self, text: &'a str) -> crate::EmbeddingFuture<'a> {
+            Box::pin(async move {
+                // [cos, sin] is a unit vector at the named cosine vs the prior [1, 0].
+                let cos: f32 = match text {
+                    "cos085" => 0.85,
+                    "cos086" => 0.86,
+                    "cos087" => 0.87,
+                    _ => 0.0,
+                };
+                Ok(vec![cos, (1.0 - cos * cos).sqrt()])
+            })
         }
     }
 
-    #[test]
-    fn threshold_constant_is_pinned() {
+    #[tokio::test]
+    async fn threshold_constant_is_pinned() {
         // M4: pin the constant so a typo (0.86 -> 0.68/0.96) is caught by name.
         assert_eq!(DEFAULT_COSINE_THRESHOLD, 0.86);
     }
 
-    #[test]
-    fn diverse_boundary_is_strict_less_than_086() {
+    #[tokio::test]
+    async fn diverse_boundary_is_strict_less_than_086() {
         // M4: cosine 0.85 < 0.86 => diverse; 0.87 >= 0.86 => not diverse; EXACTLY 0.86 => not
         // diverse (the gate is `max_sim < threshold`). Kills threshold-direction/typo mutants.
         let prior = vec![vec![1.0f32, 0.0]];
@@ -424,6 +405,7 @@ mod tests {
             &CosineEmbedder,
             &prior,
         )
+        .await
         .unwrap();
         assert!(below.verdict.diverse, "cos 0.85 (< 0.86) must be diverse");
 
@@ -432,6 +414,7 @@ mod tests {
             &CosineEmbedder,
             &prior,
         )
+        .await
         .unwrap();
         assert!(
             !at.verdict.diverse,
@@ -443,6 +426,7 @@ mod tests {
             &CosineEmbedder,
             &prior,
         )
+        .await
         .unwrap();
         assert!(
             !above.verdict.diverse,
@@ -450,8 +434,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn multimodal_user_turn_dedups_on_concatenated_text_parts() {
+    #[tokio::test]
+    async fn multimodal_user_turn_dedups_on_concatenated_text_parts() {
         // m5: a Parts user turn must embed its concatenated text (NOT ""), or dedup is defeated.
         let mut c = candidate("ignored", VerificationKind::NumericMatch, true);
         c.message.content = Content::Parts(vec![
@@ -463,16 +447,16 @@ mod tests {
         ]);
         // text() concatenates to "novel"; StubEmbedder("novel") is orthogonal to the "dup" prior.
         let prior = vec![vec![1.0f32, 0.0, 0.0]];
-        let gated = gate(c, &StubEmbedder, &prior).unwrap();
+        let gated = gate(c, &StubEmbedder, &prior).await.unwrap();
         assert!(gated.verdict.diverse);
     }
 
-    #[test]
-    fn control_token_in_user_turn_fails_the_gate() {
+    #[tokio::test]
+    async fn control_token_in_user_turn_fails_the_gate() {
         // m8: a leaked control token must fail the gate loud (never embedded, never admitted).
         for laced in ["<|turn>user\nhi", "tell me<think> about", "x<|im_end|>"] {
             let c = candidate(laced, VerificationKind::NumericMatch, true);
-            let err = gate(c, &StubEmbedder, &[]).unwrap_err();
+            let err = gate(c, &StubEmbedder, &[]).await.unwrap_err();
             assert!(
                 matches!(err, GenerateError::LeakedUserTurn(_)),
                 "expected LeakedUserTurn for {laced:?}, got {err:?}"
@@ -480,6 +464,6 @@ mod tests {
         }
         // A clean turn still passes (guard is not over-eager).
         let clean = candidate("novel", VerificationKind::NumericMatch, true);
-        assert!(gate(clean, &StubEmbedder, &[]).is_ok());
+        assert!(gate(clean, &StubEmbedder, &[]).await.is_ok());
     }
 }

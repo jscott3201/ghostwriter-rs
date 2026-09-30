@@ -148,7 +148,10 @@ impl EngineError {
         match pe {
             // Construction-time misconfiguration (defense-in-depth — unreachable at the call site, but
             // unambiguously systemic if it ever surfaces).
-            ProviderError::MissingApiKey(_) | ProviderError::Config(_) => true,
+            ProviderError::MissingApiKey(_)
+            | ProviderError::Config(_)
+            | ProviderError::Accounting { .. }
+            | ProviderError::Cancelled => true,
             // The reachable trigger: a non-retryable AUTH status (invalid/revoked key) returned every
             // call. 401 Unauthorized, 403 Forbidden, 407 Proxy Authentication Required.
             ProviderError::Status {
@@ -169,7 +172,9 @@ impl EngineError {
     fn provider_source(&self) -> Option<&ProviderError> {
         match self {
             EngineError::Record { source, .. } => source.provider_source(),
-            EngineError::Generate(GenerateError::Provider(pe)) => Some(pe),
+            EngineError::Generate(GenerateError::Provider(pe) | GenerateError::Embed(pe)) => {
+                Some(pe)
+            }
             EngineError::Judge(JudgeError::Provider(pe)) => Some(pe),
             _ => None,
         }

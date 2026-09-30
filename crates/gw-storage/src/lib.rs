@@ -62,6 +62,7 @@
 //! ```
 
 mod artifact;
+mod attempts;
 mod cache;
 mod error;
 mod export;

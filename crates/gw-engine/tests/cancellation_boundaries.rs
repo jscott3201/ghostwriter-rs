@@ -13,9 +13,11 @@ use tokio_util::sync::CancellationToken;
 struct CancelOnEmbed(CancellationToken);
 
 impl gw_generate::Embedder for CancelOnEmbed {
-    fn embed(&self, _: &str) -> std::result::Result<Vec<f32>, String> {
-        self.0.cancel();
-        Ok(Vec::new())
+    fn embed<'a>(&'a self, _: &'a str) -> gw_generate::EmbeddingFuture<'a> {
+        Box::pin(async move {
+            self.0.cancel();
+            Ok(Vec::new())
+        })
     }
 }
 

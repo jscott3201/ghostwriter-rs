@@ -104,24 +104,32 @@ fn insert(priors: &Priors, item_id: String, vector: Vec<f32>) {
     state.exclusion_indices.clear();
 }
 
-pub(crate) fn append_record(priors: &Priors, embedder: &dyn Embedder, record: &TrainingRecord) {
+pub(crate) async fn append_record(
+    priors: &Priors,
+    embedder: &dyn Embedder,
+    record: &TrainingRecord,
+) -> crate::Result<()> {
     let Some(text) = user_turn_text(record) else {
         tracing::warn!(record_id = %record.record_id, "admitted record has no textual user turn; skipping embedding prior");
-        return;
+        return Ok(());
     };
     let Some(item_id) = record_item_id(&record.record_id) else {
         tracing::warn!(record_id = %record.record_id, "admitted record has no seed-item identity; skipping embedding prior");
-        return;
+        return Ok(());
     };
-    // Never hold the lock across the blocking embed call.
-    match embedder.embed(&text) {
+    // Never hold the lock across the asynchronous embed call.
+    match embedder.embed(&text).await {
         Ok(vector) => insert(priors, item_id, vector),
+        Err(error) if error.is_accounting() => {
+            return Err(gw_generate::GenerateError::Embed(error).into());
+        }
         Err(error) => tracing::warn!(
             record_id = %record.record_id,
             %error,
             "failed to embed admitted user turn; skipping embedding prior"
         ),
     }
+    Ok(())
 }
 
 pub(crate) fn user_turn_text(record: &TrainingRecord) -> Option<String> {

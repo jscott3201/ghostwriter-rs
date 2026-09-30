@@ -18,6 +18,20 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum ProviderError {
+    /// Durable observation failed; this must never authorize an automatic resend.
+    #[error("accounting failure during {stage}: {detail}; primary outcome: {primary:?}")]
+    Accounting {
+        /// Persistence boundary that failed.
+        stage: String,
+        /// Accounting failure, without request or response text.
+        detail: String,
+        /// Original transport or interpretation failure, when one already existed.
+        primary: Option<String>,
+    },
+    /// Caller cancelled before starting a request.
+    #[error("model request cancelled")]
+    Cancelled,
+
     /// A required secret was absent from the environment. Carries the **env var name**, never
     /// a value, so the message is safe to log.
     #[error("missing API key: environment variable `{0}` is not set")]
@@ -64,6 +78,21 @@ pub enum ProviderError {
 }
 
 impl ProviderError {
+    pub(crate) fn with_primary(mut self, outcome: String) -> Self {
+        if let Self::Accounting { primary, .. } = &mut self
+            && primary.is_none()
+        {
+            *primary = Some(outcome);
+        }
+        self
+    }
+
+    /// Whether this error must propagate through best-effort embedding/prior paths.
+    #[must_use]
+    pub fn is_accounting(&self) -> bool {
+        matches!(self, Self::Accounting { .. } | Self::Cancelled)
+    }
+
     /// `true` for the classes the retry helper should retry: transport faults, HTTP 429,
     /// HTTP 5xx, and mid-stream resets. Config / decode / non-429 4xx are terminal.
     #[must_use]
@@ -73,7 +102,9 @@ impl ProviderError {
             | ProviderError::RateLimited { .. }
             | ProviderError::StreamReset(_) => true,
             ProviderError::Status { retryable, .. } => *retryable,
-            ProviderError::MissingApiKey(_)
+            ProviderError::Accounting { .. }
+            | ProviderError::Cancelled
+            | ProviderError::MissingApiKey(_)
             | ProviderError::Config(_)
             | ProviderError::Decode(_) => false,
         }
