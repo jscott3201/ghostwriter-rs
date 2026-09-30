@@ -119,6 +119,9 @@ pub(crate) struct ContextProvider<'a> {
     observation: Option<ObservationContext>,
 }
 impl Provider for ContextProvider<'_> {
+    fn semantic_declaration(&self) -> Option<gw_schema::SemanticDeclaration> {
+        self.inner.semantic_declaration()
+    }
     fn stream_chat(&self, req: ChatRequest) -> StreamChatFuture<'_> {
         if self.observation.is_none()
             && self.inner.accounting_capability() != AccountingCapability::NoModelRequests
@@ -151,6 +154,9 @@ pub(crate) struct ContextEmbedder<'a> {
     observation: Option<ObservationContext>,
 }
 impl Embedder for ContextEmbedder<'_> {
+    fn semantic_declaration(&self) -> Option<gw_schema::SemanticDeclaration> {
+        self.inner.semantic_declaration()
+    }
     fn embed<'a>(&'a self, text: &'a str) -> EmbeddingFuture<'a> {
         match &self.observation {
             Some(context) => self.inner.embed_observed(text, context.call()),

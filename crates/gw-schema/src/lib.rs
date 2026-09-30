@@ -46,12 +46,17 @@ mod provenance;
 mod rating;
 mod reasoning_quality;
 mod record;
+mod run_manifest;
 mod sandbox;
 mod verification;
 mod verification_contract;
 
 // --- §1.11 the envelope ---
 pub use record::TrainingRecord;
+pub use run_manifest::{
+    ClientSemantics, InputPlanIdentity, RUN_MANIFEST_VERSION, RunManifest, SemanticDeclaration,
+    UnattestedDeployment,
+};
 
 // --- §1.3 conversation ---
 pub use message::{Content, ContentPart, FunctionCall, Message, ReasoningDetail, Role, ToolCall};

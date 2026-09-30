@@ -143,7 +143,10 @@ async fn export_without_run_filter_exports_every_admitted_record() {
         )],
     )
     .await;
-    store.create_run("run-B", "{}", Some(25.0)).await.unwrap();
+    store
+        .insert_historical_run("run-B", "{}", Some(25.0))
+        .await
+        .unwrap();
     store
         .put(&record(
             "b1",

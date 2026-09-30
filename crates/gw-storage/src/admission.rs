@@ -5,16 +5,14 @@ use gw_schema::{
     AdmissionDenial, AttemptIntent, AttemptReceipt, LaunchCoverage, PolicyState,
 };
 
-/// Inputs resolved before the atomic run/partition/policy/coverage registration boundary.
+/// Inputs resolved before atomic semantic-manifest and operational launch registration.
 pub struct LaunchRequest<'a> {
     /// Stable run identity.
     pub run_id: &'a str,
-    /// Resolved non-secret operational configuration.
-    pub config_json: &'a str,
-    /// Immutable seed partition count.
-    pub shard_count: usize,
-    /// Ordered prompt digest for the partition contract.
-    pub prompts_hash: &'a str,
+    /// Immutable, supported effective generation/admission contract.
+    pub manifest: gw_schema::RunManifest,
+    /// Whether an unknown run ID may be initialized.
+    pub mode: crate::RunMode,
     /// Explicit launch policy.
     pub policy: &'a AccountingPolicy,
     /// Actual injected teacher capability.
@@ -37,8 +35,12 @@ pub enum AttemptAdmission {
 }
 
 impl Store {
-    /// Atomically initialize a fresh run or validate its partition, and register current policy/coverage.
-    /// Existing runs without an atomic creation marker retain incomplete historical coverage.
+    /// Atomically initialize or compare the immutable manifest before registering current policy
+    /// and coverage. Compatible replay preserves original manifest bytes and creation time.
+    ///
+    /// # Errors
+    /// Rejects incompatible, unpinned, unsupported or unknown replay runs without mutation;
+    /// also returns policy/admission or storage failures.
     pub async fn register_accounting_launch(
         &self,
         request: LaunchRequest<'_>,
@@ -49,24 +51,19 @@ impl Store {
             ));
         }
         let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
-        let existing: Option<(Option<i64>, Option<String>)> =
-            sqlx::query_as("SELECT shard_count, prompts_hash FROM runs WHERE run_id = ?")
-                .bind(request.run_id)
-                .fetch_optional(&mut *tx)
-                .await?;
+        let existing: Option<crate::run_manifest::StoredManifest> = sqlx::query_as(
+            "SELECT config_json, shard_count, prompts_hash FROM runs WHERE run_id = ?",
+        )
+        .bind(request.run_id)
+        .fetch_optional(&mut *tx)
+        .await?;
         let fresh = existing.is_none();
-        if let Some((count, digest)) = &existing
-            && (*count != Some(request.shard_count as i64)
-                || digest.as_deref() != Some(request.prompts_hash))
-        {
-            return Err(StorageError::RunPartitionMismatch {
-                run_id: request.run_id.into(),
-                existing_shard_count: count.map_or("<missing>".into(), |count| count.to_string()),
-                existing_prompts_hash: digest.clone().unwrap_or_else(|| "<missing>".into()),
-                actual_shard_count: request.shard_count as i64,
-                actual_prompts_hash: request.prompts_hash.into(),
-            });
-        }
+        crate::run_manifest::check(
+            request.run_id,
+            existing.as_ref(),
+            &request.manifest,
+            request.mode,
+        )?;
         let prior = crate::accounting::policy(&mut tx, request.run_id).await?;
         let complete = fresh || prior.as_ref().is_some_and(|(_, complete, _)| *complete);
         let unknown = [request.teacher, request.judge, request.embedding].contains(&Cap::Unknown);
@@ -102,8 +99,15 @@ impl Store {
             epoch,
             policy: request.policy.clone(),
         };
-        sqlx::query("INSERT INTO runs (run_id, config_json, budget_usd, status, created_at, shard_count, prompts_hash) VALUES (?, ?, NULL, 'running', ?, ?, ?) ON CONFLICT(run_id) DO UPDATE SET config_json=excluded.config_json, budget_usd=NULL, status='running'")
-            .bind(request.run_id).bind(request.config_json).bind(now_rfc3339()).bind(request.shard_count as i64).bind(request.prompts_hash).execute(&mut *tx).await?;
+        if fresh {
+            sqlx::query("INSERT INTO runs (run_id, config_json, budget_usd, status, created_at, shard_count, prompts_hash) VALUES (?, ?, NULL, 'running', ?, ?, ?)")
+                .bind(request.run_id).bind(serde_json::to_string(&request.manifest)?).bind(now_rfc3339()).bind(request.manifest.input_plan.shard_items.len() as i64).bind(&request.manifest.input_plan.content_hash).execute(&mut *tx).await?;
+        } else {
+            sqlx::query("UPDATE runs SET status='running' WHERE run_id=?")
+                .bind(request.run_id)
+                .execute(&mut *tx)
+                .await?;
+        }
         sqlx::query("INSERT INTO run_accounting (run_id, policy_json, history_complete) VALUES (?, ?, ?) ON CONFLICT(run_id) DO UPDATE SET policy_json=excluded.policy_json, revision=revision+1")
             .bind(request.run_id).bind(serde_json::to_string(&policy)?).bind(complete).execute(&mut *tx).await?;
         let launch_id: String = sqlx::query_scalar("SELECT lower(hex(randomblob(16)))")

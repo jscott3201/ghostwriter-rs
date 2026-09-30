@@ -1,12 +1,12 @@
 //! Transactional policy authority, durable evidence, and conservative live ownership.
+mod common;
 use gw_schema::*;
 use gw_storage::{AttemptAdmission, LaunchRequest, StorageError, Store};
 fn request<'a>(run: &'a str, policy: &'a AccountingPolicy) -> LaunchRequest<'a> {
     LaunchRequest {
         run_id: run,
-        config_json: "{}",
-        shard_count: 1,
-        prompts_hash: "prompt",
+        manifest: common::manifest(),
+        mode: gw_storage::RunMode::CreateOrResume,
         policy,
         teacher: AccountingCapability::PhysicalAttemptsV1,
         judge: AccountingCapability::NoModelRequests,
@@ -192,7 +192,7 @@ async fn unknown_prices_coverage_and_overflow_cannot_enter_a_finite_policy() {
         Err(StorageError::Admission(AdmissionDenial::UnknownCoverage))
     ));
     store
-        .validate_or_record_run_partition("legacy", 1, "prompt")
+        .insert_historical_run("legacy", "{}", None)
         .await
         .unwrap();
     assert!(matches!(
@@ -202,7 +202,7 @@ async fn unknown_prices_coverage_and_overflow_cannot_enter_a_finite_policy() {
                 &AccountingPolicy::FiniteUsd { limit_usd: 5.0 }
             ))
             .await,
-        Err(StorageError::Admission(AdmissionDenial::IncompleteHistory))
+        Err(StorageError::RunManifest { .. })
     ));
 }
 
@@ -460,15 +460,16 @@ async fn finite_changes_are_atomic_and_legacy_history_never_upgrades() {
     ));
     assert_eq!(store.model_launches("r").await.unwrap().len(), 4);
     store
-        .validate_or_record_run_partition("legacy", 1, "prompt")
+        .insert_historical_run("legacy", "{}", None)
         .await
         .unwrap();
     for _ in 0..2 {
-        let coverage = store
-            .register_accounting_launch(request("legacy", &AccountingPolicy::ObservationOnly))
-            .await
-            .unwrap();
-        assert_eq!(coverage.history, AccountingHistory::Unknown);
+        assert!(matches!(
+            store
+                .register_accounting_launch(request("legacy", &AccountingPolicy::ObservationOnly))
+                .await,
+            Err(StorageError::RunManifest { .. })
+        ));
     }
     assert_eq!(
         store.accounting_snapshot("legacy").await.unwrap().history,

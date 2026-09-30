@@ -283,7 +283,7 @@ async fn one_tool_trajectory_survives_the_whole_chain_and_the_negatives_do_not()
     cleanup(&db);
     let store = Store::open(&db).await.expect("open store");
     store
-        .create_run(RUN, "{}", Some(25.0))
+        .insert_historical_run(RUN, "{}", Some(25.0))
         .await
         .expect("create run");
 

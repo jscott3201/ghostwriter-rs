@@ -17,9 +17,8 @@ async fn observer(policy: AccountingPolicy) -> Arc<StoreObserver> {
     let coverage = store
         .register_accounting_launch(LaunchRequest {
             run_id: "r",
-            config_json: "{}",
-            shard_count: 1,
-            prompts_hash: "p",
+            manifest: crate::accounting_test_support::manifest(),
+            mode: gw_storage::RunMode::CreateOrResume,
             policy: &policy,
             teacher: AccountingCapability::PhysicalAttemptsV1,
             judge: AccountingCapability::NoModelRequests,

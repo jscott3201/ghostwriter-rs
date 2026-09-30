@@ -11,7 +11,10 @@ use gw_storage::{RecordFilter, Store};
 #[tokio::test]
 async fn store_round_trip_preserves_exact_bindings_and_distinct_candidate_contents() {
     let store = Store::open_in_memory().await.unwrap();
-    store.create_run("run-1", "{}", None).await.unwrap();
+    store
+        .insert_historical_run("run-1", "{}", None)
+        .await
+        .unwrap();
     let (records, evidence) = corpus(100, true);
     assert_eq!(
         evidence.corpus[0].prompt_hash,
@@ -42,8 +45,14 @@ async fn store_round_trip_preserves_exact_bindings_and_distinct_candidate_conten
 #[tokio::test]
 async fn run_filter_cannot_silently_drop_declared_members() {
     let store = Store::open_in_memory().await.unwrap();
-    store.create_run("run-1", "{}", None).await.unwrap();
-    store.create_run("run-2", "{}", None).await.unwrap();
+    store
+        .insert_historical_run("run-1", "{}", None)
+        .await
+        .unwrap();
+    store
+        .insert_historical_run("run-2", "{}", None)
+        .await
+        .unwrap();
     let (records, evidence) = corpus(100, true);
     for record in &records {
         store.put(record).await.unwrap();
@@ -100,7 +109,10 @@ async fn run_filter_cannot_silently_drop_declared_members() {
 #[tokio::test]
 async fn an_updated_candidate_invalidates_the_frozen_content_binding() {
     let store = Store::open_in_memory().await.unwrap();
-    store.create_run("run-1", "{}", None).await.unwrap();
+    store
+        .insert_historical_run("run-1", "{}", None)
+        .await
+        .unwrap();
     let (mut records, evidence) = corpus(2, true);
     for record in &records {
         store.put(record).await.unwrap();
@@ -133,7 +145,10 @@ async fn an_updated_candidate_invalidates_the_frozen_content_binding() {
 #[tokio::test]
 async fn later_unlisted_records_do_not_enter_the_frozen_control_population() {
     let store = Store::open_in_memory().await.unwrap();
-    store.create_run("run-1", "{}", None).await.unwrap();
+    store
+        .insert_historical_run("run-1", "{}", None)
+        .await
+        .unwrap();
     let (records, evidence) = corpus(1, true);
     for record in &records {
         store.put(record).await.unwrap();

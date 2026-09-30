@@ -99,7 +99,7 @@ fn record(
 async fn seeded_store() -> Store {
     let store = Store::open_in_memory().await.unwrap();
     store
-        .create_run("run-1", "{\"budget\":25}", Some(25.0))
+        .insert_historical_run("run-1", "{\"budget\":25}", Some(25.0))
         .await
         .unwrap();
     store
@@ -289,7 +289,10 @@ async fn min_aggregate_excludes_null_aggregate_records() {
 #[tokio::test]
 async fn scan_filters_by_run() {
     let store = seeded_store().await;
-    store.create_run("run-2", "{}", None).await.unwrap();
+    store
+        .insert_historical_run("run-2", "{}", None)
+        .await
+        .unwrap();
     store.put(&record("a", "run-1", None, None)).await.unwrap();
     store.put(&record("b", "run-2", None, None)).await.unwrap();
     let r1 = store
@@ -684,6 +687,14 @@ async fn resume_cursor_round_trips() {
 #[tokio::test]
 async fn run_status_lifecycle() {
     let store = seeded_store().await;
+    assert_eq!(
+        store.run_status("run-1").await.unwrap().as_deref(),
+        Some("halted")
+    );
+    store
+        .set_run_status("run-1", RunStatus::Running)
+        .await
+        .unwrap();
     assert_eq!(
         store.run_status("run-1").await.unwrap().as_deref(),
         Some("running")

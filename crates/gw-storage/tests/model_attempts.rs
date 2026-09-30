@@ -6,7 +6,10 @@ use gw_schema::{
 use gw_storage::Store;
 
 async fn intent(store: &Store) -> AttemptIntent {
-    store.create_run("run", "{}", None).await.unwrap();
+    store
+        .insert_historical_run("run", "{}", None)
+        .await
+        .unwrap();
     let coverage = store
         .begin_model_launch(
             "run",
@@ -253,7 +256,10 @@ async fn known_zero_missing_invalid_and_unresolved_remain_distinct_after_file_re
 #[tokio::test]
 async fn later_coverage_does_not_relabel_earlier_or_legacy_history() {
     let store = Store::open_in_memory().await.unwrap();
-    store.create_run("run", "{}", None).await.unwrap();
+    store
+        .insert_historical_run("run", "{}", None)
+        .await
+        .unwrap();
     assert!(store.model_launches("run").await.unwrap().is_empty());
     let first = store
         .begin_model_launch("run", Cap::Unknown, Cap::Unknown, Cap::NoModelRequests)

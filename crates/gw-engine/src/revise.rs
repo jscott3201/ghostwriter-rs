@@ -21,8 +21,8 @@
 //! original).
 
 use gw_generate::{
-    GatedUserTurn, ReasoningPolicy, RecordContext, SamplingPreset, TeacherCall, assemble,
-    generate_assistant, synthesize_user_turn,
+    GatedUserTurn, RecordContext, SamplingPreset, assemble, generate_assistant,
+    synthesize_user_turn,
 };
 use gw_schema::{LifecycleState, TeacherRef, TrainingRecord};
 use gw_storage::{StorageError, now_rfc3339, prompt_hash};
@@ -149,19 +149,12 @@ async fn generate_retry(
     }
 
     // Vary the sampling seed for the retry so it is not a verbatim re-draw of the first attempt.
-    let retry_seed = seed
-        .seed
-        .wrapping_add(i64::from(completion_index))
-        .wrapping_add(1_000_000);
-    let mut call = TeacherCall::new(
-        area.teacher_slug.clone(),
+    let retry_seed = crate::behavior::revision_seed(seed.seed, completion_index);
+    let call = crate::behavior::teacher_call(
+        area,
         vec![gated.candidate.message.clone()],
-        area.max_tokens,
-    )
-    .with_sampling(SamplingPreset::official().with_seed(retry_seed));
-    if let Some(reasoning_max_tokens) = area.teacher_reasoning_max_tokens {
-        call = call.with_reasoning(ReasoningPolicy::MaxTokens(reasoning_max_tokens));
-    }
+        SamplingPreset::official().with_seed(retry_seed),
+    );
 
     if control.is_cancelled() {
         return Ok(GenerationOutcome::Interrupted);

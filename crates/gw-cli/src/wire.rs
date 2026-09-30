@@ -34,10 +34,17 @@ use std::sync::Arc;
 use anyhow::Context;
 use tokio_util::sync::CancellationToken;
 
-use gw_engine::{AccountingPolicy, AreaConfig, Clients, Engine, EventSink, ExportSpec};
+use gw_engine::{
+    AccountingPolicy, Clients, Engine, EventSink, ExportSpec, PreparedRun, SeedSource,
+};
 use gw_generate::{Embedder, NullEmbedder};
-use gw_judge::NullSandboxOracle;
-use gw_providers::{EmbeddingsClient, OpenRouterProvider, Provider};
+use gw_judge::{
+    ExecutionEvidenceSource, NullExecutionEvidenceSource, NullSandboxOracle, SandboxOracle,
+};
+use gw_providers::{
+    EmbeddingsClient, EmbeddingsClientBuilder, OpenRouterProvider, OpenRouterProviderBuilder,
+    Provider,
+};
 use gw_schema::EmbeddingBackend;
 use gw_storage::Store;
 
@@ -58,13 +65,74 @@ pub const HARNESS_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Returns the [`ProviderError`](gw_providers::ProviderError) (as `anyhow`) if `OPENROUTER_API_KEY`
 /// is unset or the key/headers/HTTP client cannot be constructed.
 pub fn build_provider(config: &Config) -> anyhow::Result<Arc<dyn Provider>> {
-    let provider = OpenRouterProvider::builder()
-        .base_url(&config.provider_base_url)
-        .rpm(config.provider_rpm)
-        .title("ghostwriter-rs")
+    let provider = provider_builder(config)
         .build()
         .context("constructing the OpenRouter provider (is OPENROUTER_API_KEY set?)")?;
     Ok(Arc::new(provider))
+}
+
+fn provider_builder(config: &Config) -> OpenRouterProviderBuilder {
+    OpenRouterProvider::builder()
+        .base_url(&config.provider_base_url)
+        .rpm(config.provider_rpm)
+        .title("ghostwriter-rs")
+}
+fn embedding_builder(
+    config: &gw_schema::EmbeddingConfig,
+) -> anyhow::Result<EmbeddingsClientBuilder> {
+    match config.backend {
+        EmbeddingBackend::CandleLocal => {
+            anyhow::bail!("embedding backend candle_local is not constructible in v1")
+        }
+        EmbeddingBackend::OpenAiCompatible => Ok(EmbeddingsClient::builder()
+            .base_url(
+                config
+                    .endpoint
+                    .as_deref()
+                    .unwrap_or(gw_schema::DEFAULT_EMBEDDING_ENDPOINT),
+            )
+            .model(&config.model)
+            .dim(config.dim)
+            .api_key_env(config.api_key_env.clone())
+            .declared_revision(config.revision.clone())
+            .declared_index(config.index)),
+    }
+}
+
+/// Pure CLI preparation shared by run, replay and TUI. Uses the built-in clients' actual descriptor
+/// builders without reading credentials, constructing clients or invoking any model/evidence seam.
+///
+/// # Errors
+/// Rejects invalid effective settings, unsupported endpoint forms and invalid captured plans.
+pub fn prepare_run(
+    config: &Config,
+    source: &(impl SeedSource + ?Sized),
+) -> anyhow::Result<PreparedRun> {
+    config.validate_accounting_policy()?;
+    config.validate_generation_budgets()?;
+    config.validate_judge_reasoning()?;
+    let chat = provider_builder(config).semantic_declaration()?;
+    let embedding = match &config.embedding {
+        Some(config) => embedding_builder(config)?.semantic_declaration()?,
+        None => NullEmbedder
+            .semantic_declaration()
+            .expect("built-in declaration"),
+    };
+    Ok(PreparedRun::capture(
+        source,
+        &config.area_config(),
+        gw_schema::ClientSemantics {
+            teacher: chat.clone(),
+            judge: chat,
+            embedding,
+            sandbox: NullSandboxOracle
+                .semantic_declaration()
+                .expect("built-in declaration"),
+            execution_evidence: NullExecutionEvidenceSource
+                .semantic_declaration()
+                .expect("built-in declaration"),
+        },
+    )?)
 }
 
 /// Open the SQLite [`Store`] at `config.db` (creating it + running migrations on first open).
@@ -97,26 +165,11 @@ pub fn build_clients(
 ) -> anyhow::Result<Clients> {
     let embedder: Arc<dyn Embedder + Send + Sync> = match embedding {
         None => Arc::new(NullEmbedder),
-        Some(config) => match config.backend {
-            EmbeddingBackend::OpenAiCompatible => {
-                let client = EmbeddingsClient::builder()
-                    .base_url(
-                        config
-                            .endpoint
-                            .as_deref()
-                            .unwrap_or(gw_schema::DEFAULT_EMBEDDING_ENDPOINT),
-                    )
-                    .model(&config.model)
-                    .dim(config.dim)
-                    .api_key_env(config.api_key_env.clone())
-                    .build()
-                    .context("constructing the embeddings client")?;
-                Arc::new(client)
-            }
-            EmbeddingBackend::CandleLocal => {
-                anyhow::bail!("embedding backend candle_local is not constructible in v1")
-            }
-        },
+        Some(config) => Arc::new(
+            embedding_builder(config)?
+                .build()
+                .context("constructing the embeddings client")?,
+        ),
     };
     Ok(Clients::new(
         store,
@@ -130,11 +183,10 @@ pub fn build_clients(
     ))
 }
 
-/// Build the [`Engine`] end-to-end: open the store, build the provider (KEY from env), assemble the
-/// clients, and map the config's area into an [`AreaConfig`].
+/// Prepare the captured inputs and effective contract, check stored compatibility, then construct
+/// credential-bearing clients and the [`Engine`]. The engine repeats the comparison atomically.
 ///
-/// Returns the engine plus the opened [`Store`] handle (the caller needs it for the post-run tally /
-/// export). The `events` sink and `max_in_flight` cap are the caller's (a headless run passes
+/// Returns the engine, opened [`Store`], and immutable [`PreparedRun`] to execute. The `events` sink and `max_in_flight` cap are the caller's (a headless run passes
 /// `EventSink::disconnected()`; the TUI passes a subscribed sink and shares its
 /// [`CancellationToken`]).
 ///
@@ -145,12 +197,15 @@ pub async fn build_engine(
     config: &Config,
     events: EventSink,
     max_in_flight: u32,
-) -> anyhow::Result<(Engine, Store)> {
-    config.validate_accounting_policy()?;
-    let area: AreaConfig = config.area_config();
-    area.assess_admission()
-        .context("validating panel admission settings")?;
+    run_id: &str,
+    source: &(impl SeedSource + ?Sized),
+    mode: gw_storage::RunMode,
+) -> anyhow::Result<(Engine, Store, PreparedRun)> {
+    let prepared = prepare_run(config, source)?;
     let store = open_store(config).await?;
+    store
+        .validate_run_manifest(run_id, prepared.manifest(), mode)
+        .await?;
     let provider = build_provider(config)?;
     let clients = build_clients(
         store.clone(),
@@ -159,8 +214,11 @@ pub async fn build_engine(
         config.effective_policy(),
         config.embedding.as_ref(),
     )?;
-    let engine = configure_engine(Engine::new(clients, area, max_in_flight), config);
-    Ok((engine, store))
+    let engine = configure_engine(
+        Engine::new(clients, config.area_config(), max_in_flight),
+        config,
+    );
+    Ok((engine, store, prepared))
 }
 
 fn configure_engine(mut engine: Engine, config: &Config) -> Engine {

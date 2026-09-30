@@ -113,6 +113,7 @@ impl OpenRouterProviderBuilder {
     /// - [`ProviderError::Config`] if the key is not a valid HTTP header value, or the HTTP
     ///   client cannot be constructed.
     pub fn build(self) -> Result<OpenRouterProvider, ProviderError> {
+        self.semantic_declaration()?;
         let key = std::env::var(&self.api_key_env)
             .map_err(|_| ProviderError::MissingApiKey(self.api_key_env.clone()))?;
         self.build_with_key(&key)
@@ -124,6 +125,7 @@ impl OpenRouterProviderBuilder {
     /// # Errors
     /// [`ProviderError::Config`] if the key / headers are invalid or the client fails to build.
     pub fn build_with_key(self, key: &str) -> Result<OpenRouterProvider, ProviderError> {
+        let declaration = self.semantic_declaration()?;
         let mut headers = HeaderMap::new();
         let mut auth = HeaderValue::from_str(&format!("Bearer {key}"))
             .map_err(|_| ProviderError::Config("invalid API key (not a valid header)".into()))?;
@@ -157,10 +159,20 @@ impl OpenRouterProviderBuilder {
 
         Ok(OpenRouterProvider {
             http,
-            base_url: self.base_url,
+            base_url: crate::normalize_endpoint(&self.base_url)?,
+            declaration,
             limiter: Arc::new(RateLimiter::per_minute(self.rpm)),
             policy: self.policy,
         })
+    }
+
+    /// Prepare the same immutable adapter declaration the built client exposes, without reading
+    /// credentials or constructing an HTTP client.
+    ///
+    /// # Errors
+    /// Rejects unsupported or credential-bearing endpoint forms without echoing the URL.
+    pub fn semantic_declaration(&self) -> Result<gw_schema::SemanticDeclaration, ProviderError> {
+        crate::identity::chat(&self.base_url, self.policy.max_attempts)
     }
 }
 
@@ -174,6 +186,7 @@ pub struct OpenRouterProvider {
     base_url: String,
     limiter: Arc<RateLimiter>,
     policy: RetryPolicy,
+    declaration: gw_schema::SemanticDeclaration,
 }
 
 /// Redacted `Debug` — never prints the HTTP client (which holds the `Authorization` header).
@@ -294,6 +307,9 @@ impl OpenRouterProvider {
 }
 
 impl Provider for OpenRouterProvider {
+    fn semantic_declaration(&self) -> Option<gw_schema::SemanticDeclaration> {
+        Some(self.declaration.clone())
+    }
     fn accounting_capability(&self) -> gw_schema::AccountingCapability {
         gw_schema::AccountingCapability::PhysicalAttemptsV1
     }

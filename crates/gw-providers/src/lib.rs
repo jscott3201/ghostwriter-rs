@@ -65,6 +65,7 @@ mod delta;
 mod delta_wire;
 mod embeddings;
 mod error;
+mod identity;
 mod limiter;
 mod metadata;
 mod observation;
@@ -83,6 +84,7 @@ pub use client::{
 pub use delta::{ChunkProvenance, CompletionTokensDetails, StreamDelta, Usage};
 pub use embeddings::{EmbeddingsClient, EmbeddingsClientBuilder, embedding_headers};
 pub use error::ProviderError;
+pub use identity::normalize_endpoint;
 pub use limiter::RateLimiter;
 pub use observation::{
     AttemptObserver, CallObservation, ObservationContext, ObservationError, ObservationFuture,
@@ -114,6 +116,11 @@ pub type StreamChatFuture<'a> =
 /// into a spawned task / shared across threads (e.g. a `tokio::spawn`-ed generation worker)
 /// without the caller having to spell out the markers.
 pub trait Provider: Send + Sync {
+    /// Pure immutable semantic declaration of this actual adapter. Opaque implementations must
+    /// explicitly supply one to participate in a run; accounting capability cannot substitute.
+    fn semantic_declaration(&self) -> Option<gw_schema::SemanticDeclaration> {
+        None
+    }
     /// Stream a chat completion. The future completes once the (retried, rate-limited) HTTP
     /// response is established; the body is then decoded lazily as the returned stream is
     /// polled.

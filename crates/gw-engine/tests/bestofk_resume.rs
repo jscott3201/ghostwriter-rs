@@ -48,6 +48,9 @@ impl SeedBarrierFaultTeacher {
 }
 
 impl Provider for SeedBarrierFaultTeacher {
+    fn semantic_declaration(&self) -> Option<gw_schema::SemanticDeclaration> {
+        fixture_semantics("teacher")
+    }
     fn accounting_capability(&self) -> gw_schema::AccountingCapability {
         gw_schema::AccountingCapability::NoModelRequests
     }
@@ -98,6 +101,9 @@ impl SeedBarrierStatusTeacher {
 }
 
 impl Provider for SeedBarrierStatusTeacher {
+    fn semantic_declaration(&self) -> Option<gw_schema::SemanticDeclaration> {
+        fixture_semantics("teacher")
+    }
     fn accounting_capability(&self) -> gw_schema::AccountingCapability {
         gw_schema::AccountingCapability::NoModelRequests
     }
@@ -130,7 +136,10 @@ impl Provider for SeedBarrierStatusTeacher {
 #[tokio::test]
 async fn best_of_k_resume_does_not_double_admit() {
     let store = Store::open_in_memory().await.unwrap();
-    store.create_run("run-e1", "{}", Some(25.0)).await.unwrap();
+    store
+        .insert_historical_run("run-e1", "{}", Some(25.0))
+        .await
+        .unwrap();
 
     // Two siblings with distinct answers (distinct record_hash → independent grades), sibling0 the
     // higher score (0.95) so it is the winner; sibling1 (0.90) the retained runner-up.
@@ -234,7 +243,10 @@ async fn best_of_k_resume_does_not_double_admit() {
 #[tokio::test]
 async fn later_sibling_fault_does_not_clobber_healthy_sibling() {
     let store = Store::open_in_memory().await.unwrap();
-    store.create_run("run-f1", "{}", Some(25.0)).await.unwrap();
+    store
+        .insert_historical_run("run-f1", "{}", Some(25.0))
+        .await
+        .unwrap();
     // call 1 = c0 (good → Judged → admitted), call 2 = c1 (FAULT → record-level → parked at Error).
     let teacher = Arc::new(FailingTeacher::new(2, 0.01));
     let judge = Arc::new(ScriptedJudge::new(vec![&judge_body(0.95, "accept")]));
@@ -290,7 +302,7 @@ async fn later_sibling_fault_does_not_clobber_healthy_sibling() {
 async fn concurrent_sibling_faults_park_only_faulting_records() {
     let store = Store::open_in_memory().await.unwrap();
     store
-        .create_run("run-f1-concurrent", "{}", Some(25.0))
+        .insert_historical_run("run-f1-concurrent", "{}", Some(25.0))
         .await
         .unwrap();
 
@@ -356,7 +368,7 @@ async fn concurrent_sibling_faults_park_only_faulting_records() {
 async fn systemic_fatal_waits_for_sibling_fanout_to_settle() {
     let store = Store::open_in_memory().await.unwrap();
     store
-        .create_run("run-f1-systemic", "{}", Some(25.0))
+        .insert_historical_run("run-f1-systemic", "{}", Some(25.0))
         .await
         .unwrap();
 
@@ -435,7 +447,10 @@ async fn systemic_fatal_waits_for_sibling_fanout_to_settle() {
 #[tokio::test]
 async fn resume_drives_established_winner_to_formatted() {
     let store = Store::open_in_memory().await.unwrap();
-    store.create_run("run-f3", "{}", Some(25.0)).await.unwrap();
+    store
+        .insert_historical_run("run-f3", "{}", Some(25.0))
+        .await
+        .unwrap();
     let teacher = Arc::new(ScriptedTeacher::new(
         vec![answer_cot("96", 0.01), answer_cot("97", 0.01)],
         2,

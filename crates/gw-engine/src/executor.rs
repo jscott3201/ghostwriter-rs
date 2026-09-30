@@ -197,9 +197,10 @@ impl Engine {
     }
 
     /// Run `source`'s seed space end-to-end under `run_id`, honoring `cancel`. Creates/loads the run
-    /// row, drives every shard concurrently, and returns the terminal [`RunReport`].
+    /// row only after capturing all inputs and comparing the immutable generation/admission manifest.
+    /// Drives every shard concurrently and returns the terminal [`RunReport`].
     ///
-    /// CRASH-RECOVERY: re-running the SAME `run_id` over the SAME `source` resumes — each shard skips
+    /// CRASH-RECOVERY: re-running the SAME `run_id` with compatible inputs and semantics resumes — each shard skips
     /// its committed seed items, and any mid-flight record re-enters at its last persisted state (the
     /// persisted teacher result is reused). Physical sends require registered accounting context; finite
     /// policies use the complete durable ledger before each send. CANCELLATION: a cancelled
@@ -219,39 +220,65 @@ impl Engine {
         source: &S,
         cancel: CancellationToken,
     ) -> Result<RunReport> {
-        self.clone().run_launch(run_id, source, cancel).await
+        let prepared = self.prepare(source)?;
+        self.run_prepared(
+            run_id,
+            prepared,
+            gw_storage::RunMode::CreateOrResume,
+            cancel,
+        )
+        .await
     }
 
-    async fn run_launch<S: SeedSource + ?Sized>(
-        mut self,
+    /// Capture every source shard once and prepare the actual clients' immutable semantics.
+    ///
+    /// # Errors
+    /// Rejects invalid source identities/settings or missing cooperative client declarations.
+    pub fn prepare(&self, source: &(impl SeedSource + ?Sized)) -> Result<crate::PreparedRun> {
+        crate::PreparedRun::capture(source, &self.area, self.clients.semantic_declarations()?)
+    }
+
+    /// Execute the captured inputs after rechecking the actual injected objects and atomically
+    /// comparing the immutable manifest. CLI read-only preflight cannot replace this transaction.
+    ///
+    /// # Errors
+    /// Rejects changed clients/settings, incompatible or unpinned runs, and unknown replay IDs
+    /// before registration mutates any run/accounting state. Runtime errors follow [`Self::run`].
+    pub async fn run_prepared(
+        &self,
         run_id: &str,
-        source: &S,
+        prepared: crate::PreparedRun,
+        mode: gw_storage::RunMode,
         cancel: CancellationToken,
     ) -> Result<RunReport> {
-        self.area.assess_admission()?;
-        let shard_count = source.shard_count().max(1);
-        let prompts_hash = source.prompts_hash()?;
-        let config_json = serde_json::to_string(&self.operational_snapshot())?;
+        prepared.validate_actual(&self.area, self.clients.semantic_declarations()?)?;
+        self.clone()
+            .run_launch(run_id, prepared, mode, cancel)
+            .await
+    }
+
+    async fn run_launch(
+        mut self,
+        run_id: &str,
+        prepared: crate::PreparedRun,
+        mode: gw_storage::RunMode,
+        cancel: CancellationToken,
+    ) -> Result<RunReport> {
+        let shard_lengths = prepared.plan.identity().shard_items.clone();
+        let shard_count = shard_lengths.len();
         let coverage = self
             .clients
             .store
             .register_accounting_launch(gw_storage::LaunchRequest {
                 run_id,
-                config_json: &config_json,
-                shard_count,
-                prompts_hash: &prompts_hash,
+                manifest: prepared.manifest().clone(),
+                mode,
                 policy: &self.clients.policy,
                 teacher: self.clients.teacher.accounting_capability(),
                 judge: self.clients.judge.accounting_capability(),
                 embedding: self.clients.embedder.accounting_capability(),
             })
-            .await
-            .map_err(|error| match error {
-                gw_storage::StorageError::RunPartitionMismatch { .. } => {
-                    EngineError::Invariant(error.to_string())
-                }
-                other => other.into(),
-            })?;
+            .await?;
         self.clients.priors = crate::priors::new();
         self.clients.observation = Some(crate::attempts::LaunchObservation::new(
             coverage,
@@ -276,10 +303,10 @@ impl Engine {
         // F2: a run-level circuit-breaker shared across shards — aborts a systemically-broken run.
         let breaker = Arc::new(CircuitBreaker::new(CIRCUIT_BREAKER_PARKS));
         let mut shards = JoinSet::new();
-        for shard in 0..shard_count as i64 {
+        for (shard, items) in prepared.plan.shards.into_iter().enumerate() {
+            let shard = shard as i64;
             let engine = self.clone();
             let run_id = run_id.to_string();
-            let items = source.items_for_shard(shard);
             let semaphore = Arc::clone(&semaphore);
             let breaker = Arc::clone(&breaker);
             let cancel = cancel.clone();
@@ -342,13 +369,9 @@ impl Engine {
                         reason.to_string()
                     })
             });
-            for shard in 0..shard_count as i64 {
-                let cursor = load_cursor(&self.clients.store, run_id, shard).await?;
-                report.pending_items += source
-                    .items_for_shard(shard)
-                    .iter()
-                    .filter(|item| item.offset >= cursor.next_offset)
-                    .count();
+            for (shard, len) in shard_lengths.iter().enumerate() {
+                let cursor = load_cursor(&self.clients.store, run_id, shard as i64).await?;
+                report.pending_items += len.saturating_sub(cursor.next_offset) as usize;
             }
             let mut accounting = self.clients.store.accounting_snapshot(run_id).await?;
             accounting.configured = self
@@ -403,6 +426,11 @@ impl Engine {
         cancel: &CancellationToken,
     ) -> Result<()> {
         let cursor = load_cursor(&self.clients.store, run_id, shard).await?;
+        if cursor.next_offset > items.len() as u64 {
+            return Err(EngineError::Invariant(
+                "stored cursor exceeds the captured shard plan".into(),
+            ));
+        }
         let resumed = cursor.next_offset > 0;
         self.clients.events.emit(EngineEvent::ShardStarted {
             run_id: run_id.to_string(),
@@ -638,18 +666,6 @@ impl Engine {
         Ok((ItemOutcome::Settled, health))
     }
 
-    /// Resolved operational settings recorded at launch, separate from semantic request identity.
-    fn operational_snapshot(&self) -> serde_json::Value {
-        serde_json::json!({
-            "accounting_policy": self.clients.policy,
-            "max_in_flight": self.max_in_flight,
-            "training_area": self.area.training_area,
-            "teacher_slug": self.area.teacher_slug,
-            "k": self.area.k,
-            "admission_intent": self.area.admission_intent,
-        })
-    }
-
     /// Publish this run's records as one self-contained artifact, then acknowledge the exact rows.
     ///
     /// The shared Parquet exporter owns SFT eligibility: both an Admit verdict and a selected
@@ -836,7 +852,10 @@ mod failure_tests {
     #[tokio::test]
     async fn mark_run_failed_updates_ledger_and_emits_terminal_event() {
         let store = gw_storage::Store::open_in_memory().await.unwrap();
-        store.create_run("failed-run", "{}", None).await.unwrap();
+        store
+            .insert_historical_run("failed-run", "{}", None)
+            .await
+            .unwrap();
         let (events, mut receiver) = crate::EventSink::subscribe();
 
         mark_run_failed(&store, &events, "failed-run").await;

@@ -25,8 +25,8 @@
 
 use futures::StreamExt;
 use gw_generate::{
-    GatedUserTurn, GenerateError, ReasoningPolicy, RecordContext, SamplingPreset, TeacherCall,
-    assemble, generate_assistant, plan_group, synthesize_user_turn,
+    GatedUserTurn, GenerateError, RecordContext, SamplingPreset, TeacherCall, assemble,
+    generate_assistant, plan_group, synthesize_user_turn,
 };
 use gw_schema::{LifecycleState, TeacherRef, TrainingRecord};
 use gw_storage::{Store, now_rfc3339, prompt_hash};
@@ -38,7 +38,7 @@ use crate::event::EngineEvent;
 use crate::seed::{SeedItem, record_id};
 use crate::step::{drive, drive_to_judged};
 
-const TRUNCATION_RETRY_MAX_TOKENS: u32 = 32_000;
+use crate::behavior::retry_max_tokens;
 
 /// Generate, persist, drive, and select the best of a best-of-k group for one seed item.
 ///
@@ -364,15 +364,8 @@ async fn generate_and_persist(
         ));
     }
 
-    let mut call = TeacherCall::new(
-        group.area.teacher_slug.clone(),
-        vec![gated.candidate.message.clone()],
-        group.area.max_tokens,
-    )
-    .with_sampling(sampling);
-    if let Some(reasoning_max_tokens) = group.area.teacher_reasoning_max_tokens {
-        call = call.with_reasoning(ReasoningPolicy::MaxTokens(reasoning_max_tokens));
-    }
+    let call =
+        crate::behavior::teacher_call(group.area, vec![gated.candidate.message.clone()], sampling);
 
     // The single teacher-spend, with one cost-accounted truncation retry if needed.
     if group.control.is_cancelled() {
@@ -472,15 +465,6 @@ async fn generate_assistant_with_truncation_retry(
         Ok(turn) => Ok(GeneratedTeacherAttempt { turn, call: retry }),
         Err(err) => Err(EngineError::from(err)),
     }
-}
-
-fn retry_max_tokens(max_tokens: u32) -> Option<u32> {
-    if max_tokens >= TRUNCATION_RETRY_MAX_TOKENS {
-        return None;
-    }
-    let widened =
-        ((u64::from(max_tokens) * 3).div_ceil(2)).min(u64::from(TRUNCATION_RETRY_MAX_TOKENS));
-    Some(widened as u32)
 }
 
 /// The canonical `sibling_group_id == prompt_hash` for a record, computed via the same hashing

@@ -136,7 +136,7 @@ pub fn record(
 pub async fn seed_store(path: &std::path::Path, run_id: &str, records: &[TrainingRecord]) -> Store {
     let store = Store::open(path).await.expect("open store");
     store
-        .create_run(run_id, "{}", Some(25.0))
+        .insert_historical_run(run_id, "{}", Some(25.0))
         .await
         .expect("create run");
     for rec in records {

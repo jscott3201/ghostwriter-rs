@@ -29,6 +29,9 @@ impl CancelingJudge {
 }
 
 impl Provider for CancelingJudge {
+    fn semantic_declaration(&self) -> Option<gw_schema::SemanticDeclaration> {
+        fixture_semantics("judge")
+    }
     fn stream_chat(&self, _req: ChatRequest) -> StreamChatFuture<'_> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         let cancel = self.cancel.clone();

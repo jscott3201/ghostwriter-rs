@@ -172,7 +172,7 @@ fn tool_record(record_id: &str, run_id: &str, verdict: Option<Verdict>) -> Train
 async fn seeded_store() -> Store {
     let store = Store::open_in_memory().await.unwrap();
     store
-        .create_run("run-e", "{\"budget\":25}", Some(25.0))
+        .insert_historical_run("run-e", "{\"budget\":25}", Some(25.0))
         .await
         .unwrap();
     store

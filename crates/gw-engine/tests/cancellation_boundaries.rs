@@ -27,7 +27,10 @@ impl gw_generate::Embedder for CancelOnEmbed {
 #[tokio::test]
 async fn cancellation_during_generation_preparation_stops_initial_dispatch() {
     let store = Store::open_in_memory().await.unwrap();
-    store.create_run("prepare", "{}", None).await.unwrap();
+    store
+        .insert_historical_run("prepare", "{}", None)
+        .await
+        .unwrap();
     let teacher = Arc::new(ScriptedTeacher::new(vec![], 1));
     let cancel = CancellationToken::new();
     let cl = clients_with_embedder(
@@ -49,7 +52,10 @@ async fn cancellation_during_generation_preparation_stops_initial_dispatch() {
 #[tokio::test]
 async fn cancellation_during_missing_sibling_lookup_stops_generation() {
     let store = Store::open_in_memory().await.unwrap();
-    store.create_run("lookup", "{}", None).await.unwrap();
+    store
+        .insert_historical_run("lookup", "{}", None)
+        .await
+        .unwrap();
     let teacher = Arc::new(ScriptedTeacher::new(vec![], 1));
     let cl = clients(
         store.clone(),
@@ -82,7 +88,10 @@ async fn cancellation_during_missing_sibling_lookup_stops_generation() {
 #[tokio::test]
 async fn cancellation_during_missing_retry_lookup_keeps_revising_original() {
     let store = Store::open_in_memory().await.unwrap();
-    store.create_run("retry", "{}", None).await.unwrap();
+    store
+        .insert_historical_run("retry", "{}", None)
+        .await
+        .unwrap();
     let teacher = Arc::new(ScriptedTeacher::new(vec![], 2));
     let cl = clients(
         store.clone(),
@@ -114,7 +123,10 @@ async fn cancellation_during_missing_retry_lookup_keeps_revising_original() {
 #[tokio::test]
 async fn cancellation_during_retry_preparation_keeps_revising_original() {
     let store = Store::open_in_memory().await.unwrap();
-    store.create_run("prepare-retry", "{}", None).await.unwrap();
+    store
+        .insert_historical_run("prepare-retry", "{}", None)
+        .await
+        .unwrap();
     let teacher = Arc::new(ScriptedTeacher::new(vec![], 2));
     let mut cl = clients(
         store,

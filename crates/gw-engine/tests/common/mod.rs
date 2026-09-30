@@ -70,6 +70,9 @@ impl ScriptedTeacher {
 }
 
 impl Provider for ScriptedTeacher {
+    fn semantic_declaration(&self) -> Option<gw_schema::SemanticDeclaration> {
+        fixture_semantics("teacher")
+    }
     fn accounting_capability(&self) -> gw_schema::AccountingCapability {
         gw_schema::AccountingCapability::NoModelRequests
     }
@@ -120,6 +123,9 @@ impl ScriptedJudge {
 }
 
 impl Provider for ScriptedJudge {
+    fn semantic_declaration(&self) -> Option<gw_schema::SemanticDeclaration> {
+        fixture_semantics("judge")
+    }
     fn accounting_capability(&self) -> gw_schema::AccountingCapability {
         gw_schema::AccountingCapability::NoModelRequests
     }
@@ -176,6 +182,9 @@ impl FailingJudge {
 }
 
 impl Provider for FailingJudge {
+    fn semantic_declaration(&self) -> Option<gw_schema::SemanticDeclaration> {
+        fixture_semantics("judge")
+    }
     fn accounting_capability(&self) -> gw_schema::AccountingCapability {
         gw_schema::AccountingCapability::NoModelRequests
     }
@@ -205,6 +214,9 @@ impl Provider for FailingJudge {
 /// A provider that PANICS if ever called — proves a path never touches the teacher.
 pub struct ExplodingTeacher;
 impl Provider for ExplodingTeacher {
+    fn semantic_declaration(&self) -> Option<gw_schema::SemanticDeclaration> {
+        fixture_semantics("teacher")
+    }
     fn accounting_capability(&self) -> gw_schema::AccountingCapability {
         gw_schema::AccountingCapability::NoModelRequests
     }
@@ -239,6 +251,9 @@ impl FailingTeacher {
 }
 
 impl Provider for FailingTeacher {
+    fn semantic_declaration(&self) -> Option<gw_schema::SemanticDeclaration> {
+        fixture_semantics("teacher")
+    }
     fn accounting_capability(&self) -> gw_schema::AccountingCapability {
         gw_schema::AccountingCapability::NoModelRequests
     }
@@ -291,6 +306,9 @@ impl AlwaysFailingTeacher {
 }
 
 impl Provider for AlwaysFailingTeacher {
+    fn semantic_declaration(&self) -> Option<gw_schema::SemanticDeclaration> {
+        fixture_semantics("teacher")
+    }
     fn accounting_capability(&self) -> gw_schema::AccountingCapability {
         gw_schema::AccountingCapability::NoModelRequests
     }
@@ -329,6 +347,9 @@ impl BarrierTeacher {
 }
 
 impl Provider for BarrierTeacher {
+    fn semantic_declaration(&self) -> Option<gw_schema::SemanticDeclaration> {
+        fixture_semantics("teacher")
+    }
     fn accounting_capability(&self) -> gw_schema::AccountingCapability {
         gw_schema::AccountingCapability::NoModelRequests
     }
@@ -617,6 +638,9 @@ impl ScriptedEvidence {
 }
 
 impl ExecutionEvidenceSource for ScriptedEvidence {
+    fn semantic_declaration(&self) -> Option<gw_schema::SemanticDeclaration> {
+        fixture_semantics("authored-evidence-rules")
+    }
     fn evidence(&self, key: &EvidenceBinding) -> Option<ExecutionEvidence> {
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         (self.build)(key)
@@ -670,4 +694,33 @@ pub fn failing_report(key: &EvidenceBinding) -> ExecutionEvidence {
         &[(EVIDENCE_NODE, TestStatus::Failed)],
         Some(1),
     )
+}
+
+/// The stable simulated endpoint contract; spies and transport-fault variants share this identity.
+pub fn fixture_semantics(lane: &str) -> Option<gw_schema::SemanticDeclaration> {
+    Some(gw_schema::SemanticDeclaration::new(
+        format!("test/{lane}"),
+        "1",
+        serde_json::json!({"fixture_contract":"scripted-endpoint-v1"}),
+    ))
+}
+/// Register a real prepared manifest before staging crash-window records.
+pub async fn register_run(
+    store: &Store,
+    engine: &gw_engine::Engine,
+    run_id: &str,
+    source: &dyn gw_engine::SeedSource,
+) {
+    store
+        .register_accounting_launch(gw_storage::LaunchRequest {
+            run_id,
+            manifest: engine.prepare(source).unwrap().manifest().clone(),
+            mode: gw_storage::RunMode::CreateOrResume,
+            policy: &AccountingPolicy::ObservationOnly,
+            teacher: gw_schema::AccountingCapability::NoModelRequests,
+            judge: gw_schema::AccountingCapability::NoModelRequests,
+            embedding: gw_schema::AccountingCapability::NoModelRequests,
+        })
+        .await
+        .unwrap();
 }
