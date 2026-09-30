@@ -78,6 +78,9 @@ mod seed;
 mod sibling;
 mod step;
 
+#[cfg(test)]
+mod accounting_test_support;
+
 pub use checkpoint::{ShardCursor, commit_cursor, load_cursor};
 pub use clients::{AreaConfig, Clients, DEFAULT_CORRELATION_RHO, DEFAULT_K, DEFAULT_MAX_TOKENS};
 pub use control::RunControl;

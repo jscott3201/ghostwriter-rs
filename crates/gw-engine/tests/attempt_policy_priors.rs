@@ -93,6 +93,79 @@ async fn persisted_local_completion_publishes_above_threshold_without_rebuilding
 }
 
 #[tokio::test]
+async fn persisted_revision_retry_finishes_and_publishes_at_zero_without_new_requests() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let store = Store::open_in_memory().await.unwrap();
+    let teachers = AtomicUsize::new(0);
+    let judges = AtomicUsize::new(0);
+    let server = Server::new(move |path, request, _| {
+        Response::ok(if path == "/embeddings" {
+            attempt_common::embedding(Some(0.1))
+        } else if request["model"].as_str().unwrap().starts_with("judge") {
+            let (score, verdict) = if judges.fetch_add(1, Ordering::SeqCst) == 0 {
+                (0.65, "revise")
+            } else {
+                (0.95, "accept")
+            };
+            attempt_common::grade(&judge_body(score, verdict), Some(0.2))
+        } else {
+            let index = teachers.fetch_add(1, Ordering::SeqCst);
+            attempt_common::teacher(&format!("Answer {index}"), "stop", Some(0.1))
+        })
+    })
+    .await;
+    sqlx::query("CREATE TRIGGER stop_checkpoint BEFORE INSERT ON checkpoints BEGIN SELECT RAISE(FAIL, 'checkpoint interrupted'); END")
+        .execute(store.raw_pool()).await.unwrap();
+    let failed = engine(&store, &server, 5.0)
+        .run("priors", &one_item_source(), CancellationToken::new())
+        .await
+        .unwrap_err();
+    assert!(failed.to_string().contains("checkpoint interrupted"));
+    sqlx::query("DROP TRIGGER stop_checkpoint")
+        .execute(store.raw_pool())
+        .await
+        .unwrap();
+    for (id, state) in [
+        ("priors-s0-seed0-a0-c0", gw_schema::LifecycleState::Revising),
+        (
+            "priors-s0-seed0-a1-c0",
+            gw_schema::LifecycleState::Formatted,
+        ),
+    ] {
+        assert_eq!(store.get(id).await.unwrap().lifecycle.state, state);
+    }
+    let before = server.requests.lock().unwrap().len();
+    let path = std::env::temp_dir().join(format!("gw-retry-local-{}.parquet", std::process::id()));
+    let report = engine(&store, &server, 0.0)
+        .with_export(ExportSpec {
+            dst: path.clone(),
+            target: TrlFormat::ChatML,
+            cot: CotPolicy::Supervised,
+            dataset_version: None,
+        })
+        .run("priors", &one_item_source(), CancellationToken::new())
+        .await
+        .unwrap();
+    assert!(
+        report.completed,
+        "persisted retry requires only local completion: {report:?}"
+    );
+    assert_eq!(report.pending_items, 0);
+    assert_eq!(report.exported, 1);
+    assert_eq!(server.requests.lock().unwrap().len(), before);
+    assert_eq!(
+        store
+            .get("priors-s0-seed0-a1-c0")
+            .await
+            .unwrap()
+            .lifecycle
+            .state,
+        gw_schema::LifecycleState::Exported
+    );
+    std::fs::remove_file(path).unwrap();
+}
+
+#[tokio::test]
 async fn genuinely_new_generation_rebuilds_priors_through_normal_admission() {
     let store = Store::open_in_memory().await.unwrap();
     let server = server().await;

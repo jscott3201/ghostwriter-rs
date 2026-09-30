@@ -40,8 +40,22 @@ impl Clients {
         if let Some(launch) = &self.observation {
             launch
                 .priors_seeded
-                .get_or_try_init(|| {
-                    crate::priors::seed(self, &launch.coverage.run_id, &launch.observer.cancel)
+                .get_or_try_init(|| async {
+                    if launch.observer.cancel.is_cancelled() {
+                        return Err(
+                            gw_generate::GenerateError::Embed(ProviderError::Cancelled).into()
+                        );
+                    }
+                    let result =
+                        crate::priors::seed(self, &launch.coverage.run_id, &launch.observer.cancel)
+                            .await;
+                    if result.as_ref().is_err_and(|error| !error.is_record_level()) {
+                        // OnceCell releases a failed initializer as soon as this future returns.
+                        // Seal now so queued workers cannot restart scan/embedding before the
+                        // original worker reaches its outer fatal-error handler.
+                        launch.observer.cancel.cancel();
+                    }
+                    result
                 })
                 .await?;
         }
@@ -154,3 +168,7 @@ impl Embedder for ContextEmbedder<'_> {
         self.inner.accounting_capability()
     }
 }
+
+#[cfg(test)]
+#[path = "attempts_tests.rs"]
+mod tests;

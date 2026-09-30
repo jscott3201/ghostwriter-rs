@@ -63,8 +63,6 @@ pub async fn revise_once(
     }
     area.assess_admission()?;
 
-    seed.candidate.validate_framing()?;
-    clients.prepare_generation_priors().await?;
     let completion_index = original.generation.completion_index.unwrap_or(0);
     let retry_id = record_id(run_id, shard, seed.seed, 1, completion_index);
 
@@ -76,6 +74,8 @@ pub async fn revise_once(
             if control.is_cancelled() {
                 return Ok(original.clone());
             }
+            seed.candidate.validate_framing()?;
+            clients.prepare_generation_priors().await?;
             match generate_retry(
                 run_id,
                 &retry_id,

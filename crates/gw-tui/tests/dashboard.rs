@@ -120,9 +120,9 @@ fn observation_only_has_no_monetary_gauge_and_exposes_unknown_cost() {
         run_id: "r".into(),
         snapshot: accounting(false),
     }]);
-    let out = render_to_string(&mut app, 160, 35);
+    let out = render_to_string(&mut app, 100, 24);
     assert!(out.contains("Observation only"), "{out}");
-    assert!(out.contains("unknown 1"), "{out}");
+    assert!(out.contains("unknown cost 1"), "{out}");
     assert!(!out.contains("USD dispatch threshold"), "{out}");
 }
 #[test]
@@ -134,6 +134,41 @@ fn finite_policy_labels_known_spend_as_a_dispatch_threshold() {
     let out = render_to_string(&mut app, 160, 35);
     assert!(out.contains("known USD dispatch threshold"), "{out}");
     assert!(out.contains("$3.5000 / $10.0000"), "{out}");
+}
+
+#[test]
+fn ordinary_terminal_exposes_uncertainty_history_and_both_policy_epochs() {
+    let mut snapshot = accounting(true);
+    snapshot.configured = Some(gw_schema::PolicyState {
+        version: 1,
+        epoch: 3,
+        policy: gw_schema::AccountingPolicy::ObservationOnly,
+    });
+    snapshot.effective.as_mut().unwrap().epoch = 7;
+    snapshot.history = gw_schema::AccountingHistory::Unknown;
+    snapshot.unknown_cost_attempts = 11;
+    snapshot.invalid_cost_attempts = 12;
+    snapshot.conflicting_attempts = 13;
+    snapshot.unresolved_attempts = 14;
+    snapshot.unknown_coverage_lanes = 15;
+    let mut app = drive(vec![EngineEvent::AccountingSnapshot {
+        run_id: "r".into(),
+        snapshot,
+    }]);
+    let out = render_to_string(&mut app, 100, 24);
+    for critical in [
+        "unknown cost 11",
+        "invalid cost 12",
+        "conflicts 13",
+        "unresolved 14",
+        "history unknown",
+        "unknown lanes 15",
+        "configured observation only, epoch 3",
+        "effective finite $10.0000, epoch 7",
+        "known USD dispatch threshold",
+    ] {
+        assert!(out.contains(critical), "missing {critical}:\n{out}");
+    }
 }
 
 #[test]

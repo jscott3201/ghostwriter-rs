@@ -111,9 +111,7 @@ impl Store {
         if matches!(metadata.cost_usd, ReportedCost::Known(value) if !value.is_finite() || value < 0.0)
         {
             metadata.cost_usd = ReportedCost::Invalid;
-            if !metadata.invalid_fields.iter().any(|field| field == "cost") {
-                metadata.invalid_fields.push("cost".into());
-            }
+            conflict(&mut metadata.invalid_fields, "cost");
         }
         if let Some(existing) = receipt.observations.iter().find(|observation| {
             observation.sequence == sequence && observation.metadata == metadata
@@ -302,6 +300,9 @@ fn merge_metadata(receipt: &mut AttemptReceipt, patch: &AttemptMetadata) -> Vec<
         }
         _ => {
             current.cost_usd = ReportedCost::Invalid;
+            // Keep invalid evidence in the merged view even after a later known cost. The typed
+            // Invalid payload alone is meaningful; its operation payload remains unchanged.
+            conflict(&mut current.invalid_fields, "cost");
         }
     }
     for field in &patch.invalid_fields {
@@ -322,13 +323,23 @@ pub(crate) fn decode_coverage(json: &str) -> Result<LaunchCoverage> {
     Ok(coverage)
 }
 pub(crate) fn decode_receipt(json: &str) -> Result<AttemptReceipt> {
-    let receipt: AttemptReceipt = serde_json::from_str(json)?;
+    let mut receipt: AttemptReceipt = serde_json::from_str(json)?;
     validate_intent(&receipt.intent)?;
     if matches!(receipt.metadata.cost_usd, ReportedCost::Known(value) if !value.is_finite() || value < 0.0)
     {
         return Err(StorageError::Attempt(
             "invalid known cost in persisted receipt".into(),
         ));
+    }
+    // Retained operations are also authoritative for receipts written before typed Invalid was
+    // made sticky. Reconstruct only the merged view, preserving exact operation payloads/results.
+    if matches!(receipt.metadata.cost_usd, ReportedCost::Invalid)
+        || receipt
+            .observations
+            .iter()
+            .any(|observation| matches!(observation.metadata.cost_usd, ReportedCost::Invalid))
+    {
+        conflict(&mut receipt.metadata.invalid_fields, "cost");
     }
     Ok(receipt)
 }

@@ -1,6 +1,7 @@
 //! Run-scoped embedding priors used by the user-turn diversity gate.
 //!
-//! One canonical corpus owns every vector exactly once. Common gate snapshots clone its [`Arc`] in
+//! One canonical corpus owns one vector per admitted record. Item identity groups vectors only
+//! for exclusion; separate records of the same item keep separate vectors. Common gate snapshots clone its [`Arc`] in
 //! O(1). If an item with admitted vectors gates again, exclusion is uniformly derived as the current
 //! corpus minus that seed item's vectors. Only its linear index set is cached; the filtered vectors
 //! are temporary and never retained. Appends invalidate those lazy index caches. Corpus growth is
@@ -17,6 +18,7 @@ use gw_schema::{Content, ContentPart, Role, TrainingRecord};
 #[derive(Default)]
 pub(crate) struct PriorState {
     all: Arc<Vec<Vec<f32>>>,
+    record_ids: HashSet<String>,
     item_ids: Vec<String>,
     items_with_vectors: HashSet<String>,
     exclusion_indices: HashMap<String, Arc<Vec<usize>>>,
@@ -89,16 +91,30 @@ pub(crate) fn replace(priors: &Priors, tagged: Vec<(String, Vec<f32>)>) {
         .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = PriorState {
         all: Arc::new(vectors),
+        record_ids: (0..item_ids.len())
+            .map(|index| format!("fixture-{index}"))
+            .collect(),
         item_ids,
         items_with_vectors,
         exclusion_indices: HashMap::new(),
     };
 }
 
-fn insert(priors: &Priors, item_id: String, vector: Vec<f32>) {
+fn contains_record(priors: &Priors, record_id: &str) -> bool {
+    priors
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .record_ids
+        .contains(record_id)
+}
+
+fn insert(priors: &Priors, record_id: &str, item_id: String, vector: Vec<f32>) {
     let mut state = priors
         .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !state.record_ids.insert(record_id.to_owned()) {
+        return;
+    }
     Arc::make_mut(&mut state.all).push(vector);
     state.item_ids.push(item_id.clone());
     state.items_with_vectors.insert(item_id);
@@ -133,13 +149,7 @@ pub(crate) async fn seed(
         else {
             continue;
         };
-        if clients
-            .priors
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .items_with_vectors
-            .contains(&item)
-        {
+        if contains_record(&clients.priors, &record.record_id) {
             continue;
         }
         match clients
@@ -149,20 +159,13 @@ pub(crate) async fn seed(
         {
             Ok(vector) => {
                 // Another already-paid record may append while this initializer is awaiting I/O.
-                let mut state = clients
-                    .priors
-                    .write()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                if state.items_with_vectors.insert(item.clone()) {
-                    Arc::make_mut(&mut state.all).push(vector);
-                    state.item_ids.push(item);
-                    state.exclusion_indices.clear();
-                }
-            }
-            Err(error) if error.is_accounting() => {
-                return Err(gw_generate::GenerateError::Embed(error).into());
+                insert(&clients.priors, &record.record_id, item, vector);
             }
             Err(error) => {
+                let error = crate::EngineError::from(gw_generate::GenerateError::Embed(error));
+                if !error.is_record_level() {
+                    return Err(error);
+                }
                 tracing::warn!(record_id = %record.record_id, %error, "failed to seed embedding prior; continuing run")
             }
         }
@@ -175,6 +178,9 @@ pub(crate) async fn append_record(
     embedder: &dyn Embedder,
     record: &TrainingRecord,
 ) -> crate::Result<()> {
+    if contains_record(priors, &record.record_id) {
+        return Ok(());
+    }
     let Some(text) = user_turn_text(record) else {
         tracing::warn!(record_id = %record.record_id, "admitted record has no textual user turn; skipping embedding prior");
         return Ok(());
@@ -185,7 +191,7 @@ pub(crate) async fn append_record(
     };
     // Never hold the lock across the asynchronous embed call.
     match embedder.embed(&text).await {
-        Ok(vector) => insert(priors, item_id, vector),
+        Ok(vector) => insert(priors, &record.record_id, item_id, vector),
         Err(error) if error.is_accounting() => {
             return Err(gw_generate::GenerateError::Embed(error).into());
         }
@@ -221,6 +227,10 @@ fn user_turn_text_from_messages(messages: &[gw_schema::Message]) -> Option<Strin
         })?;
     (!text.is_empty()).then_some(text)
 }
+
+#[cfg(test)]
+#[path = "priors_race_tests.rs"]
+mod race_tests;
 
 #[cfg(test)]
 mod tests {
@@ -308,7 +318,7 @@ mod tests {
             let state = priors.read().unwrap();
             assert_eq!(state.exclusion_indices["a"].as_ref(), &vec![0]);
         }
-        insert(&priors, "c".into(), vec![3.0]);
+        insert(&priors, "record-c", "c".into(), vec![3.0]);
         assert!(priors.read().unwrap().exclusion_indices.is_empty());
         assert_eq!(priors.read().unwrap().all.len(), 3);
     }

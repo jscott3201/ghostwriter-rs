@@ -46,6 +46,18 @@ impl StoreObserver {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
     }
+    fn persistence(&self, error: impl std::fmt::Display) -> ObservationError {
+        // Seal the launch before releasing a transaction gate or returning to ActiveAttempt's
+        // drop callback. Waiting callers must not depend on an outer shard classifying this error.
+        self.cancel.cancel();
+        ObservationError::Persistence(error.to_string())
+    }
+    async fn persist<T>(
+        &self,
+        operation: impl std::future::Future<Output = gw_storage::Result<T>>,
+    ) -> Result<T, ObservationError> {
+        operation.await.map_err(|error| self.persistence(error))
+    }
     pub(crate) async fn publish(&self) {
         let _ordered = self.snapshot_gate.lock().await;
         match self.store.accounting_snapshot(&self.coverage.run_id).await {
@@ -60,9 +72,6 @@ impl StoreObserver {
         }
     }
 }
-fn persistence(error: impl std::fmt::Display) -> ObservationError {
-    ObservationError::Persistence(error.to_string())
-}
 impl AttemptObserver for StoreObserver {
     fn begin(&self, intent: AttemptIntent) -> ObservationFuture<'_, String> {
         Box::pin(async move {
@@ -70,7 +79,7 @@ impl AttemptObserver for StoreObserver {
                 let changed = self.changed.notified();
                 tokio::pin!(changed);
                 changed.as_mut().enable();
-                // Serialize only this coordinator's admission transaction and ownership publication.
+                // Serialize this coordinator's admission/observation transactions and ownership publication.
                 let gate = self.begin_gate.lock().await;
                 if self.cancel.is_cancelled() {
                     return Err(ObservationError::Cancelled);
@@ -86,13 +95,11 @@ impl AttemptObserver for StoreObserver {
                     .coverage
                     .policy
                     .as_ref()
-                    .ok_or_else(|| persistence("launch has no captured policy"))?
+                    .ok_or_else(|| self.persistence("launch has no captured policy"))?
                     .epoch;
                 let decision = self
-                    .store
-                    .admit_model_attempt(&intent, epoch, &live)
-                    .await
-                    .map_err(persistence)?;
+                    .persist(self.store.admit_model_attempt(&intent, epoch, &live))
+                    .await?;
                 match decision {
                     AttemptAdmission::Admitted(id) => {
                         self.live
@@ -140,20 +147,22 @@ impl AttemptObserver for StoreObserver {
         metadata: AttemptMetadata,
     ) -> ObservationFuture<'_, ()> {
         Box::pin(async move {
-            self.store
-                .observe_model_attempt(&id, sequence, &metadata)
-                .await
-                .map_err(persistence)?;
+            let gate = self.begin_gate.lock().await;
+            self.persist(self.store.observe_model_attempt(&id, sequence, &metadata))
+                .await?;
+            drop(gate);
             self.publish().await;
             Ok(())
         })
     }
     fn settle(&self, id: String, settlement: TransportSettlement) -> ObservationFuture<'_, ()> {
         Box::pin(async move {
-            self.store
-                .settle_model_attempt(&id, &settlement)
-                .await
-                .map_err(persistence)?;
+            // Admission cannot observe a committed settlement before its acknowledgment is known.
+            // These gates cover short store operations only, never network consumption.
+            let gate = self.begin_gate.lock().await;
+            self.persist(self.store.settle_model_attempt(&id, &settlement))
+                .await?;
+            drop(gate);
             self.changed.notify_waiters();
             self.publish().await;
             Ok(())
@@ -165,10 +174,10 @@ impl AttemptObserver for StoreObserver {
         interpretation: OutputInterpretation,
     ) -> ObservationFuture<'_, ()> {
         Box::pin(async move {
-            self.store
-                .interpret_model_attempt(&id, interpretation)
-                .await
-                .map_err(persistence)?;
+            let gate = self.begin_gate.lock().await;
+            self.persist(self.store.interpret_model_attempt(&id, interpretation))
+                .await?;
+            drop(gate);
             self.publish().await;
             Ok(())
         })
@@ -196,3 +205,7 @@ impl Drop for PendingOwnership<'_> {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "admission_tests.rs"]
+mod tests;
