@@ -21,7 +21,7 @@
 //!
 //! `record_id = f(run_id, shard, seed, attempt, completion_index)` — a pure function, so the SAME
 //! seed re-processed (a retry, a crash-restart, an at-least-once redelivery) mints the SAME id, and
-//! every transition is an idempotent UPSERT keyed by it. [`record_id`] is that function; it is the
+//! every transition is an idempotent command guarded by its complete expected record. [`record_id`] is that function; it is the
 //! single place the id is minted so the formula can never drift between the producer and the resume
 //! path.
 

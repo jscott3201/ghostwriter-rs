@@ -121,7 +121,7 @@ async fn cli_postrename_failure_is_nonzero_and_reopened_retry_uses_prepared_rece
         true,
         "later-group",
     );
-    store.put(&later).await.unwrap();
+    store.replace_record_for_import(&later).await.unwrap();
     admit(&store, "later").await;
     sqlx::query("DROP TRIGGER fail_cli_ack")
         .execute(store.raw_pool())
@@ -213,7 +213,7 @@ async fn explicit_cli_recovery_retains_engine_mode_without_completing_generation
         true,
         "later",
     );
-    store.put(&later).await.unwrap();
+    store.replace_record_for_import(&later).await.unwrap();
     admit(&store, "later").await;
     for _ in 0..2 {
         let result = Command::new(env!("CARGO_BIN_EXE_gw"))

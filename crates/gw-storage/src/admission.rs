@@ -129,7 +129,11 @@ impl Store {
         };
         sqlx::query("INSERT INTO model_launches (launch_id, run_id, coverage_json, created_at) VALUES (?, ?, ?, ?)")
             .bind(&coverage.launch_id).bind(request.run_id).bind(serde_json::to_string(&coverage)?).bind(now_rfc3339()).execute(&mut *tx).await?;
+        #[cfg(test)]
+        self.test_boundary("launch", "precommit").await?;
         tx.commit().await?;
+        #[cfg(test)]
+        self.test_boundary("launch", "committed").await?;
         Ok(coverage)
     }
 
@@ -215,7 +219,11 @@ impl Store {
         sqlx::query("INSERT INTO model_attempts (attempt_id, run_id, launch_id, receipt_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)")
             .bind(&id).bind(&intent.context.run_id).bind(&intent.context.launch_id).bind(serde_json::to_string(&receipt)?).bind(&now).bind(&now).execute(&mut *tx).await?;
         crate::accounting::bump(&mut tx, &intent.context.run_id).await?;
+        #[cfg(test)]
+        self.test_boundary("intent", "precommit").await?;
         tx.commit().await?;
+        #[cfg(test)]
+        self.test_boundary("intent", "committed").await?;
         Ok(AttemptAdmission::Admitted(id))
     }
 }

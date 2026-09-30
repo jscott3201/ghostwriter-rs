@@ -168,7 +168,10 @@ async fn changed_task_rights_change_member_identity_and_deny_snapshot_acknowledg
         .insert_historical_run("run", "{}", None)
         .await
         .unwrap();
-    store.put(&task_record("selected")).await.unwrap();
+    store
+        .replace_record_for_import(&task_record("selected"))
+        .await
+        .unwrap();
     let original = store.get("selected").await.unwrap();
     let plan = ExportPlan::prepare(std::slice::from_ref(&original), options()).unwrap();
     let receipt = store
@@ -191,7 +194,7 @@ async fn changed_task_rights_change_member_identity_and_deny_snapshot_acknowledg
         original.hashes.record_hash, changed.hashes.record_hash,
         "task provenance is outside content hash"
     );
-    store.put(&changed).await.unwrap();
+    store.replace_record_for_import(&changed).await.unwrap();
     let error = store
         .resume_export(&receipt.publication_id)
         .await

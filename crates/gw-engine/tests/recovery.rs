@@ -51,7 +51,7 @@ async fn seed_assistant_generated(
     };
     let mut rec = assemble(&ctx, &gated, turn, teacher_ref, call.generation(), None);
     rec.generation.sibling_group_id = Some(prompt_hash(&rec.messages).unwrap());
-    store.put(&rec).await.unwrap();
+    store.replace_record_for_import(&rec).await.unwrap();
     store.get(record_id).await.unwrap()
 }
 
@@ -291,7 +291,7 @@ async fn seed_assistant_generated_named(
     };
     let mut rec = assemble(&ctx, &gated, turn, teacher_ref, call.generation(), None);
     rec.generation.sibling_group_id = Some(prompt_hash(&rec.messages).unwrap());
-    store.put(&rec).await.unwrap();
+    store.replace_record_for_import(&rec).await.unwrap();
     store.get(record_id).await.unwrap()
 }
 

@@ -369,6 +369,38 @@ exactly-once execution. The current SQLite durability settings and receipts do n
 power-loss qualification or provider-invoice reconciliation.
 
 
+### Persistence and process recovery
+
+A successful storage write acknowledges a committed SQLite transaction. File stores keep WAL and
+`synchronous=NORMAL`: acknowledged writes survive termination of the application process. OS crashes
+and power loss can still discard acknowledged transactions. A canceled call or missing acknowledgment
+can have committed already; it is not evidence of rollback.
+
+Record updates commit their complete envelope, indexed projections, mutation receipt and lifecycle
+history in one transaction. The expected snapshot includes verification, grading, cost, provenance and
+history. A stale new command fails with a conflict. Retrying the same committed command recognizes its
+receipt first and returns the current record, even after later publication, without another history
+entry or state event. Initial insertion preserves both generation facts at attempt zero. Existing
+historical rows are not rewritten by migration. The explicitly named `replace_record_for_import` API
+replaces fixture/import data and its command history; engine writes use guarded insertion or transition.
+
+The immutable manifest is compared before the launch transaction changes run status, accounting
+policy or client coverage. Each attempt intent, metadata observation, transport settlement and output
+interpretation commits independently. Cache entries, run status and shard cursors have separate write
+acknowledgments. A settled accounting receipt does not prove that reusable teacher output or a judge
+cache entry exists. There is no transaction spanning a provider call and these local writes.
+
+After a process stops between saving a record and advancing its cursor, replay reuses persisted output
+and committed caches. Publication keeps its prepared receipt and batch acknowledgment of the exact
+selected records. Malformed envelopes, projections, cursors, cache values or accounting data produce
+errors; they do not silently reset a run. Startup finishes and validates migrations before returning a
+store, with SQLite's write lock covering migration discovery and application.
+
+The file-backed recovery tests terminate child processes at explicit pre-commit, committed-before-ack
+and acknowledged boundaries, then reopen and check integrity, foreign keys and migration checksums.
+They also compare replayed record and export-input hashes with a clean fake-provider run. These are
+application-process crash tests; they do not simulate physical power loss.
+
 ### Task verification policy
 
 Each executable `VerificationContract` declares `answer_policy` and `execution_policy` independently:

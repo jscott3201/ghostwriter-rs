@@ -76,7 +76,7 @@ async fn generated_with_reasoning(
         call.generation(),
         None,
     );
-    store.put(&rec).await.unwrap();
+    store.replace_record_for_import(&rec).await.unwrap();
     store.get(id).await.unwrap()
 }
 struct CountOracle(AtomicUsize);
@@ -127,6 +127,8 @@ async fn verified_resume_and_reconciliation_use_facts_without_oracle_or_evidence
     // Reopen the persisted envelope at the exact crash boundary; no in-memory grade survives.
     let mut loaded = store.get("record").await.unwrap();
     loaded.verification.all_passed = false; // This historical projection is not the authority.
+    store.replace_record_for_import(&loaded).await.unwrap();
+    let loaded = store.get("record").await.unwrap();
     let judged = step(loaded, &cl, &area).await.unwrap();
     let admitted = step(judged, &cl, &area).await.unwrap();
     assert_eq!(admitted.lifecycle.state, LifecycleState::Admitted);
@@ -219,7 +221,7 @@ async fn legacy_or_unsupported_record_stops_entire_run_before_paid_work_and_pres
             _ => rec.verification.interpretation.as_mut().unwrap().version += 1,
         }
         rec.verification.all_passed = true;
-        store.put(&rec).await.unwrap();
+        store.replace_record_for_import(&rec).await.unwrap();
         let before = store.get(&rec.record_id).await.unwrap();
         let bytes = serde_json::to_vec(&before).unwrap();
         let hash = gw_storage::record_hash(&before).unwrap();
@@ -267,7 +269,7 @@ async fn legacy_sibling_stops_direct_group_before_missing_sibling_generation() {
     .await;
     rec.lifecycle.state = LifecycleState::Verified;
     rec.verification.all_passed = true;
-    store.put(&rec).await.unwrap();
+    store.replace_record_for_import(&rec).await.unwrap();
     let seed = one_item_source().items_for_shard(0).remove(0);
     assert!(
         run_group(
@@ -314,6 +316,8 @@ async fn judged_reconciliation_cannot_override_authoritative_facts() {
         .as_mut()
         .unwrap()
         .outcome = VerificationOutcome::Unknown;
+    store.replace_record_for_import(&judged).await.unwrap();
+    let judged = store.get("record").await.unwrap();
     let held = step(judged, &cl, &area).await.unwrap();
     assert_eq!(held.lifecycle.state, LifecycleState::NeedsReview);
     assert_eq!(judge.call_count(), 1);

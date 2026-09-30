@@ -15,6 +15,22 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum StorageError {
+    /// A guarded record command did not match its complete expected snapshot or initial identity.
+    #[error("record conflict for {record_id}: {reason}")]
+    RecordConflict {
+        /// The conflicting record, without its private payload.
+        record_id: String,
+        /// Non-secret conflict category.
+        reason: String,
+    },
+    /// Persisted record data, projections or normalized history contradict each other.
+    #[error("record integrity error for {record_id}: {reason}")]
+    RecordIntegrity {
+        /// The affected record.
+        record_id: String,
+        /// Non-secret integrity failure.
+        reason: String,
+    },
     /// Execution cannot reuse the run's immutable semantic evidence. Inspection/export remains valid.
     #[error(
         "run semantic manifest error for {run_id}: {reason}; use a new run ID for changed or unpinned semantics"

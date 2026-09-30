@@ -167,7 +167,7 @@ async fn seed_sibling_assistant_generated(
         Some(plan),
     );
     rec.generation.sibling_group_id = Some(prompt_hash(&rec.messages).unwrap());
-    store.put(&rec).await.unwrap();
+    store.replace_record_for_import(&rec).await.unwrap();
     store.get(record_id).await.unwrap()
 }
 

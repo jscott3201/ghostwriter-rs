@@ -25,7 +25,7 @@ async fn store_round_trip_preserves_exact_bindings_and_distinct_candidate_conten
         evidence.corpus[1].record_hash
     );
     for record in &records {
-        store.put(record).await.unwrap();
+        store.replace_record_for_import(record).await.unwrap();
     }
     let report = analyze_store(
         &store,
@@ -55,11 +55,11 @@ async fn run_filter_cannot_silently_drop_declared_members() {
         .unwrap();
     let (records, evidence) = corpus(100, true);
     for record in &records {
-        store.put(record).await.unwrap();
+        store.replace_record_for_import(record).await.unwrap();
     }
     let mut other_run = candidate(999, 0, Some(1.0));
     other_run.provenance.run_id = "run-2".into();
-    store.put(&other_run).await.unwrap();
+    store.replace_record_for_import(&other_run).await.unwrap();
     let all = analyze_store(
         &store,
         &RecordFilter::new(),
@@ -115,10 +115,10 @@ async fn an_updated_candidate_invalidates_the_frozen_content_binding() {
         .unwrap();
     let (mut records, evidence) = corpus(2, true);
     for record in &records {
-        store.put(record).await.unwrap();
+        store.replace_record_for_import(record).await.unwrap();
     }
     records[0].messages[1].content = Content::Text("changed after outcome collection".into());
-    store.put(&records[0]).await.unwrap();
+    store.replace_record_for_import(&records[0]).await.unwrap();
     let report = analyze_store(
         &store,
         &RecordFilter::new(),
@@ -151,11 +151,14 @@ async fn later_unlisted_records_do_not_enter_the_frozen_control_population() {
         .unwrap();
     let (records, evidence) = corpus(1, true);
     for record in &records {
-        store.put(record).await.unwrap();
+        store.replace_record_for_import(record).await.unwrap();
     }
     // A later candidate for the same prompt has the highest judge score, but is outside the
     // explicitly declared frozen corpus. Its outcome is neither invented nor added to the pool.
-    store.put(&candidate(0, 2, Some(1.0))).await.unwrap();
+    store
+        .replace_record_for_import(&candidate(0, 2, Some(1.0)))
+        .await
+        .unwrap();
     let report = analyze_store(
         &store,
         &RecordFilter::new(),

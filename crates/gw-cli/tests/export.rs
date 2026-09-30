@@ -148,7 +148,7 @@ async fn export_without_run_filter_exports_every_admitted_record() {
         .await
         .unwrap();
     store
-        .put(&record(
+        .replace_record_for_import(&record(
             "b1",
             "run-B",
             Some(Verdict::Admit),

@@ -206,14 +206,14 @@ async fn generate_retry(
     // bound: the retry never writes a second `revising` transition).
     rec.tags.push(crate::step::REVISE_RETRY_TAG.to_string());
 
-    clients.store.put(&rec).await?;
-    clients.events.emit(EngineEvent::StateAdvanced {
-        record_id: rec.record_id.clone(),
-        to: LifecycleState::AssistantGenerated,
-    });
-    Ok(GenerationOutcome::Generated(
-        clients.store.get(retry_id).await?,
-    ))
+    let persisted = clients.store.insert_record(&rec).await?;
+    if persisted.status == gw_storage::RecordWriteStatus::Applied {
+        clients.events.emit(EngineEvent::StateAdvanced {
+            record_id: rec.record_id.clone(),
+            to: LifecycleState::AssistantGenerated,
+        });
+    }
+    Ok(GenerationOutcome::Generated(persisted.record))
 }
 
 #[cfg(test)]

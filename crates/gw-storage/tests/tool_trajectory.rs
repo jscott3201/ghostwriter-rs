@@ -2,7 +2,7 @@
 //!
 //! A tool trajectory is stored as a whole `TrainingRecord` envelope in `records.record_json`, so
 //! identity only holds end-to-end if the link, the null-content distinction and the retained raw
-//! argument text all survive `put` → `get`, a lifecycle advance (the crash/restart path), and a
+//! argument text all survive fixture insertion → `get`, a lifecycle advance (the crash/restart path), and a
 //! `scan` — and if the content-hash dedup key actually distinguishes two trajectories that differ
 //! only in which call each result answers.
 //!
@@ -154,7 +154,7 @@ async fn seeded_store() -> Store {
 async fn put_get_preserves_result_links_and_null_content() {
     let store = seeded_store().await;
     let rec = tool_record("rec-t", "run-t");
-    store.put(&rec).await.unwrap();
+    store.replace_record_for_import(&rec).await.unwrap();
     let got = store.get("rec-t").await.unwrap();
 
     assert_eq!(
@@ -191,14 +191,25 @@ async fn put_get_preserves_result_links_and_null_content() {
 #[tokio::test]
 async fn advance_lifecycle_preserves_identity_across_resume() {
     let store = seeded_store().await;
-    store.put(&tool_record("rec-t", "run-t")).await.unwrap();
+    store
+        .replace_record_for_import(&tool_record("rec-t", "run-t"))
+        .await
+        .unwrap();
 
     store
-        .advance_lifecycle("rec-t", LifecycleState::AssistantGenerated, None)
+        .advance_lifecycle(
+            &store.get("rec-t").await.unwrap(),
+            LifecycleState::AssistantGenerated,
+            None,
+        )
         .await
         .unwrap();
     store
-        .advance_lifecycle("rec-t", LifecycleState::Judged, None)
+        .advance_lifecycle(
+            &store.get("rec-t").await.unwrap(),
+            LifecycleState::Judged,
+            None,
+        )
         .await
         .unwrap();
 
@@ -236,8 +247,14 @@ async fn advance_lifecycle_preserves_identity_across_resume() {
 #[tokio::test]
 async fn scan_preserves_result_links() {
     let store = seeded_store().await;
-    store.put(&tool_record("rec-a", "run-t")).await.unwrap();
-    store.put(&tool_record("rec-b", "run-t")).await.unwrap();
+    store
+        .replace_record_for_import(&tool_record("rec-a", "run-t"))
+        .await
+        .unwrap();
+    store
+        .replace_record_for_import(&tool_record("rec-b", "run-t"))
+        .await
+        .unwrap();
     let all = store
         .scan(&RecordFilter::new().run_id("run-t"))
         .await

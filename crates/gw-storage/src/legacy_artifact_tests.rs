@@ -142,7 +142,10 @@ async fn prepared_and_acknowledged_v2_recover_present_missing_and_replaced_files
                 .insert_historical_run("run", "{}", None)
                 .await
                 .unwrap();
-            store.put(&record("selected")).await.unwrap();
+            store
+                .replace_record_for_import(&record("selected"))
+                .await
+                .unwrap();
             let plan = legacy_plan(&[store.get("selected").await.unwrap()]);
             let receipt = store
                 .prepare_export_receipt(&plan, output.0.to_str().unwrap(), ExportPurpose::Engine)
@@ -153,7 +156,10 @@ async fn prepared_and_acknowledged_v2_recover_present_missing_and_replaced_files
                 store.resume_export(&receipt.publication_id).await.unwrap();
             }
             let before = store.lifecycle_history("selected").await.unwrap();
-            store.put(&record("later")).await.unwrap();
+            store
+                .replace_record_for_import(&record("later"))
+                .await
+                .unwrap();
             match file_state {
                 "missing" => std::fs::remove_file(&output.0).unwrap(),
                 "replaced" => std::fs::write(&output.0, b"unrelated replacement").unwrap(),
@@ -214,14 +220,14 @@ async fn v2_receipt_cannot_drop_new_task_provenance() {
         .unwrap();
     let mut record = super::task_tests::task_record("selected");
     let task = record.task_provenance.take().unwrap();
-    store.put(&record).await.unwrap();
+    store.replace_record_for_import(&record).await.unwrap();
     let plan = legacy_plan(&[store.get("selected").await.unwrap()]);
     let receipt = store
         .prepare_export_receipt(&plan, output.0.to_str().unwrap(), ExportPurpose::Engine)
         .await
         .unwrap();
     record.task_provenance = Some(task);
-    store.put(&record).await.unwrap();
+    store.replace_record_for_import(&record).await.unwrap();
     let error = store
         .resume_export(&receipt.publication_id)
         .await

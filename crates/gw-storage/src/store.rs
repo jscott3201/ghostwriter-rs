@@ -36,7 +36,7 @@ static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 /// across spawned generation workers. **Concurrency model:** SQLite in WAL mode allows many
 /// concurrent readers but only ONE writer at a time; the pool serializes write transactions and a
 /// blocked writer waits up to a 5-second busy timeout for the lock before surfacing `SQLITE_BUSY`.
-/// Read-modify-write transactions ([`advance_lifecycle`](Store::advance_lifecycle)) take an
+/// Guarded record transactions ([`transition_record`](Store::transition_record)) take an
 /// IMMEDIATE write lock at the start of the transaction, so a competing writer queues on the busy
 /// timeout instead of failing with `SQLITE_BUSY_SNAPSHOT` partway through.
 /// Cloning the handle shares the same pool — it does not grant additional write parallelism.
@@ -45,6 +45,8 @@ static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 #[derive(Debug, Clone)]
 pub struct Store {
     pool: SqlitePool,
+    #[cfg(test)]
+    pub(crate) test_hook: std::sync::Arc<std::sync::Mutex<Option<crate::test_hooks::Hook>>>,
 }
 
 impl Store {
@@ -52,7 +54,8 @@ impl Store {
     /// foreign-key enforcement, then run all pending migrations.
     ///
     /// WAL gives concurrent readers a snapshot while a single writer commits; `synchronous =
-    /// NORMAL` is the WAL-safe durability setting. A 5-second busy timeout lets a blocked
+    /// NORMAL` preserves committed writes after an application-process crash. It does not promise
+    /// acknowledged writes survive OS failure or power loss. A 5-second busy timeout lets a blocked
     /// writer wait for the lock instead of failing immediately under contention. Foreign keys are
     /// enforced so the `records → runs` / `lifecycle_history → records` cascades hold. See the
     /// [`Store`] doc for the single-writer concurrency model.
@@ -69,7 +72,11 @@ impl Store {
             .busy_timeout(BUSY_TIMEOUT)
             .foreign_keys(true);
         let pool = SqlitePoolOptions::new().connect_with(opts).await?;
-        let store = Self { pool };
+        let store = Self {
+            pool,
+            #[cfg(test)]
+            test_hook: Default::default(),
+        };
         store.migrate().await?;
         Ok(store)
     }
@@ -88,14 +95,23 @@ impl Store {
             .max_connections(1)
             .connect_with(opts)
             .await?;
-        let store = Self { pool };
+        let store = Self {
+            pool,
+            #[cfg(test)]
+            test_hook: Default::default(),
+        };
         store.migrate().await?;
         Ok(store)
     }
 
     /// Run all pending embedded migrations against the pool.
     async fn migrate(&self) -> Result<()> {
-        MIGRATOR.run(&self.pool).await?;
+        // SQLx's SQLite migration lock/unlock are no-ops. Hold SQLite's database write lock
+        // across discovery AND application; each migration uses a nested transaction/savepoint.
+        // This startup-only transaction is released before Store escapes and is not a run lease.
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        MIGRATOR.run_direct(None, &mut *tx, false).await?;
+        tx.commit().await?;
         Ok(())
     }
 

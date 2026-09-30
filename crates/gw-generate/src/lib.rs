@@ -11,7 +11,7 @@
 //!
 //! It is a **pure producer**: it depends only on `gw-schema`, `gw-providers`, and `gw-format`; it
 //! does NO I/O of its own beyond the injected provider/embedder, persists NOTHING, and computes NO
-//! content hashes (`gw-storage::put` is authoritative for `record_hash`/`prompt_hash`, so
+//! content hashes (`gw-storage record writes` is authoritative for `record_hash`/`prompt_hash`, so
 //! `TrainingRecord.hashes` is left at default).
 //!
 //! ## Pipeline

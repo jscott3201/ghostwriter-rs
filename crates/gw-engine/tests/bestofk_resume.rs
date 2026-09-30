@@ -189,7 +189,11 @@ async fn best_of_k_resume_does_not_double_admit() {
         .map(|r| r.record_id.clone())
         .unwrap();
     store
-        .advance_lifecycle(&runner_up_id, LifecycleState::Judged, None)
+        .advance_lifecycle(
+            &store.get(&runner_up_id).await.unwrap(),
+            LifecycleState::Judged,
+            None,
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -472,7 +476,11 @@ async fn resume_drives_established_winner_to_formatted() {
 
     // Force the winner back to `Admitted` — the crash window AFTER admission but BEFORE export.
     store
-        .advance_lifecycle(&winner, LifecycleState::Admitted, None)
+        .advance_lifecycle(
+            &store.get(&winner).await.unwrap(),
+            LifecycleState::Admitted,
+            None,
+        )
         .await
         .unwrap();
     assert_eq!(

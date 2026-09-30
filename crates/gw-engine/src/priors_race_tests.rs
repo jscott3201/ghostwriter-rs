@@ -41,7 +41,7 @@ async fn same_record_resume_and_append_contribute_once_in_either_order_and_keep_
         let resuming = Arc::new(Blocked::new());
         let clients = clients(store.clone(), resuming.clone()).await;
         let admitted = record("r-s0-seed0-a0-c0");
-        store.put(&admitted).await.unwrap();
+        store.replace_record_for_import(&admitted).await.unwrap();
         let appending = Arc::new(Blocked::new());
         let appender = appending.clone();
         let priors = clients.priors.clone();
@@ -54,7 +54,7 @@ async fn same_record_resume_and_append_contribute_once_in_either_order_and_keep_
         resuming.entered.acquire().await.unwrap().forget();
         // The historical scan has already completed; a different record is admitted meanwhile.
         let newer = record("r-s1-seed1-a0-c0");
-        store.put(&newer).await.unwrap();
+        store.replace_record_for_import(&newer).await.unwrap();
         append_record(&clients.priors, &Ready, &newer)
             .await
             .unwrap();
@@ -91,7 +91,7 @@ async fn distinct_records_of_the_same_item_both_contribute_and_are_both_excluded
     let store = Store::open_in_memory().await.unwrap();
     let clients = clients(store.clone(), Arc::new(Ready)).await;
     for id in ["r-s0-seed0-a0-c0", "r-s0-seed0-a1-c1"] {
-        store.put(&record(id)).await.unwrap();
+        store.replace_record_for_import(&record(id)).await.unwrap();
     }
     seed(&clients, "r", &CancellationToken::new())
         .await

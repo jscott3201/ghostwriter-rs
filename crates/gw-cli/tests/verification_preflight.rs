@@ -69,7 +69,7 @@ async fn legacy_facts_are_inspectable_exportable_and_denied_before_cli_credentia
             .verification;
             rec.verification.interpretation.as_mut().unwrap().version += 1;
         }
-        store.put(&rec).await.unwrap();
+        store.replace_record_for_import(&rec).await.unwrap();
         let before = store.get("historical").await.unwrap();
         let bytes = serde_json::to_vec(&before).unwrap();
         let hash = gw_storage::record_hash(&before).unwrap();

@@ -505,6 +505,8 @@ impl Engine {
             match item_outcome {
                 // The item fully terminated; advance the cursor past it.
                 ItemOutcome::Settled => {
+                    #[cfg(test)]
+                    crate::process_replay_tests::boundary(&self.clients, "before_cursor").await;
                     commit_cursor(&self.clients.store, run_id, shard, item.offset, "committed")
                         .await?;
                 }
@@ -533,7 +535,7 @@ impl Engine {
     /// on the error via [`EngineError::attributed_record`] (stamped by `crate::run_group`); this parks
     /// THAT record — falling back to the item's primary id (`c0`) only for an unattributed fault (e.g.
     /// a k=1 path). If the faulting record never persisted (the fault hit during generation before the
-    /// first `put`), a MINIMAL stub is persisted at `Error` so the failure is queryable, counted
+    /// initial insertion), a MINIMAL stub is persisted at `Error` so the failure is queryable, counted
     /// (`report.errored`), and auditable.
     ///
     /// NO-CLOBBER (F1, invariant 1): a fault on ONE sibling must NEVER overwrite a DIFFERENT healthy
@@ -555,7 +557,7 @@ impl Engine {
             .map(str::to_string)
             .unwrap_or_else(|| crate::seed::record_id(run_id, shard, item.seed, 0, 0));
         let msg = err.to_string();
-        // Advance an existing row, or persist a minimal stub if generation failed before the first put.
+        // Guard an existing row, or atomically create and park a missing pre-generation stub.
         match self.clients.store.get(&rid).await {
             // NO-CLOBBER: never overwrite a DECIDED record (a non-Error terminal or the Revising handoff).
             // The attributed FAULTING record is still terminalized to Error from any in-flight state (a
@@ -567,17 +569,21 @@ impl Engine {
                 });
                 return Ok(());
             }
-            Ok(_) => {}
+            Ok(existing) => {
+                self.clients
+                    .store
+                    .advance_lifecycle(&existing, LifecycleState::Error, Some(&msg))
+                    .await?;
+            }
             Err(gw_storage::StorageError::NotFound(_)) => {
                 let stub = self.error_stub(run_id, &rid, item);
-                self.clients.store.put(&stub).await?;
+                self.clients
+                    .store
+                    .insert_record_and_transition(&stub, LifecycleState::Error, Some(&msg))
+                    .await?;
             }
             Err(e) => return Err(e.into()),
         }
-        self.clients
-            .store
-            .advance_lifecycle(&rid, LifecycleState::Error, Some(&msg))
-            .await?;
         self.clients.events.emit(EngineEvent::RecordErrored {
             record_id: rid,
             error: msg,

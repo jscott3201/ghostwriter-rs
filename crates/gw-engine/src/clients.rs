@@ -195,6 +195,8 @@ impl AreaConfig {
 /// holds its own clone and they all share one store, one durable admission authority, and one event channel.
 #[derive(Clone)]
 pub struct Clients {
+    #[cfg(test)]
+    pub(crate) process_barrier: Option<&'static str>,
     /// The authoritative data plane.
     pub store: Store,
     /// Launch-owned receipt context, installed after live capability assessment.
@@ -277,6 +279,8 @@ impl Clients {
         Self {
             store,
             observation: None,
+            #[cfg(test)]
+            process_barrier: None,
             teacher,
             judge,
             embedder,

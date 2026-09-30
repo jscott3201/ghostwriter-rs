@@ -110,9 +110,9 @@ async fn seeded_store() -> Store {
 async fn put_is_idempotent_upsert() {
     let store = seeded_store().await;
     let rec = record("rec-1", "run-1", Some(Verdict::Admit), Some(0.9));
-    store.put(&rec).await.unwrap();
+    store.replace_record_for_import(&rec).await.unwrap();
     // Re-put the same record_id (re-processed seed) — must upsert, not duplicate.
-    store.put(&rec).await.unwrap();
+    store.replace_record_for_import(&rec).await.unwrap();
     let all = store.scan(&RecordFilter::new()).await.unwrap();
     assert_eq!(all.len(), 1, "re-put must not duplicate a record");
     let got = store.get("rec-1").await.unwrap();
@@ -135,15 +135,23 @@ async fn get_missing_is_not_found() {
 async fn advance_lifecycle_updates_state_and_appends_history() {
     let store = seeded_store().await;
     store
-        .put(&record("rec-1", "run-1", None, None))
+        .replace_record_for_import(&record("rec-1", "run-1", None, None))
         .await
         .unwrap();
     store
-        .advance_lifecycle("rec-1", LifecycleState::Verified, Some("verifier ok"))
+        .advance_lifecycle(
+            &store.get("rec-1").await.unwrap(),
+            LifecycleState::Verified,
+            Some("verifier ok"),
+        )
         .await
         .unwrap();
     store
-        .advance_lifecycle("rec-1", LifecycleState::Admitted, None)
+        .advance_lifecycle(
+            &store.get("rec-1").await.unwrap(),
+            LifecycleState::Admitted,
+            None,
+        )
         .await
         .unwrap();
 
@@ -179,11 +187,15 @@ async fn advance_lifecycle_updates_state_and_appends_history() {
 async fn advance_lifecycle_to_error_records_detail_in_envelope() {
     let store = seeded_store().await;
     store
-        .put(&record("rec-e", "run-1", None, None))
+        .replace_record_for_import(&record("rec-e", "run-1", None, None))
         .await
         .unwrap();
     store
-        .advance_lifecycle("rec-e", LifecycleState::Error, Some("teacher 500"))
+        .advance_lifecycle(
+            &store.get("rec-e").await.unwrap(),
+            LifecycleState::Error,
+            Some("teacher 500"),
+        )
         .await
         .unwrap();
     let got = store.get("rec-e").await.unwrap();
@@ -195,7 +207,11 @@ async fn advance_lifecycle_to_error_records_detail_in_envelope() {
 async fn advance_lifecycle_missing_record_is_not_found() {
     let store = seeded_store().await;
     let err = store
-        .advance_lifecycle("ghost", LifecycleState::Verified, None)
+        .advance_lifecycle(
+            &record("ghost", "run-1", None, None),
+            LifecycleState::Verified,
+            None,
+        )
         .await
         .unwrap_err();
     assert!(matches!(err, gw_storage::StorageError::NotFound(_)));
@@ -207,7 +223,7 @@ async fn advance_lifecycle_missing_record_is_not_found() {
 async fn scan_filters_by_verdict_and_min_aggregate() {
     let store = seeded_store().await;
     store
-        .put(&record(
+        .replace_record_for_import(&record(
             "admit-hi",
             "run-1",
             Some(Verdict::Admit),
@@ -216,7 +232,7 @@ async fn scan_filters_by_verdict_and_min_aggregate() {
         .await
         .unwrap();
     store
-        .put(&record(
+        .replace_record_for_import(&record(
             "admit-lo",
             "run-1",
             Some(Verdict::Admit),
@@ -225,7 +241,7 @@ async fn scan_filters_by_verdict_and_min_aggregate() {
         .await
         .unwrap();
     store
-        .put(&record(
+        .replace_record_for_import(&record(
             "reject",
             "run-1",
             Some(Verdict::Reject),
@@ -265,11 +281,11 @@ async fn min_aggregate_excludes_null_aggregate_records() {
     // min_judge_aggregate — locks in the NULL-safe `judge_aggregate >= ?` contract.
     let store = seeded_store().await;
     store
-        .put(&record("admit-null", "run-1", Some(Verdict::Admit), None))
+        .replace_record_for_import(&record("admit-null", "run-1", Some(Verdict::Admit), None))
         .await
         .unwrap();
     store
-        .put(&record(
+        .replace_record_for_import(&record(
             "admit-scored",
             "run-1",
             Some(Verdict::Admit),
@@ -294,8 +310,14 @@ async fn scan_filters_by_run() {
         .insert_historical_run("run-2", "{}", None)
         .await
         .unwrap();
-    store.put(&record("a", "run-1", None, None)).await.unwrap();
-    store.put(&record("b", "run-2", None, None)).await.unwrap();
+    store
+        .replace_record_for_import(&record("a", "run-1", None, None))
+        .await
+        .unwrap();
+    store
+        .replace_record_for_import(&record("b", "run-2", None, None))
+        .await
+        .unwrap();
     let r1 = store
         .scan(&RecordFilter::new().run_id("run-1"))
         .await
@@ -383,10 +405,14 @@ async fn record_hash_is_content_only_allowlist() {
 
     // A record advancing through its lifecycle keeps a STABLE hash (regression for the old leak).
     let store = seeded_store().await;
-    store.put(&base).await.unwrap();
+    store.replace_record_for_import(&base).await.unwrap();
     let before = store.get("id-A").await.unwrap().hashes.record_hash.clone();
     store
-        .advance_lifecycle("id-A", LifecycleState::Verified, None)
+        .advance_lifecycle(
+            &store.get("id-A").await.unwrap(),
+            LifecycleState::Verified,
+            None,
+        )
         .await
         .unwrap();
     let after = store.get("id-A").await.unwrap().hashes.record_hash.clone();
@@ -496,7 +522,7 @@ async fn put_recomputes_and_overwrites_wrong_caller_hash() {
     let truth = gw_storage::record_hash(&rec).unwrap();
     assert_ne!(truth, "deadbeefwronghash");
 
-    store.put(&rec).await.unwrap();
+    store.replace_record_for_import(&rec).await.unwrap();
     let got = store.get("rec-w").await.unwrap();
     assert_eq!(
         got.hashes.record_hash, truth,
@@ -515,7 +541,7 @@ async fn put_populates_hashes_in_envelope_and_columns() {
     let store = seeded_store().await;
     let rec = record("rec-h", "run-1", Some(Verdict::Admit), Some(0.9));
     assert!(rec.hashes.record_hash.is_empty());
-    store.put(&rec).await.unwrap();
+    store.replace_record_for_import(&rec).await.unwrap();
 
     let got = store.get("rec-h").await.unwrap();
     assert!(
@@ -715,7 +741,7 @@ async fn foreign_key_enforced_on_record_put() {
     let store = Store::open_in_memory().await.unwrap();
     // No run created → putting a record that references a missing run violates the FK.
     let err = store
-        .put(&record("orphan", "missing-run", None, None))
+        .replace_record_for_import(&record("orphan", "missing-run", None, None))
         .await
         .unwrap_err();
     assert!(matches!(err, gw_storage::StorageError::Sqlx(_)));
@@ -727,7 +753,7 @@ async fn scan_stream_yields_records() {
     let store = seeded_store().await;
     for i in 0..3 {
         store
-            .put(&record(&format!("rec-{i}"), "run-1", None, None))
+            .replace_record_for_import(&record(&format!("rec-{i}"), "run-1", None, None))
             .await
             .unwrap();
     }

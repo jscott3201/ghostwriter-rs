@@ -24,8 +24,8 @@
 //!
 //! ## Invariants enforced in code (see the cited `file.rs:fn`)
 //!
-//! - **persist-after-every-transition** — every edge calls `Store::put` + `advance_lifecycle`:
-//!   `step::persist_envelope_and_advance`.
+//! - **persist-after-every-transition** — `step::persist_and_emit` commits the complete envelope,
+//!   indexed projections and history through one guarded `Store::transition_record` transaction.
 //! - **idempotent crash-resume** — `step` reads `lifecycle.state` and advances from there; a record
 //!   persisted mid-flight re-enters at its last state, not from `Seeded`: `step::step` + `step::drive`.
 //! - **never re-spend** — a sibling/retry already persisted is driven, not re-generated:
@@ -103,3 +103,8 @@ pub use step::{drive, drive_to_judged, evidence_key, is_terminal, step};
 
 // Re-export the revise entrypoint under a stable path.
 pub use revise::revise_once;
+
+#[cfg(test)]
+extern crate self as gw_engine;
+#[cfg(test)]
+mod process_replay_tests;

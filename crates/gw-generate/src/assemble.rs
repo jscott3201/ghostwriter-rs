@@ -11,7 +11,7 @@
 //! params + best-of-k indices + seed inputs), `cost` (token accounting from the stream), and
 //! `lifecycle` (history through `assistant_generated`).
 //!
-//! Left at DEFAULT (a downstream stage owns them): `hashes` — `gw-storage::put` is AUTHORITATIVE
+//! Left at DEFAULT (a downstream stage owns them): `hashes` — `gw-storage record writes` is AUTHORITATIVE
 //! for `record_hash` / `prompt_hash` and RECOMPUTES them; gw-generate has no storage dep and MUST
 //! NOT compute content hashes. `verification` / `judging` / `reasoning_quality` belong to the
 //! Verifier + JudgePanel rails. `sibling_group_id` is left `None` for the engine to fill from the
@@ -105,7 +105,7 @@ pub fn assemble(
         judging: Default::default(),
         reasoning_quality: None,
         lifecycle,
-        // hashes LEFT at default: gw-storage::put is authoritative and recomputes record_hash.
+        // hashes LEFT at default: gw-storage record writes is authoritative and recomputes record_hash.
         hashes: Default::default(),
         cost,
     }
