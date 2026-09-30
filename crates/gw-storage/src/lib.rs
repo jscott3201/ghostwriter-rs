@@ -130,3 +130,6 @@ mod receipt_evidence_tests;
 
 #[cfg(test)]
 mod legacy_migration_tests;
+
+#[cfg(test)]
+mod publication_integrity_tests;

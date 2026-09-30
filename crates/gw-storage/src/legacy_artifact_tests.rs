@@ -246,3 +246,77 @@ async fn v2_receipt_cannot_drop_new_task_provenance() {
             .is_empty()
     );
 }
+
+#[tokio::test]
+async fn v2_recovery_retains_legacy_null_history_for_prepared_and_acknowledged_receipts() {
+    for purpose in [ExportPurpose::Engine, ExportPurpose::Standalone] {
+        for acknowledged in [false, true] {
+            let output = Temp::new();
+            let store = Store::open_in_memory().await.unwrap();
+            store
+                .insert_historical_run("run", "{}", None)
+                .await
+                .unwrap();
+            let mut historical = record("selected");
+            historical
+                .lifecycle
+                .history
+                .push(gw_schema::StateTransition {
+                    state: LifecycleState::Formatted,
+                    at: "legacy timestamp".into(),
+                    attempt: 0,
+                });
+            store.replace_record_for_import(&historical).await.unwrap();
+            sqlx::query("UPDATE lifecycle_history SET history_ordinal=NULL, attempt=NULL, detail='legacy detail'").execute(store.pool()).await.unwrap();
+            let legacy: String = sqlx::query_scalar("SELECT json_array(id,record_id,state,at,detail,mutation_id,history_ordinal,attempt) FROM lifecycle_history WHERE history_ordinal IS NULL").fetch_one(store.pool()).await.unwrap();
+            let plan = legacy_plan(&[store.get("selected").await.unwrap()]);
+            let receipt = store
+                .prepare_export_receipt(&plan, output.0.to_str().unwrap(), purpose)
+                .await
+                .unwrap();
+            write_parquet(&plan.rows, &plan.artifact, File::create(&output.0).unwrap()).unwrap();
+            if acknowledged {
+                store.resume_export(&receipt.publication_id).await.unwrap();
+            }
+            let before = std::fs::read(&output.0).unwrap();
+            let recovered = store.resume_export(&receipt.publication_id).await.unwrap();
+            assert_eq!(recovered.artifact, plan.artifact);
+            assert_eq!(
+                recovered.disposition,
+                PublicationDisposition::AcknowledgedExisting
+            );
+            assert!(std::fs::read(&output.0).unwrap() == before);
+            let retained: String = sqlx::query_scalar("SELECT json_array(id,record_id,state,at,detail,mutation_id,history_ordinal,attempt) FROM lifecycle_history WHERE history_ordinal IS NULL").fetch_one(store.pool()).await.unwrap();
+            assert_eq!(retained, legacy);
+            assert_eq!(
+                store.lifecycle_history("selected").await.unwrap().len(),
+                if purpose == ExportPurpose::Engine {
+                    2
+                } else {
+                    1
+                }
+            );
+            let current = store.get("selected").await.unwrap();
+            assert_eq!(
+                current.lifecycle.history[0],
+                historical.lifecycle.history[0]
+            );
+            assert_eq!(
+                current.lifecycle.state,
+                if purpose == ExportPurpose::Engine {
+                    LifecycleState::Exported
+                } else {
+                    LifecycleState::Formatted
+                }
+            );
+            assert!(
+                store
+                    .resume_export(&receipt.publication_id)
+                    .await
+                    .unwrap()
+                    .advanced_record_ids
+                    .is_empty()
+            );
+        }
+    }
+}

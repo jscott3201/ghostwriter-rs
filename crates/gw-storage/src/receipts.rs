@@ -189,7 +189,6 @@ impl Store {
             }
             let detail = format!("artifact:{}", receipt.artifact.artifact_id);
             for mut record in records {
-                crate::record_data::check_history(&mut tx, &record).await?;
                 let already: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM lifecycle_history WHERE record_id = ?1 AND state = 'exported' AND detail = ?2")
                     .bind(&record.record_id).bind(&detail).fetch_one(&mut *tx).await?;
                 if already.0 == 0 {
@@ -254,15 +253,12 @@ async fn selected_records(
 ) -> Result<Vec<TrainingRecord>> {
     let mut records = Vec::with_capacity(members.len());
     for member in members {
-        let json: Option<(String,)> =
-            sqlx::query_as("SELECT record_json FROM records WHERE record_id = ?1")
-                .bind(&member.record_id)
-                .fetch_optional(&mut **tx)
-                .await?;
-        let Some((json,)) = json else {
-            return Err(integrity("selected export record no longer exists"));
-        };
-        let record: TrainingRecord = serde_json::from_str(&json)?;
+        let record = crate::record_data::load(tx, &member.record_id)
+            .await?
+            .ok_or_else(|| integrity("selected export record no longer exists"))?;
+        // Validate every receipt state and purpose before restoring, writing, or acknowledging.
+        // Historical NULL ordinals remain valid under the shared history contract.
+        crate::record_data::check_history(tx, &record).await?;
         if record.record_id != member.record_id || !is_sft_eligible(&record) {
             return Err(integrity("selected export record is no longer eligible"));
         }
