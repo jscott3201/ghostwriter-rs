@@ -65,7 +65,7 @@ pub async fn revise_once(
         .contract
         .validate()
         .map_err(|reason| EngineError::Invariant(reason.into()))?;
-    crate::grade::validate_record_verification(original)?;
+    crate::grade::validate_record_verification(original, area)?;
     area.assess_admission()?;
 
     let completion_index = original.generation.completion_index.unwrap_or(0);

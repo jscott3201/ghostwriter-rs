@@ -76,7 +76,7 @@ pub async fn run_group(
         }
         let rid = record_id(run_id, shard, seed.seed, 0, plan.completion_index);
         match clients.store.get(&rid).await {
-            Ok(rec) => crate::grade::validate_record_verification(&rec)?,
+            Ok(rec) => crate::grade::validate_record_verification(&rec, area)?,
             Err(gw_storage::StorageError::NotFound(_)) => (),
             Err(error) => return Err(error.into()),
         }

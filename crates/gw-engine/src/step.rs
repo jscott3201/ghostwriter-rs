@@ -229,7 +229,7 @@ async fn verify(
     clients: &Clients,
     area: &AreaConfig,
 ) -> Result<TrainingRecord> {
-    crate::grade::validate_record_verification(&rec)?;
+    crate::grade::validate_record_verification(&rec, area)?;
     let key = evidence_key(&rec)?;
     let execution_evidence = if rec.verification_contract.as_ref().is_some_and(|contract| {
         contract.execution_policy == Some(gw_schema::VerificationPolicy::Absent)

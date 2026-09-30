@@ -36,11 +36,11 @@ use serde::{Deserialize, Serialize};
 pub enum ExecutionOutcome {
     /// The evaluator reported the run succeeded.
     Passed,
-    /// The evaluator reported a definite failure (a failing required test, a nonzero exit, a
-    /// reported suite error). Authoritative: sinks the record regardless of any panel score.
+    /// The evaluator reported a definite failure (a failing required test, a nonzero exit, or a
+    /// reported suite error). The task's execution policy determines the admission consequence.
     Failed,
     /// The evaluator could not decide (interrupted, infrastructure fault, unreadable report, no
-    /// required-test contract). Routes to review; never admits and never rejects.
+    /// required-test contract). The task's execution policy determines the admission consequence.
     Unknown,
 }
 

@@ -16,7 +16,7 @@
 use gw_judge::{
     CorrelationMatrix, Decision, Verdict as JudgeVerdict, VerifierGrade, rederive_verdict,
 };
-use gw_schema::{TrainingRecord, Verification};
+use gw_schema::{TrainingRecord, Verification, VerificationPolicy};
 
 use crate::clients::AreaConfig;
 use crate::error::{EngineError, Result};
@@ -39,8 +39,9 @@ pub fn correlation_prior(k: usize, rho: f64) -> Result<CorrelationMatrix> {
 /// Reject unsupported executable records without changing their historical envelope.
 ///
 /// # Errors
-/// Rejects missing task policy or missing/unsupported facts after verification.
-pub fn validate_record_verification(rec: &TrainingRecord) -> Result<()> {
+/// Rejects missing task policy, missing/unsupported facts after verification, or applied policies
+/// that disagree with the task contract or the area's reasoning requirement.
+pub fn validate_record_verification(rec: &TrainingRecord, area: &AreaConfig) -> Result<()> {
     let contract = rec.verification_contract.as_ref().ok_or_else(|| {
         EngineError::Invariant(
             "record lacks task verification policy; historical records are inspect/export only"
@@ -54,13 +55,18 @@ pub fn validate_record_verification(rec: &TrainingRecord) -> Result<()> {
         facts
             .gate()
             .map_err(|reason| EngineError::Invariant(reason.into()))?;
+        let reasoning_policy = if area.cot_required {
+            VerificationPolicy::Authoritative
+        } else {
+            VerificationPolicy::Absent
+        };
+        if facts.reasoning.policy != reasoning_policy {
+            return Err(EngineError::Invariant(
+                "persisted reasoning policy disagrees with configured CoT requirement".into(),
+            ));
+        }
         if Some(facts.answer.policy) != contract.answer_policy
             || Some(facts.execution.policy) != contract.execution_policy
-            || !matches!(
-                facts.reasoning.policy,
-                gw_schema::VerificationPolicy::Absent
-                    | gw_schema::VerificationPolicy::Authoritative
-            )
         {
             return Err(EngineError::Invariant(
                 "persisted verification policy disagrees with task contract".into(),
@@ -81,13 +87,18 @@ pub fn validate_record_verification(rec: &TrainingRecord) -> Result<()> {
 /// Check every stored run record before dispatching model work, including other shards.
 ///
 /// # Errors
-/// Rejects unsupported historical records or a storage failure.
-pub async fn validate_run_verification(store: &gw_storage::Store, run_id: &str) -> Result<()> {
+/// Rejects unsupported historical records, applied policies inconsistent with the task/area, or a
+/// storage failure.
+pub async fn validate_run_verification(
+    store: &gw_storage::Store,
+    run_id: &str,
+    area: &AreaConfig,
+) -> Result<()> {
     for rec in store
         .scan(&gw_storage::RecordFilter::new().run_id(run_id))
         .await?
     {
-        validate_record_verification(&rec)?;
+        validate_record_verification(&rec, area)?;
     }
     Ok(())
 }
@@ -99,9 +110,9 @@ pub async fn validate_run_verification(store: &gw_storage::Store, run_id: &str) 
 /// Rejects missing or unsupported interpretation and inconsistent policies.
 pub fn verifier_grade_from_verification(
     rec: &TrainingRecord,
-    _area: &AreaConfig,
+    area: &AreaConfig,
 ) -> Result<VerifierGrade> {
-    validate_record_verification(rec)?;
+    validate_record_verification(rec, area)?;
     let mut verification: Verification = rec.verification.clone();
     let facts = verification.interpretation.as_ref().ok_or_else(|| {
         EngineError::Invariant("record has no completed verification interpretation".into())
@@ -236,7 +247,9 @@ mod tests {
             min_n_eff_ratio: 0.3,
             ..AreaThresholds::default()
         };
-        let area = AreaConfig::new("math", "m", vec![], "r").with_thresholds(thresholds);
+        let area = AreaConfig::new("math", "m", vec![], "r")
+            .with_cot_required(false)
+            .with_thresholds(thresholds);
         let grader = HybridGrader::new(thresholds);
         let panel = vec![grade("a", 0.9), grade("b", 0.88), grade("c", 0.91)];
         let r = correlation_prior(3, 0.7).unwrap();
@@ -272,7 +285,7 @@ mod tests {
     }
 
     fn area() -> AreaConfig {
-        AreaConfig::new("math", "m", vec![], "r")
+        AreaConfig::new("math", "m", vec![], "r").with_cot_required(false)
     }
 
     fn grade(slug: &str, score: f64) -> Grade {
