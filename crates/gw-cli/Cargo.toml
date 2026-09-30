@@ -40,6 +40,7 @@ serde_json.workspace = true
 semver.workspace = true
 
 [dev-dependencies]
+futures.workspace = true
 tokio = { workspace = true, features = ["full"] }
 # The `test` feature enables `figment::Jail`, the sandbox used to test env-layered config WITHOUT
 # touching the process environment (which would require `unsafe std::env::set_var`, forbidden here).

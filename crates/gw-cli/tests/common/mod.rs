@@ -145,7 +145,7 @@ pub async fn seed_store(path: &std::path::Path, run_id: &str, records: &[Trainin
     store
 }
 
-/// Advance a record to `Admitted` so the export path (verdict==Admit) writes it.
+/// Select a record for the dataset; export also requires an Admit judging verdict.
 pub async fn admit(store: &Store, record_id: &str) {
     store
         .advance_lifecycle(record_id, LifecycleState::Admitted, Some("test admit"))

@@ -272,6 +272,11 @@ gw eval promote            Variance-aware promotion gate over two eval_results.j
 | `--on-breach <MODE>` | `drain` or `abort` at the cap. |
 
 **`gw gen export`** — `--db`, `--out`, `--run-id` (optional), `--format`, `--cot`.
+Standalone and automatic end-of-run exports use the same SFT eligibility rule: records need an
+`admit` judging verdict and an `admitted`, `formatted`, or `exported` lifecycle state. Retained
+best-of-k losers keep their individual grades in the store but do not enter the dataset. Unfinished,
+rejected, review, and error states are excluded. The manifest counts all scanned records in
+`n_records`; `n_admitted` and `build_inputs_hash` describe only the selected exported rows.
 
 **`gw gen replay`** — resumes `--run-id` from a store; you must pass the **same** `--config`,
 `--prompts`, and `--shards` the original run used (the seed→shard partition is `index % shards`, so a

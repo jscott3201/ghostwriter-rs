@@ -53,9 +53,10 @@ pub enum LifecycleState {
     Revising,
     /// parked for human/verifier adjudication (correlated-judge / Escalate).
     NeedsReview,
-    /// verdict admit (terminal-good for the grade rail).
+    /// selected for the dataset after grading (the winner in a best-of-k group).
     Admitted,
-    /// verdict reject; retained for DPO `rejected` + bad_patterns + judge audit.
+    /// excluded from the dataset; retained for later preference work and judge audit. A best-of-k
+    /// loser may still carry an Admit judging verdict: the individual grade and selection differ.
     Rejected,
     /// projected to target template(s) per `CotPolicy`.
     Formatted,

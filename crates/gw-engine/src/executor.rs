@@ -662,29 +662,21 @@ impl Engine {
     /// Export this run's records to the configured Parquet shard and write the adjacent manifest
     /// sidecar.
     ///
-    /// The shared Parquet exporter filters by judge verdict; end-of-run export narrows that input to
-    /// lifecycle-admitted records first so shard rows agree with [`RunReport::admitted`], then restores
-    /// manifest `n_records` to the whole scanned run population. The configured `dataset_version` is set
-    /// only on the sidecar manifest, not on record rows.
+    /// The shared Parquet exporter owns SFT eligibility: both an Admit verdict and a selected
+    /// lifecycle state are required. Passing the whole run preserves the scanned population in
+    /// manifest `n_records`. The configured `dataset_version` is set only on the sidecar manifest,
+    /// not on record rows.
     ///
     /// # Errors
     /// Returns an engine error if scanning records, writing the Parquet shard, serializing the manifest,
     /// or writing the manifest sidecar fails.
     pub async fn export_shard(&self, run_id: &str, spec: &ExportSpec) -> Result<ExportManifest> {
-        let mut records = self
+        let records = self
             .clients
             .store
             .scan(&RecordFilter::new().run_id(run_id))
             .await?;
-        let n_records_total = records.len() as u64;
-        records.retain(|record| {
-            matches!(
-                record.lifecycle.state,
-                LifecycleState::Admitted | LifecycleState::Formatted | LifecycleState::Exported
-            )
-        });
         let mut manifest = export_parquet(&records, spec.target, spec.cot, &spec.dst).await?;
-        manifest.n_records = n_records_total;
         manifest.dataset_version = spec.dataset_version.clone();
         let sidecar = manifest_sidecar_path(&spec.dst);
         let body = serde_json::to_vec_pretty(&manifest)?;

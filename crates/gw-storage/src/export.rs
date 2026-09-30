@@ -35,8 +35,8 @@ use arrow::array::{ArrayRef, Float64Array, RecordBatch, StringArray, UInt32Array
 use arrow::datatypes::{DataType, Field, Schema};
 use blake3::Hasher;
 use gw_schema::{
-    CotPolicy, ExportManifest, ExportSchemaVersion, Message, MultiTurnLoss, TrainingRecord,
-    TrlFormat, Verdict,
+    CotPolicy, ExportManifest, ExportSchemaVersion, LifecycleState, Message, MultiTurnLoss,
+    TrainingRecord, TrlFormat, Verdict,
 };
 use parquet::arrow::ArrowWriter;
 
@@ -167,8 +167,11 @@ fn encode_parquet(rows: &[Projected]) -> Result<Vec<u8>> {
 
 /// Export `records` to a Parquet shard at `dst`, returning a [`gw_schema::ExportManifest`].
 ///
-/// Only ADMITTED records (`judging.verdict == Admit`) are projected; the manifest's `n_records`
-/// counts the input set and `n_admitted` counts what was written. `build_inputs_hash` is the
+/// This is the shared SFT eligibility gate for every export caller: a record must carry both an
+/// `Admit` judging verdict and an `Admitted`, `Formatted`, or `Exported` lifecycle state. A retained
+/// best-of-k loser keeps its judging evidence but is not selected for SFT; unfinished selection and
+/// review/error states are excluded too. The manifest's `n_records` counts the whole input set and
+/// `n_admitted` counts what was written. `build_inputs_hash` is the
 /// BLAKE3 of the sorted admitted `record_hash`es (a stable content hash of the shard,
 /// independent of row order). All projection, hashing, Parquet encoding, AND the file write run
 /// under [`tokio::task::spawn_blocking`] so nothing serializes or hashes on the async runtime
@@ -194,8 +197,8 @@ pub async fn export_parquet(
     Ok(manifest)
 }
 
-/// Encode the admitted records to a Parquet byte buffer + manifest, entirely off the async
-/// runtime. Used by tests (in-memory) and by [`export_parquet`] (then written to disk).
+/// Encode records eligible for SFT to a Parquet byte buffer + manifest, entirely off the async
+/// runtime. Uses the same verdict-and-lifecycle eligibility gate as [`export_parquet`].
 ///
 /// # Reading a shard back
 ///
@@ -242,7 +245,7 @@ pub async fn export_parquet(
 /// #         judging: gw_schema::Judging { verdict: Some(Verdict::Admit), aggregate: Some(0.9),
 /// #             ..Default::default() },
 /// #         reasoning_quality: None,
-/// #         lifecycle: Default::default(),
+/// #         lifecycle: gw_schema::Lifecycle { state: gw_schema::LifecycleState::Admitted, ..Default::default() },
 /// #         hashes: Default::default(),
 /// #         cost: Default::default(),
 /// #     }
@@ -285,7 +288,17 @@ pub async fn export_parquet_bytes(
     encode_admitted(records, target, cot).await
 }
 
-/// Filter to admitted records, then project + shard-hash + Parquet-encode them inside a single
+/// Judging records the individual grade; lifecycle records whether selection admitted the trace.
+/// Both are required so retained siblings and interrupted selection cannot enter an SFT dataset.
+fn is_sft_eligible(record: &TrainingRecord) -> bool {
+    record.judging.verdict == Some(Verdict::Admit)
+        && matches!(
+            record.lifecycle.state,
+            LifecycleState::Admitted | LifecycleState::Formatted | LifecycleState::Exported
+        )
+}
+
+/// Filter to SFT-eligible records, then project + shard-hash + Parquet-encode them inside a single
 /// `spawn_blocking` (so no serialization/hashing/encoding touches the async runtime thread).
 async fn encode_admitted(
     records: &[TrainingRecord],
@@ -296,7 +309,7 @@ async fn encode_admitted(
     // Clone only the admitted subset into the blocking task.
     let admitted: Vec<TrainingRecord> = records
         .iter()
-        .filter(|r| r.judging.verdict == Some(Verdict::Admit))
+        .filter(|r| is_sft_eligible(r))
         .cloned()
         .collect();
 
