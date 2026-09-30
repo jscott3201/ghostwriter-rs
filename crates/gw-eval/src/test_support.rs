@@ -10,7 +10,7 @@ use gw_schema::{
 };
 
 /// One synthetic sibling in group `prompt_hash` with the given verifier outcome and optional
-/// reasoning-quality aggregate.
+/// judge aggregate.
 ///
 /// `record_id` is derived from the hash + a per-call counter so siblings stay distinct without a
 /// clock or RNG.

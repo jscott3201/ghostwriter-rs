@@ -51,7 +51,7 @@ pub enum GenCommand {
 /// The `eval` subcommands.
 #[derive(Debug, Subcommand, PartialEq)]
 pub enum EvalCommand {
-    /// Selector-vs-random separation diagnostic over a store; prints the report as JSON.
+    /// Descriptive score diagnostics and an optional independent-outcome check; prints JSON.
     AuditSeparation(AuditSeparationArgs),
     /// Variance-aware promotion gate over two `eval_results.json` files; prints the report as JSON.
     Promote(PromoteArgs),
@@ -175,7 +175,7 @@ pub struct ReplayArgs {
     pub max_in_flight: u32,
 }
 
-/// `eval audit-separation` flags (pure: a store scan + closed-form diagnostic).
+/// `eval audit-separation` flags (model-free: a store scan and optional independent outcomes).
 #[derive(Debug, clap::Args, PartialEq)]
 pub struct AuditSeparationArgs {
     /// Path to the SQLite store to analyze.
@@ -184,10 +184,19 @@ pub struct AuditSeparationArgs {
     /// Restrict the analysis to a single run id (else the whole store).
     #[arg(long, value_name = "ID")]
     pub run_id: Option<String>,
-    /// Minimum decidable (mixed) groups before the selector signal is trusted.
+    /// Versioned independent outcomes for an explicit frozen corpus (required for qualification).
+    #[arg(long, value_name = "FILE")]
+    pub outcomes: Option<PathBuf>,
+    /// Minimum distinct evaluated prompts for qualification (default 30).
+    #[arg(long, value_name = "N")]
+    pub min_evaluated_prompts: Option<usize>,
+    /// One-sided confidence level in (0, 1), under independent prompt sampling (default 0.95).
+    #[arg(long, value_name = "F")]
+    pub confidence_level: Option<f64>,
+    /// Descriptive warning threshold for mixed verifier groups; does not qualify a selector.
     #[arg(long, value_name = "N")]
     pub min_decidable_groups: Option<usize>,
-    /// Floor on `decidable_fraction` below which the corpus is treated as a data ceiling.
+    /// Descriptive warning floor on verifier mixedness; does not qualify a selector.
     #[arg(long, value_name = "F")]
     pub min_decidable_fraction: Option<f64>,
     /// Opt into decision-bearing process exits: 0 = pass, 1 = operational error, 2 = gate rejects.

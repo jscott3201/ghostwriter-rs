@@ -14,7 +14,7 @@
 //! | `gw gen tui`             | live   | same run WITH the ratatui dashboard over the event stream |
 //! | `gw gen export`          | pure   | admitted records → a Parquet shard (`gw_storage::Store::publish_export`) |
 //! | `gw gen replay`          | live   | resume a run from its persisted shard checkpoints         |
-//! | `gw eval audit-separation`| pure  | selector-vs-random separation diagnostic over a store     |
+//! | `gw eval audit-separation`| pure  | score diagnostics and independent outcome comparison     |
 //! | `gw eval promote`        | pure   | variance-aware promotion gate over two `eval_results.json` |
 //!
 //! ## Security posture

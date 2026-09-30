@@ -1,25 +1,28 @@
 //! The `eval` handlers: `audit-separation` and `promote` (both PURE — model-free, no network).
 //!
-//! `audit-separation` scans a [`Store`] (optionally filtered to one run) and runs the closed-form
-//! [`separation::analyze_store`] diagnostic; `promote` parses two `eval_results.json` artifacts plus a
+//! `audit-separation` scans a [`Store`] (optionally filtered to one run) and analyzes descriptive
+//! scores plus optional independent outcome evidence; `promote` parses two `eval_results.json` artifacts plus a
 //! drift exit code and runs the variance-aware [`promote`] gate. Both print their report as
 //! pretty JSON to stdout — the machine-readable artifact a CI gate consumes.
 
 use anyhow::Context;
 
 use gw_eval::{
-    PromoteConfig, SeparationConfig, promote::EvalResults, promote::promote, separation,
+    OutcomeEvidence, OutcomeStatus, PromoteConfig, SeparationConfig, promote::EvalResults,
+    promote::promote, separation,
 };
 use gw_storage::{RecordFilter, Store};
 
 use crate::CommandOutcome;
 use crate::cli::{AuditSeparationArgs, PromoteArgs};
 
-/// Run the selector-vs-random separation diagnostic over the store at `args.db`, optionally filtered
+/// Analyze score diagnostics and optional independent outcomes over `args.db`, optionally filtered
 /// to `args.run_id`, and print the [`SeparationReport`](gw_eval::SeparationReport) as JSON.
+/// Semantic invalidity prints its typed report and returns an error. Missing/unknown outcomes or
+/// statistical insufficiency are successful analyses, rejected only when `args.check` is enabled.
 ///
 /// # Errors
-/// Propagates a store-open / scan failure or a JSON serialization failure.
+/// Propagates store/file I/O, parse, serialization, and semantic evidence/configuration errors.
 pub async fn audit_separation(args: AuditSeparationArgs) -> anyhow::Result<CommandOutcome> {
     let store = Store::open(&args.db)
         .await
@@ -37,13 +40,32 @@ pub async fn audit_separation(args: AuditSeparationArgs) -> anyhow::Result<Comma
     if let Some(f) = args.min_decidable_fraction {
         cfg.min_decidable_fraction = f;
     }
+    if let Some(n) = args.min_evaluated_prompts {
+        cfg.outcomes.min_evaluated_prompts = n;
+    }
+    if let Some(level) = args.confidence_level {
+        cfg.outcomes.confidence_level = level;
+    }
+    let outcomes = args
+        .outcomes
+        .as_ref()
+        .map(|path| {
+            let bytes = std::fs::read(path)
+                .with_context(|| format!("reading outcomes {}", path.display()))?;
+            OutcomeEvidence::from_json(&bytes)
+                .with_context(|| format!("parsing outcomes {}", path.display()))
+        })
+        .transpose()?;
 
-    let report = separation::analyze_store(&store, &filter, &cfg)
+    let report = separation::analyze_store(&store, &filter, &cfg, outcomes.as_ref())
         .await
         .context("running the separation diagnostic")?;
     let json =
         serde_json::to_string_pretty(&report).context("serializing the separation report")?;
     println!("{json}");
+    if report.outcome_evaluation.status == OutcomeStatus::InvalidEvidence {
+        anyhow::bail!("invalid independent outcome evidence or configuration; see report reasons");
+    }
     if args.check && !report.passed() {
         Ok(CommandOutcome::GateRejected)
     } else {
