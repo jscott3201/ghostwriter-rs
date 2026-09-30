@@ -115,8 +115,8 @@ pub use sandbox::{CodeSandbox, SandboxConfig, SqlSandbox};
 // --- physical model request evidence ---
 pub use attempt::{
     AccountingCapability, AccountingHistory, AttemptContext, AttemptIntent, AttemptMetadata,
-    AttemptPurpose, AttemptReceipt, AttemptRole, LaunchCoverage, OutputInterpretation,
-    ReportedCost, TransportOutcome, TransportSettlement,
+    AttemptObservation, AttemptPurpose, AttemptReceipt, AttemptRole, LaunchCoverage,
+    OutputInterpretation, ReportedCost, TransportOutcome, TransportSettlement,
 };
 
 #[cfg(test)]

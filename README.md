@@ -267,7 +267,7 @@ For independent version-1 identity implementations:
 
 ## Physical request receipts
 
-Engine runs record physical chat and embedding attempts in SQLite. Each built-in HTTP client
+`Engine::run` records physical chat and embedding attempts in SQLite. Each built-in HTTP client
 awaits a durable intent immediately before its POST, after any rate-limit wait. An intent failure
 prevents that request. Intentional chat retries each receive a new receipt; automatic redirects
 and reqwest protocol retries are disabled for chat and embeddings. The HTTP/2 regression fixture
@@ -290,16 +290,24 @@ backend reported; absent model revisions remain absent.
 injected clients' capabilities assessed at each launch. Custom implementations default to
 `Unknown`; `NullEmbedder` explicitly performs no model requests. A declaration is a cooperative
 extension contract. Wrapping a logical call or accepting a no-op callback does not establish its
-hidden transmission behavior. Direct provider calls outside an observed engine context have no
-run-owned receipt.
+hidden transmission behavior. Public direct `step`, `drive`, `drive_to_judged`, `run_group`, and
+`revise_once` helpers, as well as raw provider calls, have no run-owned receipts when called without
+observation context. These entry points cannot certify complete accounting history.
+A future dispatch boundary must
+require registered context or record incomplete coverage before engine-owned model requests;
+pure computation and cache-only paths remain usable without such context.
 
-Usage fields are optional evidence. A reported zero differs from missing cost, and negative,
-non-finite or malformed cost is invalid. Counts accept unsigned integers and integer strings;
-fractional or overflowing counts are marked invalid. Metadata extraction is independent of the
-teacher, judge and vector parsers, including malformed output. An observed SSE response continues
+Usage fields are optional evidence. A reported zero differs from omitted cost, and explicit null,
+negative, non-finite or malformed cost is invalid. Counts accept unsigned integers and integer
+strings; explicit null, fractional or overflowing counts are marked invalid. A null usage container
+means no measurement, and null optional response/model/provider identifiers add no new identity
+evidence. Metadata extraction is independent of the teacher, judge and vector parsers, including
+malformed output. An observed SSE response continues
 to drain metadata after its first content-decoding error and returns that original error after
-transport settles. Repeated cumulative snapshots are never added together; contradictory values
-remain visible. Token deltas with unchanged metadata do not write the database.
+transport settles. Changed observations receive ordered identities within each physical attempt.
+Exact persistence retries reuse that identity and return its stored result. A fresh return to older
+cumulative values or reuse of an identity with different data remains a durable conflict. Cumulative
+snapshots are never added together. Token deltas with unchanged metadata do not write the database.
 
 Transport settlement and output interpretation are separate: a completed HTTP response can
 contain an invalid grade or truncated reasoning. Elapsed milliseconds measure wall time from the

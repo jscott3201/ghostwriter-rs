@@ -35,10 +35,15 @@ impl AttemptObserver for StoreObserver {
                 .map_err(|e| ObservationError(e.to_string()))
         })
     }
-    fn metadata(&self, id: String, metadata: AttemptMetadata) -> ObservationFuture<'_, ()> {
+    fn metadata(
+        &self,
+        id: String,
+        sequence: u64,
+        metadata: AttemptMetadata,
+    ) -> ObservationFuture<'_, ()> {
         Box::pin(async move {
             self.0
-                .observe_model_attempt(&id, &metadata)
+                .observe_model_attempt(&id, sequence, &metadata)
                 .await
                 .map_err(|e| ObservationError(e.to_string()))
         })

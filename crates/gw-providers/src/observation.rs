@@ -24,8 +24,14 @@ pub type ObservationFuture<'a, T> =
 pub trait AttemptObserver: Send + Sync {
     /// Persist intent before sending; failure prevents the POST.
     fn begin(&self, intent: AttemptIntent) -> ObservationFuture<'_, String>;
-    /// Persist changed cumulative metadata, without adding repeated values.
-    fn metadata(&self, id: String, metadata: AttemptMetadata) -> ObservationFuture<'_, ()>;
+    /// Persist changed cumulative metadata in zero-based sequence order.
+    /// Exact retries reuse both sequence and payload; fresh evidence receives a new sequence.
+    fn metadata(
+        &self,
+        id: String,
+        sequence: u64,
+        metadata: AttemptMetadata,
+    ) -> ObservationFuture<'_, ()>;
     /// Persist transport outcome; retrying this write must not duplicate spend.
     fn settle(&self, id: String, settlement: TransportSettlement) -> ObservationFuture<'_, ()>;
     /// Persist higher-layer output interpretation, separate from transport.
@@ -115,6 +121,7 @@ impl CallObservation {
             observer: self.context.observer.clone(),
             started: Instant::now(),
             last_metadata: AttemptMetadata::default(),
+            next_sequence: 0,
         })
     }
 }
@@ -124,6 +131,7 @@ pub(crate) struct ActiveAttempt {
     observer: Arc<dyn AttemptObserver>,
     started: Instant,
     last_metadata: AttemptMetadata,
+    next_sequence: u64,
 }
 impl ActiveAttempt {
     pub(crate) async fn metadata(&mut self, value: AttemptMetadata) -> Result<(), ProviderError> {
@@ -132,11 +140,19 @@ impl ActiveAttempt {
         if merged == self.last_metadata {
             return Ok(());
         }
+        let next_sequence = self.next_sequence.checked_add(1).ok_or_else(|| {
+            accounting(
+                "metadata",
+                ObservationError("observation sequence exhausted".into()),
+                None,
+            )
+        })?;
         self.observer
-            .metadata(self.id.clone(), value)
+            .metadata(self.id.clone(), self.next_sequence, value)
             .await
             .map_err(|e| accounting("metadata", e, None))?;
         self.last_metadata = merged;
+        self.next_sequence = next_sequence;
         Ok(())
     }
     pub(crate) async fn settle(

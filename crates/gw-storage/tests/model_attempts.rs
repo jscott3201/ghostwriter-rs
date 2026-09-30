@@ -57,16 +57,16 @@ async fn cumulative_updates_replace_and_repeated_updates_and_settlement_are_idem
         ..Default::default()
     };
     for _ in 0..2 {
-        store.observe_model_attempt(&id, &first).await.unwrap();
+        store.observe_model_attempt(&id, 0, &first).await.unwrap();
     }
     for _ in 0..2 {
         store
-            .observe_model_attempt(&id, &final_metadata)
+            .observe_model_attempt(&id, 1, &final_metadata)
             .await
             .unwrap();
     }
-    // Re-delivery of an earlier snapshot does not move current totals backward.
-    store.observe_model_attempt(&id, &first).await.unwrap();
+    // Retrying the same earlier operation does not move current totals backward.
+    store.observe_model_attempt(&id, 0, &first).await.unwrap();
     for _ in 0..2 {
         store
             .settle_model_attempt(&id, &settlement())
@@ -96,6 +96,7 @@ async fn contradictory_metadata_and_terminal_updates_are_durable_errors() {
     store
         .observe_model_attempt(
             &id,
+            0,
             &AttemptMetadata {
                 total_tokens: Some(10),
                 response_id: Some("one".into()),
@@ -113,7 +114,7 @@ async fn contradictory_metadata_and_terminal_updates_are_durable_errors() {
     };
     assert!(
         store
-            .observe_model_attempt(&id, &conflicting)
+            .observe_model_attempt(&id, 1, &conflicting)
             .await
             .is_err()
     );
@@ -153,10 +154,9 @@ async fn contradictory_metadata_and_terminal_updates_are_durable_errors() {
     ] {
         assert!(receipt.conflicts.contains(&field.into()));
     }
-    assert_eq!(
-        receipt.observations,
-        vec![receipt.observations[0].clone(), conflicting]
-    );
+    assert_eq!(receipt.observations.len(), 2);
+    assert_eq!(receipt.observations[1].metadata, conflicting);
+    assert_eq!(receipt.observations[1].sequence, 1);
     assert_eq!(receipt.transport, Some(settlement()));
     assert_eq!(receipt.interpretation, Some(OutputInterpretation::Accepted));
 }
@@ -181,6 +181,7 @@ async fn known_zero_missing_invalid_and_unresolved_remain_distinct_after_file_re
         store
             .observe_model_attempt(
                 &id,
+                0,
                 &AttemptMetadata {
                     cost_usd: cost,
                     ..Default::default()
@@ -193,6 +194,7 @@ async fn known_zero_missing_invalid_and_unresolved_remain_distinct_after_file_re
     store
         .observe_model_attempt(
             &failed_id,
+            0,
             &AttemptMetadata {
                 cost_usd: ReportedCost::Known(0.75),
                 total_tokens: Some(9),
@@ -281,6 +283,7 @@ async fn invalid_typed_prices_cannot_serialize_as_known_null_or_negative_cost() 
         store
             .observe_model_attempt(
                 &id,
+                0,
                 &AttemptMetadata {
                     cost_usd: ReportedCost::Known(value),
                     ..Default::default()
@@ -297,4 +300,178 @@ async fn invalid_typed_prices_cannot_serialize_as_known_null_or_negative_cost() 
             .all(|r| r.metadata.cost_usd == ReportedCost::Invalid
                 && r.metadata.invalid_fields.contains(&"cost".into()))
     );
+}
+
+#[tokio::test]
+async fn fresh_decreases_and_reused_sequence_conflicts_survive_reopen_and_retries() {
+    let path = std::env::temp_dir().join(format!(
+        "gw-attempt-operations-{}-{}.sqlite",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let store = Store::open(&path).await.unwrap();
+    let id = store
+        .begin_model_attempt(&intent(&store).await)
+        .await
+        .unwrap();
+    let first = AttemptMetadata {
+        total_tokens: Some(10),
+        cost_usd: ReportedCost::Known(0.1),
+        ..Default::default()
+    };
+    let next = AttemptMetadata {
+        total_tokens: Some(20),
+        cost_usd: ReportedCost::Known(0.2),
+        ..Default::default()
+    };
+    store.observe_model_attempt(&id, 0, &first).await.unwrap();
+    store.observe_model_attempt(&id, 1, &next).await.unwrap();
+    // Identical payload with a fresh identity is new evidence, including a decrease.
+    let decreasing = store
+        .observe_model_attempt(&id, 2, &first)
+        .await
+        .unwrap_err()
+        .to_string();
+    // Reusing an operation's identity with different data also retains a durable error.
+    let reused = store
+        .observe_model_attempt(&id, 0, &next)
+        .await
+        .unwrap_err()
+        .to_string();
+    let before = store.model_attempts("run").await.unwrap();
+    assert_eq!(before[0].observations.len(), 4);
+    assert_eq!(
+        before[0]
+            .observations
+            .iter()
+            .map(|entry| entry.sequence)
+            .collect::<Vec<_>>(),
+        vec![0, 1, 2, 0]
+    );
+    for field in ["cost_usd", "total_tokens", "observation_sequence"] {
+        assert!(before[0].conflicts.contains(&field.into()));
+    }
+    store.close().await;
+    let reopened = Store::open(&path).await.unwrap();
+    // Lost-response retries are stable across processes and never replay older values into totals.
+    reopened
+        .observe_model_attempt(&id, 0, &first)
+        .await
+        .unwrap();
+    reopened.observe_model_attempt(&id, 1, &next).await.unwrap();
+    assert_eq!(
+        reopened
+            .observe_model_attempt(&id, 2, &first)
+            .await
+            .unwrap_err()
+            .to_string(),
+        decreasing
+    );
+    assert_eq!(
+        reopened
+            .observe_model_attempt(&id, 0, &next)
+            .await
+            .unwrap_err()
+            .to_string(),
+        reused
+    );
+    assert_eq!(reopened.model_attempts("run").await.unwrap(), before);
+    reopened.close().await;
+    std::fs::remove_file(path).unwrap();
+}
+
+#[tokio::test]
+async fn skipped_observation_sequences_are_retained_as_errors_without_updating_totals() {
+    let store = Store::open_in_memory().await.unwrap();
+    let id = store
+        .begin_model_attempt(&intent(&store).await)
+        .await
+        .unwrap();
+    let metadata = AttemptMetadata {
+        cost_usd: ReportedCost::Known(0.2),
+        ..Default::default()
+    };
+    for _ in 0..2 {
+        assert!(
+            store
+                .observe_model_attempt(&id, 1, &metadata)
+                .await
+                .is_err()
+        );
+    }
+    let receipt = store.model_attempts("run").await.unwrap().pop().unwrap();
+    assert_eq!(receipt.observations.len(), 1);
+    assert_eq!(receipt.observations[0].metadata, metadata);
+    assert_eq!(receipt.metadata.cost_usd, ReportedCost::Missing);
+    assert_eq!(receipt.conflicts, vec!["observation_sequence"]);
+}
+
+#[tokio::test]
+async fn conflicting_terminal_retries_stay_rejected_after_reopen() {
+    let path = std::env::temp_dir().join(format!(
+        "gw-attempt-terminals-{}-{}.sqlite",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let store = Store::open(&path).await.unwrap();
+    let id = store
+        .begin_model_attempt(&intent(&store).await)
+        .await
+        .unwrap();
+    let canonical = settlement();
+    let conflicting = TransportSettlement {
+        outcome: TransportOutcome::Failed,
+        ..canonical.clone()
+    };
+    let other = TransportSettlement {
+        outcome: TransportOutcome::HttpError,
+        ..canonical.clone()
+    };
+    store.settle_model_attempt(&id, &canonical).await.unwrap();
+    store
+        .interpret_model_attempt(&id, OutputInterpretation::Accepted)
+        .await
+        .unwrap();
+    let mut rejected = Vec::new();
+    for _ in 0..2 {
+        rejected.push(store.settle_model_attempt(&id, &conflicting).await.is_err());
+        rejected.push(
+            store
+                .interpret_model_attempt(&id, OutputInterpretation::Invalid)
+                .await
+                .is_err(),
+        );
+    }
+    store.close().await;
+    let reopened = Store::open(&path).await.unwrap();
+    for value in [&conflicting, &other] {
+        rejected.push(reopened.settle_model_attempt(&id, value).await.is_err());
+    }
+    for value in [
+        OutputInterpretation::Invalid,
+        OutputInterpretation::Truncated,
+    ] {
+        rejected.push(reopened.interpret_model_attempt(&id, value).await.is_err());
+    }
+    let canonical_retries = [
+        reopened.settle_model_attempt(&id, &canonical).await.is_ok(),
+        reopened
+            .interpret_model_attempt(&id, OutputInterpretation::Accepted)
+            .await
+            .is_ok(),
+    ];
+    let receipt = reopened.model_attempts("run").await.unwrap().pop().unwrap();
+    reopened.close().await;
+    std::fs::remove_file(path).unwrap();
+    assert!(rejected.iter().all(|rejected| *rejected), "{rejected:?}");
+    assert_eq!(canonical_retries, [true, true]);
+    assert_eq!(receipt.transport, Some(canonical));
+    assert_eq!(receipt.interpretation, Some(OutputInterpretation::Accepted));
+    assert_eq!(receipt.conflicts, vec!["transport", "interpretation"]);
 }

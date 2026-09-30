@@ -119,6 +119,18 @@ pub struct AttemptMetadata {
     pub invalid_fields: Vec<String>,
 }
 
+/// One ordered metadata persistence operation, including its durable validation result.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AttemptObservation {
+    /// Zero-based sequence within one physical attempt; exact write retries reuse this value.
+    pub sequence: u64,
+    /// Cumulative fields supplied by this observation, without summing repeated measurements.
+    pub metadata: AttemptMetadata,
+    /// Contradictions introduced by this operation. Exact retries return the same result.
+    pub conflicts: Vec<String>,
+}
+
 /// Observed end of the HTTP/SSE exchange, separate from output usability.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -167,8 +179,8 @@ pub struct AttemptReceipt {
     pub intent: AttemptIntent,
     /// Latest cumulative metadata; never sum snapshots from one attempt.
     pub metadata: AttemptMetadata,
-    /// Distinct observations retained to expose conflicting values.
-    pub observations: Vec<AttemptMetadata>,
+    /// Ordered operations retained to distinguish fresh evidence from exact write retries.
+    pub observations: Vec<AttemptObservation>,
     /// Contradictory field names; a conflicted receipt cannot establish complete accounting.
     pub conflicts: Vec<String>,
     /// Missing after process loss, cancellation by drop, or settlement failure.

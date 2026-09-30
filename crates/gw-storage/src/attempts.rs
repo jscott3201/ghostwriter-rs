@@ -1,8 +1,8 @@
 //! Short durable transactions for model transmission evidence; no lock spans HTTP work.
 use crate::{Result, StorageError, Store, now_rfc3339};
 use gw_schema::{
-    AccountingCapability, AttemptIntent, AttemptMetadata, AttemptReceipt, LaunchCoverage,
-    OutputInterpretation, ReportedCost, TransportSettlement,
+    AccountingCapability, AttemptIntent, AttemptMetadata, AttemptObservation, AttemptReceipt,
+    LaunchCoverage, OutputInterpretation, ReportedCost, TransportSettlement,
 };
 use sqlx::{Sqlite, Transaction};
 
@@ -78,8 +78,15 @@ impl Store {
         rows.into_iter().map(|row| decode_receipt(&row)).collect()
     }
 
-    /// Merge cumulative metadata without summing repeats. Conflicts remain durable and return an error.
-    pub async fn observe_model_attempt(&self, id: &str, metadata: &AttemptMetadata) -> Result<()> {
+    /// Persist cumulative metadata in zero-based sequence order without summing repeats.
+    /// Retrying an identical operation returns its original result. Reusing a sequence with
+    /// different metadata, skipping a sequence, or decreasing cumulative values is a durable error.
+    pub async fn observe_model_attempt(
+        &self,
+        id: &str,
+        sequence: u64,
+        metadata: &AttemptMetadata,
+    ) -> Result<()> {
         let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
         let mut receipt = load(&mut tx, id).await?;
         let mut metadata = metadata.clone();
@@ -90,15 +97,34 @@ impl Store {
                 metadata.invalid_fields.push("cost".into());
             }
         }
-        if receipt.observations.contains(&metadata) {
-            return Ok(());
+        if let Some(existing) = receipt.observations.iter().find(|observation| {
+            observation.sequence == sequence && observation.metadata == metadata
+        }) {
+            return observation_result(id, existing);
         }
-        let prior_conflicts = receipt.conflicts.len();
-        merge_metadata(&mut receipt, &metadata);
-        receipt.observations.push(metadata);
+        let expected = receipt
+            .observations
+            .iter()
+            .map(|observation| observation.sequence)
+            .max()
+            .map_or(Some(0), |previous| previous.checked_add(1));
+        let conflicts = if Some(sequence) == expected {
+            merge_metadata(&mut receipt, &metadata)
+        } else {
+            vec!["observation_sequence".into()]
+        };
+        for field in &conflicts {
+            conflict(&mut receipt.conflicts, field);
+        }
+        let observation = AttemptObservation {
+            sequence,
+            metadata,
+            conflicts,
+        };
+        receipt.observations.push(observation.clone());
         save(&mut tx, &receipt).await?;
         tx.commit().await?;
-        conflict_result(&receipt, prior_conflicts)
+        observation_result(id, &observation)
     }
 
     /// Persist terminal transport evidence idempotently. A different settlement is a conflict.
@@ -112,15 +138,15 @@ impl Store {
         if receipt.transport.as_ref() == Some(settlement) {
             return Ok(());
         }
-        let prior_conflicts = receipt.conflicts.len();
-        if receipt.transport.is_some() {
+        let conflicting = receipt.transport.is_some();
+        if conflicting {
             conflict(&mut receipt.conflicts, "transport");
         } else {
             receipt.transport = Some(settlement.clone());
         }
         save(&mut tx, &receipt).await?;
         tx.commit().await?;
-        conflict_result(&receipt, prior_conflicts)
+        terminal_result(id, "transport", conflicting)
     }
 
     /// Record output interpretation independently from the transport settlement.
@@ -134,15 +160,15 @@ impl Store {
         if receipt.interpretation == Some(interpretation) {
             return Ok(());
         }
-        let prior_conflicts = receipt.conflicts.len();
-        if receipt.interpretation.is_some() {
+        let conflicting = receipt.interpretation.is_some();
+        if conflicting {
             conflict(&mut receipt.conflicts, "interpretation");
         } else {
             receipt.interpretation = Some(interpretation);
         }
         save(&mut tx, &receipt).await?;
         tx.commit().await?;
-        conflict_result(&receipt, prior_conflicts)
+        terminal_result(id, "interpretation", conflicting)
     }
 }
 
@@ -178,12 +204,10 @@ async fn save(tx: &mut Transaction<'_, Sqlite>, receipt: &AttemptReceipt) -> Res
         .await?;
     Ok(())
 }
-fn conflict_result(receipt: &AttemptReceipt, before: usize) -> Result<()> {
-    if receipt.conflicts.len() > before {
+fn terminal_result(id: &str, field: &str, conflicting: bool) -> Result<()> {
+    if conflicting {
         Err(StorageError::Attempt(format!(
-            "conflicting evidence for attempt {}: {}",
-            receipt.attempt_id,
-            receipt.conflicts[before..].join(", ")
+            "conflicting evidence for attempt {id}: {field}"
         )))
     } else {
         Ok(())
@@ -194,7 +218,19 @@ fn conflict(conflicts: &mut Vec<String>, field: &str) {
         conflicts.push(field.into());
     }
 }
-fn merge_metadata(receipt: &mut AttemptReceipt, patch: &AttemptMetadata) {
+fn observation_result(id: &str, observation: &AttemptObservation) -> Result<()> {
+    if observation.conflicts.is_empty() {
+        Ok(())
+    } else {
+        Err(StorageError::Attempt(format!(
+            "conflicting observation {} for attempt {id}: {}",
+            observation.sequence,
+            observation.conflicts.join(", ")
+        )))
+    }
+}
+fn merge_metadata(receipt: &mut AttemptReceipt, patch: &AttemptMetadata) -> Vec<String> {
+    let mut conflicts = Vec::new();
     let current = &mut receipt.metadata;
     for (name, old, new) in [
         (
@@ -220,7 +256,7 @@ fn merge_metadata(receipt: &mut AttemptReceipt, patch: &AttemptMetadata) {
     ] {
         if let Some(value) = new {
             if old.is_some_and(|previous| value < previous) {
-                conflict(&mut receipt.conflicts, name);
+                conflict(&mut conflicts, name);
             }
             *old = Some(value);
         }
@@ -232,7 +268,7 @@ fn merge_metadata(receipt: &mut AttemptReceipt, patch: &AttemptMetadata) {
     ] {
         if let Some(value) = new {
             if old.as_ref().is_some_and(|previous| previous != value) {
-                conflict(&mut receipt.conflicts, name);
+                conflict(&mut conflicts, name);
             }
             *old = Some(value.clone());
         }
@@ -241,7 +277,7 @@ fn merge_metadata(receipt: &mut AttemptReceipt, patch: &AttemptMetadata) {
         ReportedCost::Missing => {}
         ReportedCost::Known(cost) if cost.is_finite() && cost >= 0.0 => {
             if matches!(current.cost_usd, ReportedCost::Known(previous) if cost < previous) {
-                conflict(&mut receipt.conflicts, "cost_usd");
+                conflict(&mut conflicts, "cost_usd");
             }
             current.cost_usd = ReportedCost::Known(cost);
         }
@@ -254,6 +290,7 @@ fn merge_metadata(receipt: &mut AttemptReceipt, patch: &AttemptMetadata) {
             current.invalid_fields.push(field.clone());
         }
     }
+    conflicts
 }
 
 fn decode_coverage(json: &str) -> Result<LaunchCoverage> {

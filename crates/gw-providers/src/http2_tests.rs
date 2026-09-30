@@ -25,7 +25,7 @@ impl AttemptObserver for Observer {
     fn begin(&self, _: AttemptIntent) -> ObservationFuture<'_, String> {
         Box::pin(async move { Ok(self.begins.fetch_add(1, Ordering::SeqCst).to_string()) })
     }
-    fn metadata(&self, _: String, _: AttemptMetadata) -> ObservationFuture<'_, ()> {
+    fn metadata(&self, _: String, _: u64, _: AttemptMetadata) -> ObservationFuture<'_, ()> {
         Box::pin(async { Ok(()) })
     }
     fn settle(&self, _: String, _: TransportSettlement) -> ObservationFuture<'_, ()> {

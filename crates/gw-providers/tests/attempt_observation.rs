@@ -310,3 +310,195 @@ async fn later_usage_is_drained_after_an_earlier_output_decode_failure() {
         );
     }
 }
+
+#[tokio::test]
+async fn a_fresh_return_to_older_cumulative_sse_values_is_a_durable_conflict() {
+    let store = Store::open_in_memory().await.unwrap();
+    let ctx = context(&store, Role::Teacher, Purpose::Initial).await;
+    let first = json!({"usage":{"cost":0.1,"total_tokens":10}});
+    let mut body = sse(first.clone(), false);
+    body.push_str(&sse(json!({"usage":{"cost":0.2,"total_tokens":20}}), false));
+    body.push_str(&sse(first, true));
+    let server = Server::responses(vec![(200, body)]).await;
+    let error = drain(
+        chat(&server, 1)
+            .stream_chat_observed(ChatRequest::new("model", vec![]), ctx.call())
+            .await
+            .unwrap(),
+    )
+    .await
+    .expect_err("fresh decreasing evidence must not be mistaken for a retried write");
+    assert!(error.is_accounting() && !error.is_retryable());
+    assert_eq!(server.posts.load(Ordering::SeqCst), 1);
+    let receipt = store.model_attempts("run").await.unwrap().pop().unwrap();
+    assert_eq!(receipt.observations.len(), 3);
+    assert_eq!(
+        receipt
+            .observations
+            .iter()
+            .map(|entry| entry.sequence)
+            .collect::<Vec<_>>(),
+        vec![0, 1, 2]
+    );
+    assert!(receipt.conflicts.contains(&"cost_usd".into()));
+    assert!(receipt.conflicts.contains(&"total_tokens".into()));
+}
+
+#[tokio::test]
+async fn explicit_null_usage_fields_are_invalid_for_chat_and_embeddings() {
+    for embedding in [false, true] {
+        let store = Store::open_in_memory().await.unwrap();
+        let (role, purpose) = if embedding {
+            (Role::Embedding, Purpose::CandidateQc)
+        } else {
+            (Role::Teacher, Purpose::Initial)
+        };
+        let ctx = context(&store, role, purpose).await;
+        let payload = json!({"id":null,"provider":null,"usage":{"cost":null,
+            "prompt_tokens":null,"completion_tokens":null,"total_tokens":null,
+            "completion_tokens_details":{"reasoning_tokens":null}},
+            "data":[{"index":0,"embedding":[1,0]}]});
+        let body = if embedding {
+            payload.to_string()
+        } else {
+            sse(payload, true)
+        };
+        let server = Server::responses(vec![(200, body)]).await;
+        if embedding {
+            EmbeddingsClient::builder()
+                .base_url(&server.url)
+                .dim(2)
+                .build_with_key(None)
+                .unwrap()
+                .embed_batch_observed(&["text"], ctx.call())
+                .await
+                .unwrap();
+        } else {
+            // Typed chat decoding may reject these fields; accounting extraction precedes it.
+            if let Err(error) = drain(
+                chat(&server, 1)
+                    .stream_chat_observed(ChatRequest::new("model", vec![]), ctx.call())
+                    .await
+                    .unwrap(),
+            )
+            .await
+            {
+                assert!(matches!(error, ProviderError::Decode(_)));
+            }
+        }
+        let receipt = store.model_attempts("run").await.unwrap().pop().unwrap();
+        assert_eq!(receipt.metadata.cost_usd, ReportedCost::Invalid);
+        for field in [
+            "cost",
+            "prompt_tokens",
+            "completion_tokens",
+            "total_tokens",
+            "reasoning_tokens",
+        ] {
+            assert!(
+                receipt.metadata.invalid_fields.contains(&field.into()),
+                "{field}"
+            );
+        }
+        assert_eq!(receipt.metadata.response_id, None);
+        assert!(!receipt.metadata.invalid_fields.contains(&"id".into()));
+        assert!(!receipt.metadata.invalid_fields.contains(&"provider".into()));
+        assert_eq!(
+            receipt.transport.unwrap().outcome,
+            TransportOutcome::Complete
+        );
+    }
+}
+
+#[tokio::test]
+async fn late_null_usage_survives_an_earlier_valid_measurement_and_decode_error() {
+    let store = Store::open_in_memory().await.unwrap();
+    let ctx = context(&store, Role::Judge, Purpose::Grade).await;
+    let mut body = sse(
+        json!({"choices":"malformed", "usage":{"cost":0.4,"total_tokens":12}}),
+        false,
+    );
+    body.push_str(&sse(
+        json!({"usage":{"cost":null,"total_tokens":null}}),
+        true,
+    ));
+    let server = Server::responses(vec![(200, body)]).await;
+    let result = drain(
+        chat(&server, 1)
+            .stream_chat_observed(ChatRequest::new("model", vec![]), ctx.call())
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(matches!(result, Err(ProviderError::Decode(_))));
+    let receipt = store.model_attempts("run").await.unwrap().pop().unwrap();
+    assert_eq!(receipt.observations.len(), 2);
+    assert_eq!(receipt.metadata.cost_usd, ReportedCost::Invalid);
+    assert!(receipt.metadata.invalid_fields.contains(&"cost".into()));
+    assert!(
+        receipt
+            .metadata
+            .invalid_fields
+            .contains(&"total_tokens".into())
+    );
+    assert_eq!(
+        receipt.transport.unwrap().outcome,
+        TransportOutcome::Complete
+    );
+}
+
+#[tokio::test]
+async fn omitted_or_null_usage_containers_stay_unmeasured_and_zero_stays_known() {
+    for embedding in [false, true] {
+        for (usage, expected) in [
+            (json!(null), ReportedCost::Missing),
+            (json!({}), ReportedCost::Missing),
+            (json!({"cost":0,"total_tokens":0}), ReportedCost::Known(0.0)),
+        ] {
+            let store = Store::open_in_memory().await.unwrap();
+            let (role, purpose) = if embedding {
+                (Role::Embedding, Purpose::CandidateQc)
+            } else {
+                (Role::Teacher, Purpose::Initial)
+            };
+            let ctx = context(&store, role, purpose).await;
+            let payload = json!({"usage":usage,"data":[{"index":0,"embedding":[1,0]}]});
+            let body = if embedding {
+                payload.to_string()
+            } else {
+                sse(payload, true)
+            };
+            let server = Server::responses(vec![(200, body)]).await;
+            if embedding {
+                EmbeddingsClient::builder()
+                    .base_url(&server.url)
+                    .dim(2)
+                    .build_with_key(None)
+                    .unwrap()
+                    .embed_batch_observed(&["text"], ctx.call())
+                    .await
+                    .unwrap();
+            } else {
+                drain(
+                    chat(&server, 1)
+                        .stream_chat_observed(ChatRequest::new("model", vec![]), ctx.call())
+                        .await
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            }
+            let receipt = store.model_attempts("run").await.unwrap().pop().unwrap();
+            assert_eq!(receipt.metadata.cost_usd, expected);
+            assert!(receipt.metadata.invalid_fields.is_empty());
+            assert_eq!(
+                receipt.metadata.total_tokens,
+                if expected == ReportedCost::Known(0.0) {
+                    Some(0)
+                } else {
+                    None
+                }
+            );
+        }
+    }
+}

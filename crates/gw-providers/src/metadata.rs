@@ -16,21 +16,28 @@ struct Envelope {
 }
 #[derive(Deserialize)]
 struct Usage {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "present")]
     prompt_tokens: Option<Box<RawValue>>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "present")]
     completion_tokens: Option<Box<RawValue>>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "present")]
     total_tokens: Option<Box<RawValue>>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "present")]
     completion_tokens_details: Option<Box<RawValue>>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "present")]
     cost: Option<Box<RawValue>>,
 }
 #[derive(Deserialize)]
 struct Details {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "present")]
     reasoning_tokens: Option<Box<RawValue>>,
+}
+
+// Missing fields use Default; present null must reach numeric validation as a raw value.
+fn present<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Box<RawValue>>, D::Error> {
+    Box::<RawValue>::deserialize(deserializer).map(Some)
 }
 
 pub(crate) fn extract_json(bytes: &[u8]) -> Option<AttemptMetadata> {
