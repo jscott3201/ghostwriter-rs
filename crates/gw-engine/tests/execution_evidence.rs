@@ -124,7 +124,7 @@ async fn a_corroborated_pass_hands_the_record_to_the_panel() {
         run_with("run-evidence-pass", source, &judge_body(0.95, "accept")).await;
 
     assert_eq!(run.admitted, 1, "a proven pass must still be admissible");
-    assert_eq!(rec.lifecycle.state, LifecycleState::Exported);
+    assert_eq!(rec.lifecycle.state, LifecycleState::Formatted);
     assert!(rec.verification.all_passed);
     assert!(
         rec.verification
@@ -384,7 +384,7 @@ async fn the_report_round_trips_through_put_get_and_a_resumed_verify() {
     )
     .await
     .unwrap();
-    assert_eq!(done.lifecycle.state, LifecycleState::Exported);
+    assert_eq!(done.lifecycle.state, LifecycleState::Formatted);
     assert_eq!(
         store.get("rec-evidence").await.unwrap().execution_evidence,
         stored.execution_evidence,

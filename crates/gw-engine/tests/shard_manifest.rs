@@ -215,14 +215,15 @@ async fn matching_resume_keeps_happy_path_and_zero_shards_match_one() {
         .await
         .unwrap();
     assert!(report.completed);
-    assert_eq!(report.exported, 2);
+    assert_eq!(report.exported, 0);
+    assert_eq!(report.admitted, 2);
     assert_eq!(teacher.call_count(), 2, "matching resume must not re-spend");
 
     let exported = store
         .scan(
             &RecordFilter::new()
                 .run_id("run-match")
-                .lifecycle_state(LifecycleState::Exported),
+                .lifecycle_state(LifecycleState::Formatted),
         )
         .await
         .unwrap();

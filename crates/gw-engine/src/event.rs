@@ -87,14 +87,14 @@ pub enum EngineEvent {
         /// The 0-based shard index.
         shard: i64,
     },
-    /// The completed run wrote its configured Parquet shard and manifest sidecar.
+    /// The completed run published and acknowledged its configured self-contained artifact.
     ShardExported {
         /// The run id.
         run_id: String,
         /// The manifest returned by the shard export.
         manifest: ExportManifest,
     },
-    /// The configured end-of-run shard export failed; the run itself still stands.
+    /// The configured artifact publication failed; the run returns failure.
     ShardExportFailed {
         /// The run id.
         run_id: String,
@@ -105,7 +105,7 @@ pub enum EngineEvent {
     RunFinished {
         /// The run id.
         run_id: String,
-        /// `true` if every shard drained cleanly; `false` if the run halted early.
+        /// `true` after clean drain and any configured artifact acknowledgment; `false` on halt/failure.
         completed: bool,
     },
 }

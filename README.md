@@ -34,8 +34,8 @@ onto a few modes. ghostwriter-rs makes the quality bar **explicit and enforced**
 - **best-of-k** generates several candidates per prompt and admits only the best;
 - a hard **budget** governs spend, with a defined policy for what happens when it's reached.
 
-The output is a columnar dataset plus a sidecar manifest, ready to render into the chat template of
-your target student model.
+The output is a self-contained Parquet dataset with an embedded manifest, ready to render into the
+chat template of your target student model.
 
 ---
 
@@ -186,15 +186,82 @@ stay at `NeedsReview`; no admitted dataset is produced. The `k = 3` setting gene
 answers per prompt and does not add judges.
 
 **5. Export an automatic-admission run** after configuring an attainable panel as described below.
-Export is a pure, provider-free step you can repeat:
+Export is a provider-free step you can repeat:
 
 ```sh
 gw gen export --db gw-run.sqlite --out out/dataset.parquet --run-id automatic-001 \
   --format chat-ml --cot supervised
 ```
 
-You get `out/dataset.parquet` plus an `out/dataset.parquet.manifest.json` sidecar recording the
-target template, CoT policy, dataset version, and record counts.
+You get one `out/dataset.parquet` file. Its footer records the target template, CoT policy, optional
+`--dataset-version`, record counts, selection scope and artifact identity. The command prints the
+same manifest as JSON. It records a local publication receipt without changing generation run status
+or record lifecycle. Historical sidecars are ignored and left untouched.
+
+### Artifact publication and recovery
+
+Export freezes the selected IDs, all eight projected columns and the complete manifest before writing.
+It records a prepared receipt in SQLite, writes a unique staging file beside the destination, closes
+the writer, then opens a fresh reader to verify the footer, schema, every batch, counts, IDs, hashes
+and decoded messages. One rename replaces the destination; SQLite acknowledgment follows. A failure
+before rename preserves the old destination and removes only the owned staging file.
+
+After rename, a database error leaves the verified artifact on disk. Retry checks the persisted
+receipt and the exact selected records. Later unrelated admissions are not added to a prepared
+publication. If the destination contains different content, retry republishes the same frozen plan
+through staging before acknowledgment. A file claiming the expected identity but failing verification
+is an integrity error. A database error does not prove rollback: the receipt may already be
+acknowledged if the commit succeeded but its response was lost.
+
+Errors after preparation report a publication ID. Recover that exact publication without provider
+credentials or projection overrides:
+
+```sh
+gw gen export --db gw-run.sqlite --resume-publication PUBLICATION_ID
+```
+
+This uses the receipt's recorded destination and may replace that file with the original frozen
+artifact. It accepts prepared or acknowledged receipts and leaves later admissions untouched.
+The original acknowledgment mode applies: an engine receipt may finish marking its selected records
+`Exported`; a standalone receipt leaves lifecycle unchanged. Recovery never changes generation run
+status or claims that generation completed. `--out`, `--run-id`, `--format`, `--cot` and
+`--dataset-version` conflict with explicit recovery. Ordinary export still selects a fresh population
+when no prepared receipt requires recovery.
+
+This protocol does not claim a filesystem/SQLite transaction, a cross-process
+publication lease, or power-loss durability; callers must serialize publication to a destination.
+
+The engine keeps selected records at `Formatted` until its configured artifact is published and
+acknowledged. Without configured output, a successful run reports readiness and `exported = 0`.
+Configured output is published even when no records were admitted, producing a valid empty artifact
+that replaces stale output. Publication failure fails the run; success events and `Completed` follow
+acknowledgment. Standalone `gen export` leaves generation states unchanged.
+
+The authoritative footer key is `ghostwriter.export_artifact`. Metadata version 1 wraps the existing
+manifest, scope and `artifact_id`; the eight-column `canonical_messages` schema remains unchanged.
+`gw_storage::verify_artifact` reads every batch and returns an explicit `MissingLegacyMetadata` result
+for historical files without this entry. Ordinary Parquet row readers can still read those files.
+No adjacent file is used to infer metadata.
+
+`build_inputs_hash` retains its original meaning: BLAKE3 of sorted admitted `record_hash` values,
+each followed by a newline. The separate artifact identity covers the complete projection, manifest
+and scope, including empty populations. It excludes the destination and its own ID field. Metadata
+does not invent missing model identities or claim a complete generation provenance graph.
+
+For independent version-1 identity implementations:
+
+1. Sort rows by `record_id` in UTF-8 byte order. Reject duplicate IDs. A framed string is its UTF-8
+   byte length as an unsigned 64-bit big-endian integer followed by those bytes.
+2. Hash each row with BLAKE3 derive-key context `ghostwriter.export.projected-row.v1`: framed
+   `record_id`, `training_area`, `record_hash`, `prompt_hash`; verdict presence byte (`0` absent,
+   `1` present) and framed verdict when present; aggregate presence byte and its exact IEEE-754
+   64-bit big-endian bits when present; unsigned 32-bit big-endian `reasoning_tokens`; framed
+   `messages_json`. Encode the resulting digest as lowercase hexadecimal.
+3. Hash the artifact with context `ghostwriter.export.artifact.v1`: unsigned 32-bit big-endian
+   `metadata_version`; framed scope JSON; framed complete manifest JSON; unsigned 64-bit big-endian
+   row count; each framed hexadecimal row digest in sorted order. Scope and manifest JSON use the
+   version-1 typed fields, recursively sorted object keys, compact separators and UTF-8 strings.
+   Optional absent manifest fields are omitted and defaulted fields use their serialized values.
 
 ---
 

@@ -13,9 +13,9 @@ use gw_schema::{LifecycleState, Verdict};
 use gw_storage::{RecordFilter, Store};
 use tokio_util::sync::CancellationToken;
 
-/// A clean single-record run drives all the way to `Exported` and counts as admitted.
+/// A clean single-record run drives all the way to `Formatted` and counts as admitted.
 #[tokio::test]
-async fn happy_path_drives_to_exported() {
+async fn happy_path_drives_to_formatted() {
     let store = Store::open_in_memory().await.unwrap();
     let teacher = Arc::new(ScriptedTeacher::new(vec![good_cot(0.01)], 1));
     let judge = Arc::new(ScriptedJudge::new(vec![&judge_body(0.95, "accept")]));
@@ -29,17 +29,18 @@ async fn happy_path_drives_to_exported() {
         .await
         .unwrap();
 
-    assert_eq!(report.exported, 1, "the clean record exports");
+    assert_eq!(report.exported, 0);
+    assert_eq!(report.admitted, 1, "the clean record exports");
     assert_eq!(report.admitted, 1);
     assert_eq!(report.rejected, 0);
     assert!(report.completed);
 
-    // The record reached Exported in storage.
+    // The record reached Formatted in storage.
     let exported = store
         .scan(
             &RecordFilter::new()
                 .run_id("run-1")
-                .lifecycle_state(LifecycleState::Exported),
+                .lifecycle_state(LifecycleState::Formatted),
         )
         .await
         .unwrap();
@@ -82,7 +83,8 @@ async fn teacher_reasoning_cap_reaches_request_and_provenance() {
         .await
         .unwrap();
 
-    assert_eq!(report.exported, 1);
+    assert_eq!(report.exported, 0);
+    assert_eq!(report.admitted, 1);
     let seen = teacher.seen_requests();
     assert_eq!(seen.len(), 1);
     assert_eq!(seen[0].max_tokens, Some(20_000));
@@ -131,9 +133,10 @@ async fn truncated_teacher_reasoning_retries_once_and_persists_record() {
     assert_eq!(seen.len(), 2);
     assert_eq!(seen[0].max_tokens, Some(10_000));
     assert_eq!(seen[1].max_tokens, Some(15_000));
+    assert_eq!(report.exported, 0);
     assert_eq!(
-        report.exported, 1,
-        "the retried record persists and exports"
+        report.admitted, 1,
+        "the retried record persists and becomes ready"
     );
     assert_eq!(report.errored, 0);
     assert!(
@@ -146,7 +149,7 @@ async fn truncated_teacher_reasoning_retries_once_and_persists_record() {
         .await
         .unwrap();
     assert_eq!(all.len(), 1, "retry does not double-persist");
-    assert_eq!(all[0].lifecycle.state, LifecycleState::Exported);
+    assert_eq!(all[0].lifecycle.state, LifecycleState::Formatted);
     assert_eq!(
         all[0].generation.max_tokens,
         Some(15_000),
@@ -352,7 +355,8 @@ async fn best_of_k_admits_only_one_when_two_would_pass() {
     // EXACTLY one admitted (the 0.95 sibling); the 0.90 sibling — which on its own would pass the 0.80
     // threshold — is RETAINED as Rejected, NOT admitted/exported.
     assert_eq!(report.admitted, 1, "exactly ONE sibling admitted, not both");
-    assert_eq!(report.exported, 1);
+    assert_eq!(report.exported, 0);
+    assert_eq!(report.admitted, 1);
     assert_eq!(
         report.rejected, 1,
         "the runner-up is retained, not admitted"
@@ -369,7 +373,7 @@ async fn best_of_k_admits_only_one_when_two_would_pass() {
         .filter(|r| {
             matches!(
                 r.lifecycle.state,
-                LifecycleState::Exported | LifecycleState::Admitted
+                LifecycleState::Formatted | LifecycleState::Admitted
             )
         })
         .collect();

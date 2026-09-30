@@ -568,9 +568,8 @@ async fn select_and_finalize(
         .position(|s| is_established_winner(s.lifecycle.state))
     {
         // F3 (H-A): DRIVE the established winner before returning. A crash can land with the winner at
-        // `Admitted`/`Formatted` (admitted but not yet exported); without this it would be stranded at
-        // that state across resumes — an honest lifecycle requires it reach `Exported`. `drive` is
-        // idempotent: a winner already at `Exported` returns immediately (no re-work, no re-spend).
+        // `Admitted` before formatting; `drive` takes it to `Formatted`, where it waits for engine
+        // artifact publication. Formatted and previously Exported winners return without re-work.
         let finalized = drive(siblings[winner_idx].clone(), clients, area, control.token()).await?;
         let winner_id = finalized.record_id.clone();
         siblings[winner_idx] = finalized;

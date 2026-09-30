@@ -12,7 +12,7 @@
 //! |---------------------------|--------|-----------------------------------------------------------|
 //! | `gw gen run`              | live   | headless engine run; print the [`RunReport`](gw_engine::RunReport) |
 //! | `gw gen tui`             | live   | same run WITH the ratatui dashboard over the event stream |
-//! | `gw gen export`          | pure   | admitted records → a Parquet shard (`gw_storage::export_parquet`) |
+//! | `gw gen export`          | pure   | admitted records → a Parquet shard (`gw_storage::Store::publish_export`) |
 //! | `gw gen replay`          | live   | resume a run from its persisted shard checkpoints         |
 //! | `gw eval audit-separation`| pure  | selector-vs-random separation diagnostic over a store     |
 //! | `gw eval promote`        | pure   | variance-aware promotion gate over two `eval_results.json` |

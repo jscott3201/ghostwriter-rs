@@ -556,12 +556,13 @@ async fn sft_export_requires_an_admit_verdict_and_selected_lifecycle() {
         ids,
         [
             "Admitted-Some(Admit)",
-            "Formatted-Some(Admit)",
-            "Exported-Some(Admit)"
+            "Exported-Some(Admit)",
+            "Formatted-Some(Admit)"
         ]
     );
 
-    // Excluded records affect the scanned count, never the shard bytes or content identity.
+    // Excluded records affect the embedded population count and artifact identity, while the
+    // admitted rows and historical build_inputs_hash retain their selection-only meaning.
     let selected: Vec<_> = ids
         .iter()
         .map(|id| records.iter().find(|r| &r.record_id == id).unwrap().clone())
@@ -570,7 +571,11 @@ async fn sft_export_requires_an_admit_verdict_and_selected_lifecycle() {
         export_parquet_bytes(&selected, TrlFormat::Gemma4, CotPolicy::Masked)
             .await
             .unwrap();
-    assert_eq!(bytes, selected_bytes);
+    assert!(
+        bytes != selected_bytes,
+        "the embedded population counts differ"
+    );
+    assert_eq!(export_and_decode(&selected).await.0, ids);
     assert_eq!(
         manifest.build_inputs_hash,
         selected_manifest.build_inputs_hash
@@ -598,7 +603,11 @@ async fn unsettled_sibling_group_exports_no_rows() {
             .await
             .unwrap();
     assert_eq!((manifest.n_records, manifest.n_admitted), (2, 0));
-    assert_eq!(bytes, empty_bytes);
+    assert!(
+        bytes != empty_bytes,
+        "the embedded population counts differ"
+    );
+    assert!(export_and_decode(&records).await.0.is_empty());
     assert_eq!(manifest.build_inputs_hash, empty_manifest.build_inputs_hash);
 }
 

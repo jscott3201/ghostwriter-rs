@@ -19,41 +19,44 @@
 //!
 //! ## Reading a shard
 //!
-//! [`ExportSchemaVersion`] names the column contract a shard was written under and is recorded in
+//! [`gw_schema::ExportSchemaVersion`] names the column contract a shard was written under and is recorded in
 //! every manifest. [`export_parquet_bytes`] carries a worked read-back example. v1 shards (the
 //! historical, lossy `{role, content}` + parallel `reasoning_json` pair) are still readable, but
 //! only by a text-only consumer — see the enum's docs for the exact break.
 //!
-//! The Arrow + Parquet writers are **synchronous** and do file I/O, so [`export_parquet`] runs
+//! The Arrow + Parquet writers are **synchronous** and do file I/O, so [`crate::Store::publish_export`] runs
 //! them inside [`tokio::task::spawn_blocking`] to keep the async runtime unblocked. Tests write
 //! to an in-memory `Vec<u8>` buffer (the Parquet `ArrowWriter` accepts any [`std::io::Write`]).
 
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Float64Array, RecordBatch, StringArray, UInt32Array};
 use arrow::datatypes::{DataType, Field, Schema};
 use blake3::Hasher;
 use gw_schema::{
-    CotPolicy, ExportManifest, ExportSchemaVersion, LifecycleState, Message, MultiTurnLoss,
+    CotPolicy, ExportArtifact, ExportManifest, ExportOptions, ExportScope, LifecycleState, Message,
     TrainingRecord, TrlFormat, Verdict,
 };
 use parquet::arrow::ArrowWriter;
+use parquet::file::metadata::KeyValue;
+use parquet::file::properties::WriterProperties;
 
-use crate::error::{Result, StorageError};
+use crate::artifact::{ARTIFACT_METADATA_KEY, ExportPlan};
+use crate::error::Result;
 
 /// The flat columnar projection of one record (one Parquet row). `messages_json` is a JSON-string
 /// column to dodge deep-nesting schema churn (DATA-SCHEMA §4.1); it holds the whole canonical
 /// conversation, so there is no parallel per-turn column that can drift out of alignment with it.
-struct Projected {
-    record_id: String,
-    training_area: String,
-    record_hash: String,
-    prompt_hash: String,
-    verdict: Option<String>,
-    judge_aggregate: Option<f64>,
-    reasoning_tokens: u32,
-    messages_json: String,
+#[derive(Debug, Clone)]
+pub(crate) struct Projected {
+    pub record_id: String,
+    pub training_area: String,
+    pub record_hash: String,
+    pub prompt_hash: String,
+    pub verdict: Option<String>,
+    pub judge_aggregate: Option<f64>,
+    pub reasoning_tokens: u32,
+    pub messages_json: String,
 }
 
 /// Project a record into its export row. `messages_json` is the canonical conversation, serialized
@@ -63,7 +66,7 @@ struct Projected {
 ///
 /// `record_hash` falls back to a freshly computed content hash when the envelope's own hash is
 /// empty, so an externally-constructed record can never export `record_hash = ""`.
-fn project(rec: &TrainingRecord) -> Result<Projected> {
+pub(crate) fn project(rec: &TrainingRecord) -> Result<Projected> {
     Ok(Projected {
         record_id: rec.record_id.clone(),
         training_area: rec.training_area.clone(),
@@ -93,7 +96,7 @@ fn project(rec: &TrainingRecord) -> Result<Projected> {
 /// byte-equal `Vec<Message>`.
 ///
 /// # Errors
-/// Returns [`StorageError::Serde`] if a message fails to serialize.
+/// Returns [`crate::StorageError::Serde`] if a message fails to serialize.
 fn canonical_messages_json(messages: &[Message]) -> Result<String> {
     Ok(serde_json::to_string(messages)?)
 }
@@ -111,7 +114,7 @@ fn resolved_record_hash(rec: &TrainingRecord) -> Result<String> {
 
 /// The fixed Arrow schema for the export projection. Every column is non-nullable except the two
 /// that genuinely can be absent (verdict / judge aggregate).
-fn export_schema() -> Arc<Schema> {
+pub(crate) fn export_schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
         Field::new("record_id", DataType::Utf8, false),
         Field::new("training_area", DataType::Utf8, false),
@@ -125,7 +128,7 @@ fn export_schema() -> Arc<Schema> {
 }
 
 /// Assemble the projected rows into a single Arrow [`RecordBatch`].
-fn build_batch(rows: &[Projected]) -> Result<RecordBatch> {
+pub(crate) fn build_batch(rows: &[Projected]) -> Result<RecordBatch> {
     let columns: Vec<ArrayRef> = vec![
         Arc::new(StringArray::from_iter_values(
             rows.iter().map(|r| r.record_id.as_str()),
@@ -156,53 +159,30 @@ fn build_batch(rows: &[Projected]) -> Result<RecordBatch> {
 }
 
 /// Encode the rows to an in-memory Parquet byte buffer (sync; called from `spawn_blocking`).
-fn encode_parquet(rows: &[Projected]) -> Result<Vec<u8>> {
+pub(crate) fn write_parquet<W: std::io::Write + Send>(
+    rows: &[Projected],
+    artifact: &ExportArtifact,
+    output: W,
+) -> Result<()> {
     let batch = build_batch(rows)?;
-    let mut buf: Vec<u8> = Vec::new();
-    let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), None)?;
+    let props = WriterProperties::builder()
+        .set_key_value_metadata(Some(vec![KeyValue::new(
+            ARTIFACT_METADATA_KEY.to_string(),
+            serde_json::to_string(artifact)?,
+        )]))
+        .build();
+    let mut writer = ArrowWriter::try_new(output, batch.schema(), Some(props))?;
     writer.write(&batch)?;
     writer.close()?;
-    Ok(buf)
-}
-
-/// Export `records` to a Parquet shard at `dst`, returning a [`gw_schema::ExportManifest`].
-///
-/// This is the shared SFT eligibility gate for every export caller: a record must carry both an
-/// `Admit` judging verdict and an `Admitted`, `Formatted`, or `Exported` lifecycle state. A retained
-/// best-of-k loser keeps its judging evidence but is not selected for SFT; unfinished selection and
-/// review/error states are excluded too. The manifest's `n_records` counts the whole input set and
-/// `n_admitted` counts what was written. `build_inputs_hash` is the
-/// BLAKE3 of the sorted admitted `record_hash`es (a stable content hash of the shard,
-/// independent of row order). All projection, hashing, Parquet encoding, AND the file write run
-/// under [`tokio::task::spawn_blocking`] so nothing serializes or hashes on the async runtime
-/// thread.
-///
-/// `cot` and `target` are recorded in the manifest only; this function does NOT render templates
-/// or move reasoning into a loss region (that is `gw-format`'s job) — it stores the conversation
-/// column and the policy alongside it. The written shard's reader contract is
-/// [`ExportSchemaVersion::CURRENT`]; read the file back as shown on
-/// [`export_parquet_bytes`].
-///
-/// # Errors
-/// Returns [`StorageError`] on a serialization, Arrow/Parquet encode, or filesystem I/O failure.
-pub async fn export_parquet(
-    records: &[TrainingRecord],
-    target: TrlFormat,
-    cot: CotPolicy,
-    dst: impl AsRef<Path>,
-) -> Result<ExportManifest> {
-    let dst_path: PathBuf = dst.as_ref().to_path_buf();
-    let (bytes, manifest) = encode_admitted(records, target, cot).await?;
-    tokio::task::spawn_blocking(move || std::fs::write(&dst_path, bytes)).await??;
-    Ok(manifest)
+    Ok(())
 }
 
 /// Encode records eligible for SFT to a Parquet byte buffer + manifest, entirely off the async
-/// runtime. Uses the same verdict-and-lifecycle eligibility gate as [`export_parquet`].
+/// runtime. Uses the same verdict-and-lifecycle eligibility gate as [`crate::Store::publish_export`].
 ///
 /// # Reading a shard back
 ///
-/// A consumer needs two things: the [`ExportSchemaVersion`] from the manifest, and the
+/// A consumer needs two things: the [`gw_schema::ExportSchemaVersion`] from the manifest, and the
 /// `messages_json` column. There is no transform to reverse — the column decodes straight into
 /// `Vec<Message>`, with the `tool_call_id` result link, the `content: null` / `""` distinction and
 /// the retained `raw_arguments` wire text all intact:
@@ -279,18 +259,33 @@ pub async fn export_parquet(
 /// ```
 ///
 /// # Errors
-/// Returns [`StorageError`] on a serialization or Arrow/Parquet failure.
+/// Returns [`crate::StorageError`] on a serialization or Arrow/Parquet failure.
 pub async fn export_parquet_bytes(
     records: &[TrainingRecord],
     target: TrlFormat,
     cot: CotPolicy,
 ) -> Result<(Vec<u8>, ExportManifest)> {
-    encode_admitted(records, target, cot).await
+    let records = records.to_vec();
+    tokio::task::spawn_blocking(move || {
+        let plan = ExportPlan::prepare(
+            &records,
+            ExportOptions {
+                target,
+                cot_policy: cot,
+                dataset_version: None,
+                scope: ExportScope::Records,
+            },
+        )?;
+        let mut bytes = Vec::new();
+        write_parquet(&plan.rows, plan.artifact(), &mut bytes)?;
+        Ok((bytes, plan.artifact().manifest.clone()))
+    })
+    .await?
 }
 
 /// Judging records the individual grade; lifecycle records whether selection admitted the trace.
 /// Both are required so retained siblings and interrupted selection cannot enter an SFT dataset.
-fn is_sft_eligible(record: &TrainingRecord) -> bool {
+pub(crate) fn is_sft_eligible(record: &TrainingRecord) -> bool {
     record.judging.verdict == Some(Verdict::Admit)
         && matches!(
             record.lifecycle.state,
@@ -298,51 +293,10 @@ fn is_sft_eligible(record: &TrainingRecord) -> bool {
         )
 }
 
-/// Filter to SFT-eligible records, then project + shard-hash + Parquet-encode them inside a single
-/// `spawn_blocking` (so no serialization/hashing/encoding touches the async runtime thread).
-async fn encode_admitted(
-    records: &[TrainingRecord],
-    target: TrlFormat,
-    cot: CotPolicy,
-) -> Result<(Vec<u8>, ExportManifest)> {
-    let n_records = records.len() as u64;
-    // Clone only the admitted subset into the blocking task.
-    let admitted: Vec<TrainingRecord> = records
-        .iter()
-        .filter(|r| is_sft_eligible(r))
-        .cloned()
-        .collect();
-
-    let (bytes, build_inputs_hash, n_admitted) =
-        tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, String, u64)> {
-            let rows: Vec<Projected> = admitted.iter().map(project).collect::<Result<_>>()?;
-            let build_inputs_hash = shard_content_hash(&rows);
-            let bytes = encode_parquet(&rows)?;
-            Ok((bytes, build_inputs_hash, admitted.len() as u64))
-        })
-        .await
-        .map_err(StorageError::from)??;
-
-    let manifest = ExportManifest {
-        column_schema_version: ExportSchemaVersion::CURRENT,
-        target,
-        cot_policy: cot,
-        dataset_version: None,
-        hub_commit_sha: None,
-        n_records,
-        n_admitted,
-        decontam_index_id: None,
-        build_inputs_hash,
-        multi_turn_loss: MultiTurnLoss::default(),
-        diversity: None,
-    };
-    Ok((bytes, manifest))
-}
-
 /// BLAKE3 of the sorted per-row `record_hash`es — a stable, order-independent content hash of the
 /// shard for the manifest's `build_inputs_hash`. Reads the already-resolved (never empty) hashes
 /// off the projected rows.
-fn shard_content_hash(rows: &[Projected]) -> String {
+pub(crate) fn shard_content_hash(rows: &[Projected]) -> String {
     let mut hashes: Vec<&str> = rows.iter().map(|r| r.record_hash.as_str()).collect();
     hashes.sort_unstable();
     let mut h = Hasher::new();

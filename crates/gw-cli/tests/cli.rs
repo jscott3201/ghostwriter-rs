@@ -131,10 +131,10 @@ fn gen_export_parses_with_format_and_cot() {
         panic!("expected gen export");
     };
     assert_eq!(args.db, PathBuf::from("store.sqlite"));
-    assert_eq!(args.out, PathBuf::from("out.parquet"));
+    assert_eq!(args.out, Some(PathBuf::from("out.parquet")));
     assert_eq!(args.run_id, Some("r1".to_string()));
-    assert_eq!(args.format, ExportFormat::ChatMl);
-    assert_eq!(args.cot, ExportCot::Stripped);
+    assert_eq!(args.format, Some(ExportFormat::ChatMl));
+    assert_eq!(args.cot, Some(ExportCot::Stripped));
 }
 
 #[test]
@@ -152,8 +152,8 @@ fn gen_export_format_and_cot_default() {
     let Command::Gen(GenCommand::Export(args)) = cli.command else {
         panic!("expected gen export");
     };
-    assert_eq!(args.format, ExportFormat::ChatMl);
-    assert_eq!(args.cot, ExportCot::Supervised);
+    assert_eq!(args.format, None);
+    assert_eq!(args.cot, None);
     assert!(args.run_id.is_none());
 }
 
