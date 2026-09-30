@@ -8,7 +8,8 @@
 //!   fraction of sibling groups the deterministic verifier can actually decide (so panel judge
 //!   tokens can be skipped on the rest).
 //! - [`promote`] (A3 + ITEM 9) — a variance-aware **promotion gate**. Promotes a candidate
-//!   fine-tune only if a capability-drift probe is clean AND a `k·σ`-noise-band A/B compare shows
+//!   fine-tune only with complete, finite supplied evidence, a clean capability-drift probe, and
+//!   a `k·σ`-noise-band A/B comparison showing
 //!   no regression with at least one win. The decision is re-derivable at a new `k` without
 //!   re-running eval.
 //!
@@ -30,6 +31,7 @@ mod test_support;
 
 pub use error::{EvalError, Result};
 pub use promote::{
-    BenchmarkOutcome, EvalResults, PromoteConfig, PromotionReport, promote as promote_gate,
+    BenchmarkOutcome, EvalResults, EvaluationSide, EvidenceIssue, PromoteConfig, PromotionReport,
+    promote as promote_gate,
 };
 pub use separation::{SeparationConfig, SeparationReport, analyze, analyze_store};

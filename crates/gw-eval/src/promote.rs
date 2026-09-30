@@ -6,6 +6,18 @@
 //! headless, GPU-free, and imports no TRL/PEFT: it consumes already-computed B2 `eval_results`
 //! and a capability-drift probe **exit code**, and emits a binary decision.
 //!
+//! ## Evidence completeness and numeric validity
+//!
+//! Every benchmark supplied by either artifact, plus the configured headline, must be present
+//! on both sides. Aggregate-only artifacts remain supported. All supplied scores and comparison
+//! arithmetic must be finite; missing or invalid evidence rejects with [`EvidenceIssue`] diagnostics.
+//! `aggregate` and `eval_results.aggregate` name one headline, reported under the dotted name.
+//! Those names are reserved in benchmark maps so a benchmark cannot hide behind the aggregate.
+//!
+//! [`EvalResults`] identifies metrics only. It cannot establish matching tasks, datasets,
+//! checkpoints, templates, or score units, and it does not declare an external required suite.
+//! The caller must establish those conditions before interpreting a promotion as meaningful.
+//!
 //! ## Two gates — BOTH must pass (ITEM 9 truth table)
 //!
 //! 1. **Drift gate (hard).** If [`PromoteConfig::drift_must_pass`] and the drift probe exit code
@@ -23,7 +35,8 @@
 //! regress}` plus the config knobs used (`ab_sigma_k`, `ab_min_delta`) and `drift_exit`, so the
 //! decision is RECOMPUTABLE at a different `k` WITHOUT re-running eval — mirroring the
 //! JUDGE-DESIGN sealed-verdict / re-derive-threshold invariant. [`PromotionReport::rederive`]
-//! does exactly that.
+//! does exactly that for valid evidence. Missing/invalid evidence remains a rejection under any
+//! retuning. Only valid comparisons enter the outcome list; rejected comparisons have diagnostics.
 //!
 //! ## Config homing (deferred)
 //!
@@ -34,19 +47,31 @@
 //! CONFIG.md eventually homes the variance fields in `gw-schema::PromoteConfig`; that merge is a
 //! reported follow-up, not part of this crate.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
+
+const AGGREGATE_METRIC: &str = "eval_results.aggregate";
+
+fn canonical_metric(metric: &str) -> &str {
+    if metric == "aggregate" {
+        AGGREGATE_METRIC
+    } else {
+        metric
+    }
+}
 
 /// A B2 `eval_results.json` artifact: per-benchmark scores plus a headline aggregate.
 ///
 /// Deserialized straight from the JSON a candidate or baseline adapter's eval run emits. The
 /// `aggregate` is carried explicitly (it is the default headline [`PromoteConfig::ab_metric`])
 /// AND is also addressable through [`Self::score`] under the dotted key `"eval_results.aggregate"`.
+/// Scores may use any finite scale; this type carries no dataset, task-version, or unit identity.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EvalResults {
     /// Per-benchmark scores, e.g. `{"gsm8k": 0.71, "ifeval": 0.63, ...}`. Ordered for stable
-    /// iteration/serialization.
+    /// iteration/serialization. The names `aggregate` and `eval_results.aggregate` are reserved;
+    /// [`promote`] rejects artifacts that use either as a benchmark key.
     #[serde(default)]
     pub benchmarks: BTreeMap<String, f64>,
     /// The headline rolled-up score (the default A/B metric).
@@ -58,7 +83,7 @@ impl EvalResults {
     /// bare `"aggregate"`) map to [`Self::aggregate`]; any other name indexes [`Self::benchmarks`].
     #[must_use]
     pub fn score(&self, metric: &str) -> Option<f64> {
-        if metric == "eval_results.aggregate" || metric == "aggregate" {
+        if canonical_metric(metric) == AGGREGATE_METRIC {
             Some(self.aggregate)
         } else {
             self.benchmarks.get(metric).copied()
@@ -81,8 +106,8 @@ impl EvalResults {
 /// defaults (`ab_min_delta = 0.0`, `ab_sigma_k = 1.0`, `drift_must_pass = true`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PromoteConfig {
-    /// Which metric in `eval_results.json` is the HEADLINE benchmark, always evaluated and always
-    /// included in the report. Default `"eval_results.aggregate"`.
+    /// Which metric in `eval_results.json` is the HEADLINE benchmark, always required on both sides.
+    /// Default `"eval_results.aggregate"`; the bare `"aggregate"` alias has the same meaning.
     pub ab_metric: String,
     /// The fixed noise floor added to every benchmark's band (the spec's named-but-unmeasured
     /// `ab_min_delta`). Default `0.0`.
@@ -93,6 +118,8 @@ pub struct PromoteConfig {
     /// Per-benchmark σ priors (seeded from the Olmo 3 table, e.g. `gpqa 1.48`, `ifeval 0.88`).
     /// A benchmark absent here uses σ = `0.0` (band collapses to `ab_min_delta`) — documented and
     /// intentional so an un-prior'd benchmark is not silently given a free pass.
+    /// Either aggregate alias configures the headline prior. If both are supplied, they must agree
+    /// after the existing normalization (negative/non-finite priors become zero).
     #[serde(default)]
     pub ab_benchmark_sigma: BTreeMap<String, f64>,
     /// Number of measured runs averaged into each benchmark score. Once `>= 3`, a MEASURED σ
@@ -127,12 +154,31 @@ impl PromoteConfig {
         // (negative or NaN/inf) can never invert the noise band. An inverted (negative) band would
         // classify a benchmark as BOTH a win and a regress at once — a self-contradictory verdict
         // (PROM-3). An un-prior'd or non-finite entry collapses to `0.0` (band == `ab_min_delta`).
-        self.ab_benchmark_sigma
-            .get(benchmark)
-            .copied()
-            .filter(|s| s.is_finite())
-            .map_or(0.0, |s| s.max(0.0))
+        let prior = self.ab_benchmark_sigma.get(benchmark);
+        let prior = if benchmark == AGGREGATE_METRIC {
+            prior.or_else(|| self.ab_benchmark_sigma.get("aggregate"))
+        } else {
+            prior
+        };
+        prior.copied().map_or(0.0, normalize_sigma)
     }
+}
+
+fn normalize_sigma(sigma: f64) -> f64 {
+    if sigma.is_finite() {
+        sigma.max(0.0)
+    } else {
+        0.0
+    }
+}
+
+/// Check arithmetic before the non-negative clamp, which would otherwise hide NaN or -infinity.
+fn noise_band(min_delta: f64, sigma_k: f64, sigma: f64) -> Option<f64> {
+    if !min_delta.is_finite() || !sigma_k.is_finite() || !sigma.is_finite() {
+        return None;
+    }
+    let band = min_delta + sigma_k * sigma;
+    band.is_finite().then(|| band.max(0.0))
 }
 
 /// One benchmark's re-derivable A/B verdict. `win` and `regress` are mutually exclusive; both
@@ -157,6 +203,103 @@ pub struct BenchmarkOutcome {
     pub regress: bool,
 }
 
+/// Which evaluation artifact supplied (or omitted) a score.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvaluationSide {
+    /// The reference evaluation.
+    Baseline,
+    /// The evaluation being considered for promotion.
+    Candidate,
+}
+
+/// A reason the supplied evidence cannot support a promotion decision.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum EvidenceIssue {
+    /// A required metric is absent from an evaluation artifact.
+    MissingMetric {
+        /// The artifact missing the score.
+        side: EvaluationSide,
+        /// The required metric name.
+        metric: String,
+    },
+    /// An aggregate alias was used as a benchmark name, where it would hide behind the aggregate.
+    ReservedMetricName {
+        /// The artifact containing the reserved key.
+        side: EvaluationSide,
+        /// The supplied reserved key.
+        metric: String,
+    },
+    /// An input score is NaN or infinite. The invalid number itself is never copied to the report.
+    NonFiniteScore {
+        /// The artifact containing the score.
+        side: EvaluationSide,
+        /// The score's metric name.
+        metric: String,
+    },
+    /// Two finite scores overflowed during subtraction.
+    NonFiniteDelta {
+        /// The metric whose delta could not be represented.
+        metric: String,
+    },
+    /// Finite threshold inputs overflowed while computing a benchmark's noise band.
+    NonFiniteNoiseBand {
+        /// The metric whose band could not be represented.
+        metric: String,
+    },
+    /// A threshold parameter is NaN or infinite; its report field is `None`.
+    NonFiniteParameter {
+        /// The configuration field: `ab_min_delta` or `ab_sigma_k`.
+        parameter: String,
+    },
+    /// Both aggregate prior aliases were supplied with different effective normalized sigmas.
+    ConflictingAggregateSigma,
+}
+
+fn validate_results(results: &EvalResults, side: EvaluationSide, issues: &mut Vec<EvidenceIssue>) {
+    if !results.aggregate.is_finite() {
+        issues.push(EvidenceIssue::NonFiniteScore {
+            side,
+            metric: AGGREGATE_METRIC.into(),
+        });
+    }
+    for (name, score) in &results.benchmarks {
+        if canonical_metric(name) == AGGREGATE_METRIC {
+            issues.push(EvidenceIssue::ReservedMetricName {
+                side,
+                metric: name.clone(),
+            });
+        }
+        if !score.is_finite() {
+            issues.push(EvidenceIssue::NonFiniteScore {
+                side,
+                metric: name.clone(),
+            });
+        }
+    }
+}
+
+fn validate_config(cfg: &PromoteConfig, issues: &mut Vec<EvidenceIssue>) {
+    for (name, value) in [
+        ("ab_min_delta", cfg.ab_min_delta),
+        ("ab_sigma_k", cfg.ab_sigma_k),
+    ] {
+        if !value.is_finite() {
+            issues.push(EvidenceIssue::NonFiniteParameter {
+                parameter: name.into(),
+            });
+        }
+    }
+    if let (Some(bare), Some(dotted)) = (
+        cfg.ab_benchmark_sigma.get("aggregate"),
+        cfg.ab_benchmark_sigma.get(AGGREGATE_METRIC),
+    ) && normalize_sigma(*bare) != normalize_sigma(*dotted)
+    {
+        issues.push(EvidenceIssue::ConflictingAggregateSigma);
+    }
+}
+
 /// The serde-serializable promotion decision + everything needed to recompute it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PromotionReport {
@@ -166,14 +309,21 @@ pub struct PromotionReport {
     pub drift_exit: i32,
     /// Whether the drift gate passed (`!drift_must_pass || drift_exit == 0`).
     pub drift_pass: bool,
-    /// Whether the A/B gate passed (no regression AND `>= 1` win).
+    /// Whether the A/B gate passed (valid complete evidence, no regression, and `>= 1` win).
     pub ab_pass: bool,
-    /// Per-benchmark outcomes, headline metric first, then the rest in name order.
+    /// Whether all required evidence is present and valid. Invalid evidence always rejects.
+    pub evidence_valid: bool,
+    /// Structured evidence failures; empty exactly when `evidence_valid` is true.
+    pub evidence_issues: Vec<EvidenceIssue>,
+    /// Valid per-benchmark comparisons, headline first when valid, then the rest in name order.
+    /// Missing/invalid comparisons are represented in `evidence_issues` instead.
     pub benchmarks: Vec<BenchmarkOutcome>,
-    /// `ab_min_delta` used (stored so the decision is re-derivable).
-    pub ab_min_delta: f64,
-    /// `ab_sigma_k` used (stored so the decision is re-derivable at a different `k`).
-    pub ab_sigma_k: f64,
+    /// Finite `ab_min_delta` used; `None` when non-finite (with a matching evidence issue).
+    /// Valid values retain their JSON numeric shape; invalid values serialize as `null`.
+    pub ab_min_delta: Option<f64>,
+    /// Finite `ab_sigma_k` used; `None` when non-finite (with a matching evidence issue).
+    /// Valid values retain their JSON numeric shape; invalid values serialize as `null`.
+    pub ab_sigma_k: Option<f64>,
     /// A human-readable one-line reason for the decision.
     pub reason: String,
 }
@@ -185,14 +335,23 @@ impl PromotionReport {
     /// Each benchmark's `delta` and `sigma` are sealed in the report, so a fresh band
     /// `ab_min_delta + ab_sigma_k * sigma` re-classifies win/regress and re-applies the
     /// no-regression + ≥1-win rule. The drift gate is sealed too (`drift_pass`). This is the A3
-    /// "k is re-tunable without re-running eval" guarantee, executable.
+    /// "k is re-tunable without re-running eval" guarantee, executable. Evidence rejection is
+    /// sealed: retuning cannot restore missing/invalid evidence or repair an overflowed comparison.
+    /// Non-finite or overflowing new threshold arithmetic also rejects.
     #[must_use]
     pub fn rederive(&self, ab_min_delta: f64, ab_sigma_k: f64) -> bool {
+        if !self.evidence_valid || !self.evidence_issues.is_empty() {
+            return false;
+        }
         let mut any_win = false;
         let mut any_regress = false;
         for b in &self.benchmarks {
-            // Same non-negative clamp as `promote`, so re-derivation stays faithful (PROM-3).
-            let band = (ab_min_delta + ab_sigma_k * b.sigma).max(0.0);
+            if !b.delta.is_finite() {
+                return false;
+            }
+            let Some(band) = noise_band(ab_min_delta, ab_sigma_k, b.sigma) else {
+                return false;
+            };
             if b.delta > band {
                 any_win = true;
             } else if b.delta < -band {
@@ -206,9 +365,8 @@ impl PromotionReport {
 /// Run the variance-aware promotion gate — the PURE, infallible core.
 ///
 /// `drift_exit` is the capability-drift probe's process exit code (`0` == clean). The benchmarks
-/// compared are the UNION of `cfg.ab_metric` (always) and every key present in BOTH `baseline`
-/// and `candidate` benchmark maps; a benchmark present in only one side is skipped (no comparable
-/// delta) — that skip is intentional and does not fail the gate by itself.
+/// required are the UNION of `cfg.ab_metric` and every key supplied in either benchmark map.
+/// Each must be present on both sides; missing evidence rejects even when another metric wins.
 ///
 /// See the module docs for the full two-gate truth table.
 #[must_use]
@@ -218,25 +376,58 @@ pub fn promote(
     drift_exit: i32,
     cfg: &PromoteConfig,
 ) -> PromotionReport {
-    // Build the comparable benchmark set: the headline metric first, then every shared key.
-    let mut names: Vec<String> = vec![cfg.ab_metric.clone()];
-    for k in candidate.benchmarks.keys() {
-        if baseline.benchmarks.contains_key(k) && *k != cfg.ab_metric {
+    // Required benchmarks: the headline first, then the union of supplied names in stable order.
+    let headline = canonical_metric(&cfg.ab_metric);
+    let mut names: Vec<String> = vec![headline.into()];
+    for k in baseline
+        .benchmarks
+        .keys()
+        .chain(candidate.benchmarks.keys())
+        .collect::<BTreeSet<_>>()
+    {
+        if k != headline && canonical_metric(k) != AGGREGATE_METRIC {
             names.push(k.clone());
         }
     }
 
+    let mut evidence_issues = Vec::new();
+    validate_results(baseline, EvaluationSide::Baseline, &mut evidence_issues);
+    validate_results(candidate, EvaluationSide::Candidate, &mut evidence_issues);
+    validate_config(cfg, &mut evidence_issues);
     let mut benchmarks: Vec<BenchmarkOutcome> = Vec::new();
     for name in names {
-        let (Some(b), Some(c)) = (baseline.score(&name), candidate.score(&name)) else {
-            // Headline metric missing on a side, or a key that turned out non-shared: skip it.
+        let b = baseline.score(&name);
+        let c = candidate.score(&name);
+        for (side, score) in [
+            (EvaluationSide::Baseline, b),
+            (EvaluationSide::Candidate, c),
+        ] {
+            if score.is_none() {
+                evidence_issues.push(EvidenceIssue::MissingMetric {
+                    side,
+                    metric: name.clone(),
+                });
+            }
+        }
+        let (Some(b), Some(c)) = (b, c) else {
             continue;
         };
+        if !b.is_finite() || !c.is_finite() {
+            continue; // Already diagnosed by validate_results, including unused aggregate values.
+        }
         let delta = c - b;
+        if !delta.is_finite() {
+            evidence_issues.push(EvidenceIssue::NonFiniteDelta { metric: name });
+            continue;
+        }
         let sigma = cfg.sigma_for(&name);
-        // Clamp the band non-negative so `win` (delta > band) and `regress` (delta < -band) are
-        // ALWAYS mutually exclusive, even under a degenerate `ab_min_delta`/`ab_sigma_k` (PROM-3).
-        let noise_band = (cfg.ab_min_delta + cfg.ab_sigma_k * sigma).max(0.0);
+        if !cfg.ab_min_delta.is_finite() || !cfg.ab_sigma_k.is_finite() {
+            continue; // The specific invalid parameter is already diagnosed.
+        }
+        let Some(noise_band) = noise_band(cfg.ab_min_delta, cfg.ab_sigma_k, sigma) else {
+            evidence_issues.push(EvidenceIssue::NonFiniteNoiseBand { metric: name });
+            continue;
+        };
         benchmarks.push(BenchmarkOutcome {
             name,
             baseline: b,
@@ -251,13 +442,16 @@ pub fn promote(
 
     let any_win = benchmarks.iter().any(|b| b.win);
     let any_regress = benchmarks.iter().any(|b| b.regress);
-    let ab_pass = !any_regress && any_win;
+    let evidence_valid = evidence_issues.is_empty();
+    let ab_pass = evidence_valid && !any_regress && any_win;
 
     let drift_pass = !cfg.drift_must_pass || drift_exit == 0;
     let promote = drift_pass && ab_pass;
 
     let reason = if !drift_pass {
         format!("REJECT: drift probe exit {drift_exit} != 0 (hard gate)")
+    } else if !evidence_valid {
+        "REJECT: promotion evidence is incomplete or invalid (see evidence_issues)".to_string()
     } else if any_regress {
         "REJECT: at least one benchmark regressed beyond the noise band".to_string()
     } else if !any_win {
@@ -271,9 +465,11 @@ pub fn promote(
         drift_exit,
         drift_pass,
         ab_pass,
+        evidence_valid,
+        evidence_issues,
         benchmarks,
-        ab_min_delta: cfg.ab_min_delta,
-        ab_sigma_k: cfg.ab_sigma_k,
+        ab_min_delta: cfg.ab_min_delta.is_finite().then_some(cfg.ab_min_delta),
+        ab_sigma_k: cfg.ab_sigma_k.is_finite().then_some(cfg.ab_sigma_k),
         reason,
     }
 }
@@ -386,18 +582,64 @@ mod tests {
         );
     }
 
-    /// Non-shared benchmark keys are skipped (no comparable delta), so only the headline
-    /// aggregate is compared; a flat aggregate then yields no win ⇒ no promote.
+    /// Neither side may omit supplied evidence, even when the aggregate improves.
     #[test]
-    fn non_shared_benchmarks_are_skipped() {
-        // Each side carries a benchmark the OTHER lacks; neither is comparable.
-        let base = results(0.50, &[("only_base", 0.9)]);
-        let cand = results(0.50, &[("only_cand", 0.9)]);
-        let rep = promote(&base, &cand, 0, &PromoteConfig::default());
-        // Only the (flat) aggregate is comparable ⇒ no win ⇒ no promote.
-        assert_eq!(rep.benchmarks.len(), 1);
-        assert_eq!(rep.benchmarks[0].name, "eval_results.aggregate");
+    fn missing_benchmark_on_either_side_blocks_promotion() {
+        for (base, cand, missing_side) in [
+            (
+                results(0.50, &[("task", 0.90)]),
+                results(0.51, &[]),
+                EvaluationSide::Candidate,
+            ),
+            (
+                results(0.50, &[]),
+                results(0.51, &[("task", 0.90)]),
+                EvaluationSide::Baseline,
+            ),
+        ] {
+            let rep = promote(&base, &cand, 0, &PromoteConfig::default());
+            assert!(
+                !rep.promote,
+                "an aggregate win cannot hide a missing benchmark"
+            );
+            assert!(
+                !rep.rederive(0.0, 0.0),
+                "retuning cannot restore missing evidence"
+            );
+            assert_eq!(
+                rep.evidence_issues,
+                [EvidenceIssue::MissingMetric {
+                    side: missing_side,
+                    metric: "task".into()
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn missing_custom_headline_blocks_other_benchmark_wins() {
+        let base = results(0.50, &[("task", 0.60)]);
+        let cand = results(0.70, &[("task", 0.80)]);
+        let cfg = PromoteConfig {
+            ab_metric: "required".into(),
+            ..Default::default()
+        };
+        let rep = promote(&base, &cand, 0, &cfg);
         assert!(!rep.promote);
+        assert!(!rep.rederive(0.0, 0.0));
+        assert_eq!(
+            rep.evidence_issues,
+            [
+                EvidenceIssue::MissingMetric {
+                    side: EvaluationSide::Baseline,
+                    metric: "required".into()
+                },
+                EvidenceIssue::MissingMetric {
+                    side: EvaluationSide::Candidate,
+                    metric: "required".into()
+                },
+            ]
+        );
     }
 
     /// `EvalResults::score` resolves the dotted aggregate sentinel and bare benchmark names.

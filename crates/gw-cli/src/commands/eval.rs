@@ -56,6 +56,8 @@ pub async fn audit_separation(args: AuditSeparationArgs) -> anyhow::Result<Comma
 ///
 /// The promote config is the A3 default unless `args.config` points at a TOML file with a `[promote]`
 /// (or top-level) table overriding the knobs (`ab_metric`, `ab_min_delta`, `ab_sigma_k`, ...).
+/// Incomplete or invalid comparison evidence is reported as a gate rejection (`--check`: exit 2;
+/// otherwise exit 0 with `promote: false`). Malformed JSON remains an operational error (exit 1).
 ///
 /// # Errors
 /// Propagates a file-read, JSON-parse, config-parse, or serialization failure.
