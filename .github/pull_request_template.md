@@ -25,7 +25,7 @@ Refs #
 
 ## Validation
 
-<!-- Run these locally before opening the PR. Dev-PR CI runs only the FAST gates (fmt, file-size, no-secret, rustdoc, and deny on dependency changes); clippy + nextest run locally (the pre-push hook runs clippy) and in the dev->main release gate. Install hooks once: bash scripts/install-hooks.sh -->
+<!-- Run these locally before opening the Forgejo PR. Dev-PR CI runs the fast gates (fmt, file-size, no-secret, rustdoc, and deny); clippy + nextest run locally (the pre-push hook runs clippy) and in the dev->main release gate. Install hooks once: bash scripts/install-hooks.sh -->
 
 - [ ] `cargo fmt --all --check`
 - [ ] `cargo clippy --workspace --all-targets --locked -- -D warnings`
@@ -34,7 +34,7 @@ Refs #
 - [ ] Repository fast gates: `bash .github/scripts/check-file-size.sh`, `bash .github/scripts/check-no-secrets.sh`
 - [ ] Dependency change ran `cargo deny check bans licenses sources` — or N/A
 
-<!-- Note: the heavy ubuntu + macOS build/clippy/test matrix runs at the development -> main release gate. -->
+<!-- The development -> main release gate runs the heavy checks on Linux. Before merging a release, record local macOS validation at the same commit as described in CONTRIBUTING.md. -->
 
 ## Scope & invariants
 
