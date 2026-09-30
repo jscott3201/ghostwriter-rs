@@ -3,7 +3,7 @@
 //! This is THIN: `Engine::run` is already idempotent and crash-resuming (running the SAME `run_id`
 //! over the SAME [`SeedSource`](gw_engine::SeedSource) skips committed offsets and re-drives any
 //! mid-flight record from its last persisted state, reusing persisted teacher output). So replay just
-//! re-derives the identical seed plan from the SAME prompts file + shard count and re-enters
+//! re-derives the identical seed plan from the SAME task/prompt file + shard count and re-enters
 //! `Engine::run`. It is headless (no dashboard, no events). Like `gen run` it is a LIVE path and is
 //! not network-tested.
 
@@ -13,7 +13,7 @@ use gw_engine::EventSink;
 
 use crate::cli::ReplayArgs;
 use crate::config::Config;
-use crate::seedsource::FileSeedSource;
+use crate::seedsource::InputSeedSource;
 use crate::wire::{build_engine, new_cancel_token};
 
 /// Resume `args.run_id` over the same seed plan, persisting onward, and print the terminal report.
@@ -29,7 +29,8 @@ pub async fn replay(args: ReplayArgs) -> anyhow::Result<()> {
         config.area.admission_intent = intent.into();
     }
     args.accounting.apply(&mut config)?;
-    let source = FileSeedSource::from_prompts_file(&args.prompts, args.shards)?;
+    let source =
+        InputSeedSource::from_files(args.prompts.as_deref(), args.tasks.as_deref(), args.shards)?;
 
     let mode = gw_storage::RunMode::Replay;
     let (engine, store, prepared) = build_engine(

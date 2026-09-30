@@ -1,17 +1,11 @@
 //! Per-kind answer-correctness comparators for the Verifier rail (JUDGE-DESIGN §1.1, V1).
 //!
 //! Comparators report Match, NonMatch, or Undecided without applying admission policy. Numeric
-//! tolerance and order-insensitive set matching preserve their existing algorithms. SQL/schema
+//! extraction and tolerance come from the persisted contract. Order-insensitive set matching is
+//! unchanged. SQL/schema
 //! string inequality stays Undecided; the task's answer policy determines its admission consequence.
 
-use gw_schema::VerificationKind;
-
-/// Default relative tolerance for [`VerificationKind::NumericMatch`] (`1e-6`). A numeric answer
-/// within this relative (or [`NUMERIC_ABS_TOL`] absolute) distance of the oracle counts as a match.
-const NUMERIC_REL_TOL: f64 = 1e-6;
-/// Default absolute tolerance for [`VerificationKind::NumericMatch`] (`1e-9`) — covers near-zero
-/// expected values where a relative tolerance degenerates.
-const NUMERIC_ABS_TOL: f64 = 1e-9;
+use gw_schema::{NumericComparison, VerificationContract, VerificationKind, parse_finite_decimal};
 
 /// The three-state outcome of a rule-based answer comparison. Distinct from a plain `bool` so the
 /// `Undecided` case (a parse failure or unavailable oracle) remains distinct from `NonMatch`.
@@ -35,38 +29,26 @@ fn normalize_answer(s: &str) -> String {
         .to_ascii_lowercase()
 }
 
-/// Parse a numeric answer, tolerating surrounding whitespace, a leading currency `$`, `%`, and
-/// thousands separators (`1,000` → `1000`). Returns `None` if the cleaned token is not a finite
-/// number — that drives the `Undecided` → rescue path rather than a false non-match.
-fn parse_numeric(s: &str) -> Option<f64> {
-    let cleaned: String = s
-        .trim()
-        .chars()
-        .filter(|c| !matches!(c, ',' | '$' | '%' | '_' | ' '))
-        .collect();
-    if cleaned.is_empty() {
-        return None;
-    }
-    cleaned.parse::<f64>().ok().filter(|v| v.is_finite())
+/// All arguments are finite and tolerance nonnegative. Binary64 subtraction gives symmetric
+/// rounded distance; an overflowing distance is infinity and exceeds the finite bound.
+fn within_tolerance(actual: f64, expected: f64, bound: f64) -> bool {
+    (actual - expected).abs() <= bound
 }
 
-/// `VerificationKind::NumericMatch`: parse both sides and compare within a relative + absolute
-/// tolerance. A parse failure on either side is `Undecided` (rescue), never a false non-match — so
-/// `42.0` vs `42` and `1,000` vs `1000` are matches, while a genuinely different number is a clean
-/// `NonMatch`.
-fn compare_numeric(answer: &str, expected: &str) -> AnswerComparison {
-    match (parse_numeric(answer), parse_numeric(expected)) {
-        (Some(a), Some(e)) => {
-            let diff = (a - e).abs();
-            let tol = NUMERIC_ABS_TOL.max(NUMERIC_REL_TOL * e.abs());
-            if diff <= tol {
-                AnswerComparison::Match
-            } else {
-                AnswerComparison::NonMatch
-            }
-        }
-        // A non-numeric answer/oracle is not a confident non-match — let the judge decide.
-        _ => AnswerComparison::Undecided,
+fn compare_numeric(answer: &str, expected: &str, settings: &NumericComparison) -> AnswerComparison {
+    let Some(actual) = settings.extract(answer).and_then(parse_finite_decimal) else {
+        return AnswerComparison::Undecided;
+    };
+    let Some(expected) = parse_finite_decimal(expected) else {
+        return AnswerComparison::Undecided;
+    };
+    let Ok(bound) = settings.bound(expected) else {
+        return AnswerComparison::Undecided;
+    };
+    if within_tolerance(actual, expected, bound) {
+        AnswerComparison::Match
+    } else {
+        AnswerComparison::NonMatch
     }
 }
 
@@ -113,15 +95,20 @@ fn compare_conservative(answer: &str, expected: &str) -> AnswerComparison {
 /// Compare the assistant `answer` against an oracle string using the per-kind comparator. `None`
 /// expected ⇒ `Undecided` (no ground truth → judge rescue).
 pub(super) fn compare_answer(
-    kind: VerificationKind,
+    contract: &VerificationContract,
     answer: &str,
     expected: Option<&str>,
 ) -> AnswerComparison {
     let Some(expected) = expected else {
         return AnswerComparison::Undecided;
     };
-    match kind {
-        VerificationKind::NumericMatch => compare_numeric(answer, expected),
+    match contract.kind {
+        VerificationKind::NumericMatch => contract
+            .numeric
+            .as_ref()
+            .map_or(AnswerComparison::Undecided, |settings| {
+                compare_numeric(answer, expected, settings)
+            }),
         VerificationKind::SetMatch => compare_set(answer, expected),
         // SchemaShape / SqlResultMatch have no cheap complete comparator yet → conservative, and a
         // non-match routes to rescue (Undecided), never a hard reject.
@@ -137,19 +124,35 @@ pub(super) fn compare_answer(
 mod tests {
     use super::*;
 
+    fn compare_answer(
+        kind: VerificationKind,
+        answer: &str,
+        expected: Option<&str>,
+    ) -> AnswerComparison {
+        let contract = VerificationContract {
+            answer_policy: Some(gw_schema::VerificationPolicy::Advisory),
+            execution_policy: Some(gw_schema::VerificationPolicy::Absent),
+            required_tests: vec![],
+            kind,
+            oracle: gw_schema::Oracle::None,
+            numeric: (kind == VerificationKind::NumericMatch).then(NumericComparison::default),
+        };
+        super::compare_answer(&contract, answer, expected)
+    }
+
     #[test]
-    fn numeric_tolerates_formatting() {
+    fn numeric_accepts_only_decimal_formatting() {
         assert_eq!(
             compare_answer(VerificationKind::NumericMatch, "42.0", Some("42")),
             AnswerComparison::Match
         );
         assert_eq!(
             compare_answer(VerificationKind::NumericMatch, "1,000", Some("1000")),
-            AnswerComparison::Match
+            AnswerComparison::Undecided
         );
         assert_eq!(
             compare_answer(VerificationKind::NumericMatch, "$3.50", Some("3.5")),
-            AnswerComparison::Match
+            AnswerComparison::Undecided
         );
     }
 

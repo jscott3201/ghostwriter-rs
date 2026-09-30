@@ -53,7 +53,7 @@ pub(crate) fn contract(area: &AreaConfig) -> Result<serde_json::Value> {
     Ok(serde_json::json!({
         "training_area": area.training_area,
         "generation": {"teacher_template": initial, "k": area.k.max(1), "seed_binding": "captured-seed-wrapping-add-completion-index-v1", "truncation_retry": retry, "truncation_attempts": 1, "revision_template": revision, "revision_seed_offset": REVISION_SEED_OFFSET, "revision_attempts": 1, "revision_truncation_retry": false, "second_revise": "reject"},
-        "verification": {"interpretation_version": gw_schema::VERIFICATION_INTERPRETATION_VERSION,"contract": "verification-policy-typed-facts-v1", "cot_required": area.cot_required, "execution_evidence": "required-tests-keyed-evidence-v2"},
+        "verification": {"interpretation_version": gw_schema::VERIFICATION_INTERPRETATION_VERSION,"contract": "verification-policy-typed-facts-v2", "numeric": "strict-decimal-binary64-final-line-marker-max-abs-rel-v1", "cot_required": area.cot_required, "execution_evidence": "required-tests-keyed-evidence-v2"},
         "judging": {"request_contracts": judges, "candidate_render": "openai-messages-supervised-v1", "rubric": area.rubric, "correlation_rho": area.correlation_rho, "weights": "equal", "consensus": "weighted-design-effect-sp-bts-v1", "admission_intent": area.admission_intent,
             "thresholds": {"accept_threshold": area.thresholds.accept_threshold, "reject_below": area.thresholds.reject_below, "min_n_eff": area.thresholds.min_n_eff, "min_n_eff_ratio": area.thresholds.min_n_eff_ratio}},
         "selection": "established-winner-else-max-admissible-aggregate-tie-lowest-completion-index-v1",

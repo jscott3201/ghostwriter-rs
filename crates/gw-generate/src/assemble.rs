@@ -92,6 +92,7 @@ pub fn assemble(
         tools: None,
         provenance,
         generation,
+        task_provenance: gated.candidate.task_provenance.clone(),
         // Carry the user-turn verification contract onto the record so the engine's Verify rail can
         // run the answer-correctness check (incl. on a crash-resume of the verify edge). `Oracle::None`
         // contracts are kept verbatim — the rail treats a None oracle as judge-only, not a silent pass.
@@ -250,6 +251,7 @@ mod tests {
     fn gated(kind: VerificationKind, in_scope_safe: bool) -> GatedUserTurn {
         GatedUserTurn {
             candidate: UserTurnCandidate {
+                task_provenance: None,
                 message: user_message("What is 12 * 8?"),
                 seed: UserSeed {
                     persona: Some("curious_user".into()),
@@ -263,7 +265,8 @@ mod tests {
                     required_tests: vec![],
                     kind,
                     oracle: Oracle::None,
-                    answer_marker: None,
+                    numeric: (kind == VerificationKind::NumericMatch)
+                        .then(gw_schema::NumericComparison::default),
                 },
                 answerable: true,
                 difficulty_targeted: true,

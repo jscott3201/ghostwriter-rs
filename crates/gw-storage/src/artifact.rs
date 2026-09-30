@@ -7,8 +7,8 @@ use std::path::Path;
 use arrow::array::{Array, Float64Array, RecordBatch, StringArray, UInt32Array};
 use blake3::Hasher;
 use gw_schema::{
-    ExportArtifact, ExportManifest, ExportOptions, ExportSchemaVersion, ExportScope, Message,
-    MultiTurnLoss, TrainingRecord,
+    ExportArtifact, ExportManifest, ExportOptions, ExportSchemaVersion, ExportScope,
+    ExportTaskProjection, Message, MultiTurnLoss, TrainingRecord,
 };
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use serde::{Deserialize, Serialize};
@@ -53,7 +53,7 @@ impl ExportPlan {
         let mut rows: Vec<Projected> = records
             .iter()
             .filter(|r| is_sft_eligible(r))
-            .map(project)
+            .map(|record| project(record, ExportSchemaVersion::CURRENT))
             .collect::<Result<_>>()?;
         rows.sort_by(|a, b| a.record_id.cmp(&b.record_id));
         let manifest = ExportManifest {
@@ -85,12 +85,17 @@ impl ExportPlan {
         &self.artifact
     }
 
-    pub(crate) fn members(&self) -> Vec<Member> {
+    pub(crate) fn members(&self) -> Result<Vec<Member>> {
         self.rows
             .iter()
-            .map(|row| Member {
-                record_id: row.record_id.clone(),
-                projected_hash: projected_hash(row),
+            .map(|row| {
+                Ok(Member {
+                    record_id: row.record_id.clone(),
+                    projected_hash: projected_hash(
+                        row,
+                        self.artifact.manifest.column_schema_version,
+                    )?,
+                })
             })
             .collect()
     }
@@ -106,8 +111,15 @@ fn frame(hash: &mut Hasher, bytes: &[u8]) {
     hash.update(bytes);
 }
 
-pub(crate) fn projected_hash(row: &Projected) -> String {
-    let mut hash = Hasher::new_derive_key("ghostwriter.export.projected-row.v1");
+pub(crate) fn projected_hash(row: &Projected, version: ExportSchemaVersion) -> Result<String> {
+    let domain = match version {
+        ExportSchemaVersion::CanonicalMessages if row.task_json.is_none() => {
+            "ghostwriter.export.projected-row.v1"
+        }
+        ExportSchemaVersion::ReviewedTasks => "ghostwriter.export.projected-row.v2-reviewed-tasks",
+        _ => return Err(integrity("unsupported projected row/schema combination")),
+    };
+    let mut hash = Hasher::new_derive_key(domain);
     for value in [
         &row.record_id,
         &row.training_area,
@@ -136,7 +148,18 @@ pub(crate) fn projected_hash(row: &Projected) -> String {
     }
     hash.update(&row.reasoning_tokens.to_be_bytes());
     frame(&mut hash, row.messages_json.as_bytes());
-    hash.finalize().to_hex().to_string()
+    if version == ExportSchemaVersion::ReviewedTasks {
+        match &row.task_json {
+            Some(value) => {
+                hash.update(&[1]);
+                frame(&mut hash, value.as_bytes());
+            }
+            None => {
+                hash.update(&[0]);
+            }
+        }
+    }
+    Ok(hash.finalize().to_hex().to_string())
 }
 
 pub(crate) fn artifact_identity(artifact: &ExportArtifact, rows: &[Projected]) -> Result<String> {
@@ -146,7 +169,10 @@ pub(crate) fn artifact_identity(artifact: &ExportArtifact, rows: &[Projected]) -
     frame(&mut hash, &canonical_metadata_json(&artifact.manifest)?);
     hash.update(&(rows.len() as u64).to_be_bytes());
     for row in rows {
-        frame(&mut hash, projected_hash(row).as_bytes());
+        frame(
+            &mut hash,
+            projected_hash(row, artifact.manifest.column_schema_version)?.as_bytes(),
+        );
     }
     Ok(hash.finalize().to_hex().to_string())
 }
@@ -196,10 +222,8 @@ pub fn verify_artifact(path: impl AsRef<Path>) -> Result<ArtifactVerification> {
     if artifact.metadata_version != ExportArtifact::CURRENT_VERSION {
         return Err(integrity("unsupported export metadata version"));
     }
-    if artifact.manifest.column_schema_version != ExportSchemaVersion::CURRENT {
-        return Err(integrity("unsupported export column schema version"));
-    }
-    if builder.schema().fields() != export_schema().fields() {
+    let version = artifact.manifest.column_schema_version;
+    if builder.schema().fields() != export_schema(version)?.fields() {
         return Err(integrity(
             "export column schema does not match the manifest",
         ));
@@ -207,7 +231,7 @@ pub fn verify_artifact(path: impl AsRef<Path>) -> Result<ArtifactVerification> {
     let footer_count = builder.metadata().file_metadata().num_rows();
     let mut rows = Vec::new();
     for batch in builder.with_batch_size(1024).build()? {
-        rows.extend(read_batch(&batch?)?);
+        rows.extend(read_batch(&batch?, version)?);
     }
     validate_rows(&artifact, &rows)?;
     if footer_count < 0 || footer_count as u64 != artifact.manifest.n_admitted {
@@ -217,6 +241,7 @@ pub fn verify_artifact(path: impl AsRef<Path>) -> Result<ArtifactVerification> {
 }
 
 pub(crate) fn validate_rows(artifact: &ExportArtifact, rows: &[Projected]) -> Result<()> {
+    export_schema(artifact.manifest.column_schema_version)?;
     if artifact.manifest.n_admitted != rows.len() as u64
         || artifact.manifest.n_records < artifact.manifest.n_admitted
     {
@@ -241,8 +266,8 @@ pub(crate) fn validate_rows(artifact: &ExportArtifact, rows: &[Projected]) -> Re
     Ok(())
 }
 
-fn read_batch(batch: &RecordBatch) -> Result<Vec<Projected>> {
-    if batch.schema().fields() != export_schema().fields() {
+fn read_batch(batch: &RecordBatch, version: ExportSchemaVersion) -> Result<Vec<Projected>> {
+    if batch.schema().fields() != export_schema(version)?.fields() {
         return Err(integrity("record batch schema mismatch"));
     }
     for index in [0, 1, 2, 3, 6, 7] {
@@ -263,6 +288,11 @@ fn read_batch(batch: &RecordBatch) -> Result<Vec<Projected>> {
     let prompts = string(3)?;
     let verdicts = string(4)?;
     let messages = string(7)?;
+    let tasks = if version == ExportSchemaVersion::ReviewedTasks {
+        Some(string(8)?)
+    } else {
+        None
+    };
     let scores = batch
         .column(5)
         .as_any()
@@ -275,7 +305,19 @@ fn read_batch(batch: &RecordBatch) -> Result<Vec<Projected>> {
         .ok_or_else(|| integrity("invalid token column"))?;
     (0..batch.num_rows())
         .map(|i| {
-            let _: Vec<Message> = serde_json::from_str(messages.value(i))?;
+            let parsed_messages: Vec<Message> = serde_json::from_str(messages.value(i))?;
+            let task_json = tasks
+                .filter(|column| !column.is_null(i))
+                .map(|column| column.value(i).to_owned());
+            if let Some(json) = &task_json {
+                let task: ExportTaskProjection = serde_json::from_str(json)?;
+                task.validate(&parsed_messages).map_err(integrity)?;
+                if crate::export::canonical_task_json(&task)? != *json {
+                    return Err(integrity(
+                        "task projection must use its exact canonical typed JSON",
+                    ));
+                }
+            }
             Ok(Projected {
                 record_id: ids.value(i).into(),
                 training_area: areas.value(i).into(),
@@ -285,11 +327,18 @@ fn read_batch(batch: &RecordBatch) -> Result<Vec<Projected>> {
                 judge_aggregate: (!scores.is_null(i)).then(|| scores.value(i)),
                 reasoning_tokens: tokens.value(i),
                 messages_json: messages.value(i).into(),
+                task_json,
             })
         })
         .collect()
 }
 
+#[cfg(test)]
+#[path = "legacy_artifact_tests.rs"]
+mod legacy_tests;
+#[cfg(test)]
+#[path = "task_artifact_tests.rs"]
+mod task_tests;
 #[cfg(test)]
 #[path = "artifact_tests.rs"]
 mod tests;

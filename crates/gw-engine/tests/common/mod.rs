@@ -485,6 +485,7 @@ pub fn lenient_thresholds() -> AreaThresholds {
 /// A candidate USER turn that passes the four-bool QC gate.
 pub fn good_candidate(text: &str) -> UserTurnCandidate {
     UserTurnCandidate {
+        task_provenance: None,
         message: user_message(text),
         seed: UserSeed {
             persona: Some("curious_user".into()),
@@ -498,7 +499,7 @@ pub fn good_candidate(text: &str) -> UserTurnCandidate {
             required_tests: vec![],
             kind: VerificationKind::None,
             oracle: Oracle::None,
-            answer_marker: None,
+            numeric: None,
         },
         answerable: true,
         difficulty_targeted: true,
@@ -519,7 +520,7 @@ pub fn numeric_candidate(text: &str, expected: &str) -> UserTurnCandidate {
         oracle: Oracle::Literal {
             expected: expected.into(),
         },
-        answer_marker: None,
+        numeric: Some(gw_schema::NumericComparison::default()),
     };
     c
 }
@@ -536,7 +537,7 @@ pub fn refusal_candidate(text: &str) -> UserTurnCandidate {
         oracle: Oracle::RefusalPolicy {
             policy_id: "p1".into(),
         },
-        answer_marker: None,
+        numeric: None,
     };
     c
 }

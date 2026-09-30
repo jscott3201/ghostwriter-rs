@@ -33,7 +33,7 @@
 //! **1. The canonical export/consumer route to use.** Read `ExportManifest::column_schema_version`
 //! first, then take the SINGLE `messages_json` column and `serde_json`-decode each cell straight into
 //! `Vec<gw_schema::Message>`; there is no transform to reverse. The manifest is written with
-//! `ExportSchemaVersion::CURRENT` (`CanonicalMessages`). A tool trajectory has no representation in
+//! `ExportSchemaVersion::CURRENT` (`ReviewedTasks`). A tool trajectory has no representation in
 //! this repo's own renderers, which is exactly why the route ends at the canonical column: the
 //! refusal's own recovery is `ToolCallRecovery::CanonicalExportAndOfficialTemplate` — a downstream
 //! consumer using the OFFICIAL template. A target template is NOT fetched, pinned or diff-verified
@@ -149,10 +149,11 @@ fn chain_record(record_id: &str, messages: &[Message]) -> TrainingRecord {
             git_commit: None,
         },
         generation: Default::default(),
+        task_provenance: None,
         verification_contract: Some(gw_schema::VerificationContract {
             kind: gw_schema::VerificationKind::None,
             oracle: gw_schema::Oracle::None,
-            answer_marker: None,
+            numeric: None,
             answer_policy: Some(gw_schema::VerificationPolicy::Absent),
             execution_policy: Some(gw_schema::VerificationPolicy::Authoritative),
             required_tests: vec![EVIDENCE_NODE.into()],
@@ -532,7 +533,7 @@ async fn one_tool_trajectory_survives_the_whole_chain_and_the_negatives_do_not()
     );
     assert_eq!(
         manifest.column_schema_version,
-        ExportSchemaVersion::CanonicalMessages
+        ExportSchemaVersion::ReviewedTasks
     );
     assert!(!manifest.build_inputs_hash.is_empty());
 

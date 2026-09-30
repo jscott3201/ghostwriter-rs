@@ -85,6 +85,7 @@ fn record(
             reasoning_effort: Some(ReasoningEffort::Xhigh),
             ..Default::default()
         },
+        task_provenance: None,
         verification_contract: None,
         execution_evidence: None,
         verification: Default::default(),

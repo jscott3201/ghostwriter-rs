@@ -431,7 +431,8 @@ mod tests {
             required_tests: vec![],
             kind,
             oracle,
-            answer_marker: None,
+            numeric: (kind == VerificationKind::NumericMatch)
+                .then(gw_schema::NumericComparison::default),
         }
     }
 
@@ -560,9 +561,8 @@ mod tests {
     }
 
     #[test]
-    fn numeric_match_tolerates_formatting() {
-        // V1: 42.0 vs 42 (and 1,000 vs 1000) ACCEPT under numeric tolerance — not a hard reject.
-        for (answer, expected) in [("42.0", "42"), ("1,000", "1000"), ("$3.50", "3.5")] {
+    fn numeric_match_accepts_equivalent_decimal_and_scientific_tokens() {
+        for (answer, expected) in [("42.0", "42"), ("1e3", "1000"), ("+3.50", "3.5")] {
             let msgs = vec![assistant(answer, Some("work"), true)];
             let ct = contract(
                 VerificationKind::NumericMatch,

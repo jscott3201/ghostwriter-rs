@@ -1,27 +1,63 @@
-//! A file-backed [`SeedSource`] for the v1 live run.
+//! File reading for explicit plain-prompt or reviewed numeric-task sources.
 //!
-//! The engine takes seeds through the [`SeedSource`] seam — its own docs name "a JSONL/list-backed
-//! source" as the real-run injectee, but the engine ships only the in-memory test source. This module
-//! provides the CLI's minimal real source: a newline-delimited PROMPTS file (one user turn per line),
-//! mapped to [`UserTurnCandidate`]s via the public [`user_message`] helper.
-//!
-//! ## v1 seam scope (documented deferral — see the crate report)
-//!
-//! The CLI seed format is plain text; richer candidate fields belong to the engine contract.
-//! v1 reads one
-//! prompt per line, and synthesizes a judge-only candidate: a [`VerificationKind::None`] /
-//! [`Oracle::None`] contract (admission is judge-only, no deterministic oracle) with the three
-//! engine-side QC bools set true (`answerable` / `difficulty_targeted` / `in_scope`) — the candidate
-//! is a hand-supplied prompt the operator vouches for. A RICHER seed format (per-turn contracts,
-//! oracles, difficulty bands) and the engine-driven MAGPIE elicitation are tracked follow-ups; they
-//! would arrive as a new `SeedSource` impl, not a change here. This source is enough to drive a real
-//! end-to-end run from a curated prompt list.
+//! Plain prompts remain one user-text turn per line with both verifier axes absent and operator-
+//! vouched QC booleans. Numeric JSON is passed unchanged to the engine's shared strict constructor;
+//! this layer neither fetches references nor materializes its own competing task contract.
 
 use std::path::Path;
 
 use gw_engine::{SeedItem, SeedSource};
 use gw_generate::{UserSeed, UserTurnCandidate, user_message};
 use gw_schema::{Oracle, VerificationContract, VerificationKind};
+
+/// Exactly one explicit source mode. Numeric input uses the engine's shared pure constructor.
+#[derive(Debug, Clone)]
+pub enum InputSeedSource {
+    /// Operator-supplied prompt lines with judge-only policies.
+    Prompts(FileSeedSource),
+    /// Validated reviewed numeric tasks.
+    Tasks(gw_engine::NumericTaskSource),
+}
+impl InputSeedSource {
+    /// Read exactly one selected source, fully validating tasks before callers open runtime state.
+    ///
+    /// # Errors
+    /// Rejects missing/conflicting sources, file failures, and invalid task documents.
+    pub fn from_files(
+        prompts: Option<&Path>,
+        tasks: Option<&Path>,
+        shards: usize,
+    ) -> anyhow::Result<Self> {
+        match (prompts, tasks) {
+            (Some(path), None) => Ok(Self::Prompts(FileSeedSource::from_prompts_file(
+                path, shards,
+            )?)),
+            (None, Some(path)) => {
+                let text = std::fs::read_to_string(path).map_err(|error| {
+                    anyhow::anyhow!("reading numeric task file {}: {error}", path.display())
+                })?;
+                Ok(Self::Tasks(gw_engine::NumericTaskSource::from_json(
+                    &text, shards,
+                )?))
+            }
+            _ => anyhow::bail!("supply exactly one of --tasks or --prompts"),
+        }
+    }
+}
+impl SeedSource for InputSeedSource {
+    fn shard_count(&self) -> usize {
+        match self {
+            Self::Prompts(source) => source.shard_count(),
+            Self::Tasks(source) => source.shard_count(),
+        }
+    }
+    fn items_for_shard(&self, shard: i64) -> Vec<SeedItem> {
+        match self {
+            Self::Prompts(source) => source.items_for_shard(shard),
+            Self::Tasks(source) => source.items_for_shard(shard),
+        }
+    }
+}
 
 /// A [`SeedSource`] over an ordered list of plain-text prompts, partitioned across `shard_count`
 /// shards by index (matching [`gw_engine::InMemorySeedSource`]'s round-robin rule).
@@ -89,6 +125,7 @@ impl FileSeedSource {
 /// [`VerificationKind::None`] / [`Oracle::None`] contract, and the three engine-side QC bools true.
 fn judge_only_candidate(prompt: &str) -> UserTurnCandidate {
     UserTurnCandidate {
+        task_provenance: None,
         message: user_message(prompt),
         seed: UserSeed::default(),
         contract: VerificationContract {
@@ -97,7 +134,7 @@ fn judge_only_candidate(prompt: &str) -> UserTurnCandidate {
             required_tests: vec![],
             kind: VerificationKind::None,
             oracle: Oracle::None,
-            answer_marker: None,
+            numeric: None,
         },
         answerable: true,
         difficulty_targeted: true,

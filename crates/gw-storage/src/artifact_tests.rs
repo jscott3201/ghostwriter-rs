@@ -1,7 +1,7 @@
 //! Independent footer and row mutations challenge verification beyond encoder round trips.
 
 use super::*;
-use crate::export::{build_batch, write_parquet};
+use crate::export::{build_batch as build_versioned_batch, write_parquet};
 use arrow::datatypes::{Field, Schema};
 use gw_schema::{Content, CotPolicy, TrlFormat};
 use parquet::arrow::ArrowWriter;
@@ -9,6 +9,16 @@ use parquet::file::metadata::KeyValue;
 use parquet::file::properties::WriterProperties;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+fn build_batch(rows: &[Projected]) -> Result<RecordBatch> {
+    build_versioned_batch(rows, ExportSchemaVersion::CURRENT)
+}
+fn project(record: &TrainingRecord) -> Result<Projected> {
+    super::project(record, ExportSchemaVersion::CURRENT)
+}
+fn projected_hash(row: &Projected) -> String {
+    super::projected_hash(row, ExportSchemaVersion::CURRENT).unwrap()
+}
 
 fn options() -> ExportOptions {
     ExportOptions {

@@ -22,7 +22,7 @@ fn gen_run_parses_required_and_default_args() {
         panic!("expected gen run");
     };
     assert_eq!(args.run_id, "r1");
-    assert_eq!(args.prompts, PathBuf::from("seeds.txt"));
+    assert_eq!(args.prompts, Some(PathBuf::from("seeds.txt")));
     // Defaults.
     assert_eq!(args.shards, 1);
     assert_eq!(args.max_in_flight, 4);

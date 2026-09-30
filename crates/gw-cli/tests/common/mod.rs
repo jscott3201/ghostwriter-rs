@@ -119,6 +119,7 @@ pub fn record(
             git_commit: None,
         },
         generation: Default::default(),
+        task_provenance: None,
         verification_contract: None,
         execution_evidence: None,
         verification,

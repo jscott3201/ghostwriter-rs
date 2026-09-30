@@ -88,6 +88,9 @@ pub struct UserTurnCandidate {
     /// The verification contract classifying the turn (drives `in_scope_safe` for adversarial
     /// prompts and is mirrored to provenance downstream).
     pub contract: VerificationContract,
+    /// Optional reviewed task/source/rights/group/split declarations and derived semantic identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_provenance: Option<gw_schema::TaskProvenance>,
     /// Pre-judged: a competent teacher could answer it (set by the synthesizer's answerability
     /// check; not nonsense/contradictory).
     pub answerable: bool,
@@ -99,6 +102,30 @@ pub struct UserTurnCandidate {
 }
 
 impl UserTurnCandidate {
+    /// Validate answer semantics and any reviewed task provenance before embeddings or generation.
+    ///
+    /// # Errors
+    /// Rejects invalid contracts, substituted task semantics, or inconsistent reviewed QC fields.
+    pub fn validate_contract(&self) -> Result<()> {
+        self.contract
+            .validate()
+            .map_err(|reason| GenerateError::Invariant(reason.into()))?;
+        if let Some(task) = &self.task_provenance {
+            task.validate_for(&self.message, &self.contract)
+                .map_err(|reason| GenerateError::Invariant(reason.into()))?;
+            let qc = &task.observations.qc;
+            if self.answerable != qc.answerable
+                || self.difficulty_targeted != qc.difficulty_targeted
+                || self.in_scope != qc.in_scope
+            {
+                return Err(GenerateError::Invariant(
+                    "candidate QC disagrees with reviewed task declarations".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Reject leaked chat control tokens before any candidate or historical-prior embedding.
     ///
     /// # Errors
@@ -217,10 +244,7 @@ pub async fn evaluate<E: Embedder + ?Sized>(
     threshold: f64,
 ) -> Result<UserTurnVerdict> {
     let text = candidate.text();
-    candidate
-        .contract
-        .validate()
-        .map_err(|reason| GenerateError::Invariant(reason.into()))?;
+    candidate.validate_contract()?;
     candidate.validate_framing()?;
 
     let embedding = embedder.embed(&text).await.map_err(GenerateError::Embed)?;
@@ -305,6 +329,7 @@ mod tests {
 
     fn candidate(text: &str, kind: VerificationKind, in_scope: bool) -> UserTurnCandidate {
         UserTurnCandidate {
+            task_provenance: None,
             message: user_message(text),
             seed: UserSeed::default(),
             contract: VerificationContract {
@@ -313,7 +338,8 @@ mod tests {
                 required_tests: vec![],
                 kind,
                 oracle: Oracle::None,
-                answer_marker: None,
+                numeric: (kind == VerificationKind::NumericMatch)
+                    .then(gw_schema::NumericComparison::default),
             },
             answerable: true,
             difficulty_targeted: true,

@@ -62,10 +62,7 @@ pub async fn run_group(
     area: &AreaConfig,
     control: RunControl<'_>,
 ) -> Result<GroupOutcome> {
-    seed.candidate
-        .contract
-        .validate()
-        .map_err(|reason| EngineError::Invariant(reason.into()))?;
+    seed.candidate.validate_contract()?;
     area.assess_admission()?;
     let plans = plan_group(SamplingPreset::official().with_seed(seed.seed), area.k);
     let plan_count = plans.len();
@@ -349,12 +346,7 @@ async fn generate_and_persist(
     rid: &str,
     sampling: SamplingPreset,
 ) -> Result<GenerationOutcome<TrainingRecord>> {
-    group
-        .seed
-        .candidate
-        .contract
-        .validate()
-        .map_err(|reason| EngineError::Invariant(reason.into()))?;
+    group.seed.candidate.validate_contract()?;
     group.seed.candidate.validate_framing()?;
     group.clients.prepare_generation_priors().await?;
     // Gate the candidate (no teacher spend if the four-bool QC gate fails).

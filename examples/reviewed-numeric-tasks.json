@@ -1,0 +1,91 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "task_id": "addition-001",
+      "source": {
+        "namespace": "ghostwriter.synthetic-arithmetic",
+        "item": "addition-001",
+        "revision": "arithmetic-fixture-v1",
+        "citation": "Synthetic arithmetic fixture authored for this repository."
+      },
+      "rights": {
+        "basis": "owned",
+        "evidence": ["Synthetic prompt and literal answer authored for this example."],
+        "reviewer": "synthetic-fixture-reviewer",
+        "permitted_uses": ["training", "evaluation", "redistribution"]
+      },
+      "group": {"namespace": "ghostwriter.synthetic-arithmetic", "id": "addition"},
+      "split": {
+        "manifest": {"namespace": "ghostwriter.examples", "id": "arithmetic-splits"},
+        "revision": "fixture-splits-v1",
+        "role": "train"
+      },
+      "prompt": {"role": "user", "content": "Compute 2 + 3. Put your numeric answer on the final line after FINAL:."},
+      "verification": {
+        "kind": "numeric_match",
+        "oracle": {"oracle": "literal", "expected": "5"},
+        "numeric": {
+          "extraction": {"mode": "final_marker", "marker": "FINAL:"},
+          "tolerance": {"absolute": 0.0, "relative": 0.0}
+        },
+        "answer_policy": "authoritative",
+        "execution_policy": "absent"
+      },
+      "observations": {
+        "domain": "arithmetic",
+        "difficulty": {"label": "elementary", "basis": "Single addition of small integers; a reviewed label, not a measured score."},
+        "qc": {
+          "answerable": true,
+          "difficulty_targeted": true,
+          "in_scope": true,
+          "reviewer": "synthetic-fixture-reviewer",
+          "evidence": ["The fixture answer was checked by ordinary integer arithmetic."]
+        }
+      }
+    },
+    {
+      "task_id": "division-001",
+      "source": {
+        "namespace": "ghostwriter.synthetic-arithmetic",
+        "item": "division-001",
+        "revision": "arithmetic-fixture-v1",
+        "citation": "Synthetic arithmetic fixture authored for this repository."
+      },
+      "rights": {
+        "basis": "owned",
+        "evidence": ["Synthetic prompt and literal answer authored for this example."],
+        "reviewer": "synthetic-fixture-reviewer",
+        "permitted_uses": ["training", "evaluation", "redistribution"]
+      },
+      "group": {"namespace": "ghostwriter.synthetic-arithmetic", "id": "division"},
+      "split": {
+        "manifest": {"namespace": "ghostwriter.examples", "id": "arithmetic-splits"},
+        "revision": "fixture-splits-v1",
+        "role": "train"
+      },
+      "prompt": {"role": "user", "content": "Compute 12 / 4. Your final answer content must contain only the number."},
+      "verification": {
+        "kind": "numeric_match",
+        "oracle": {"oracle": "literal", "expected": "3"},
+        "numeric": {
+          "extraction": {"mode": "whole_content"},
+          "tolerance": {"absolute": 0.0, "relative": 0.0}
+        },
+        "answer_policy": "authoritative",
+        "execution_policy": "absent"
+      },
+      "observations": {
+        "domain": "arithmetic",
+        "difficulty": {"label": "elementary", "basis": "One exact small-integer division; a reviewed label, not a measured score."},
+        "qc": {
+          "answerable": true,
+          "difficulty_targeted": true,
+          "in_scope": true,
+          "reviewer": "synthetic-fixture-reviewer",
+          "evidence": ["The fixture answer was checked by ordinary integer arithmetic."]
+        }
+      }
+    }
+  ]
+}

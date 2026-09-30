@@ -17,6 +17,10 @@
 //! decodes the column straight back into `Vec<Message>`; there is no second column that has to
 //! agree with the first by index.
 //!
+//! v3 adds nullable canonical `task_json` with reviewed task provenance and its numeric contract.
+//! The schema, projection, row identity, and writer follow the artifact's stored column version;
+//! v2 receipt recovery continues to use its exact original eight-column projection.
+//!
 //! ## Reading a shard
 //!
 //! [`gw_schema::ExportSchemaVersion`] names the column contract a shard was written under and is recorded in
@@ -34,8 +38,8 @@ use arrow::array::{ArrayRef, Float64Array, RecordBatch, StringArray, UInt32Array
 use arrow::datatypes::{DataType, Field, Schema};
 use blake3::Hasher;
 use gw_schema::{
-    CotPolicy, ExportArtifact, ExportManifest, ExportOptions, ExportScope, LifecycleState, Message,
-    TrainingRecord, TrlFormat, Verdict,
+    CotPolicy, ExportArtifact, ExportManifest, ExportOptions, ExportSchemaVersion, ExportScope,
+    ExportTaskProjection, LifecycleState, Message, TrainingRecord, TrlFormat, Verdict,
 };
 use parquet::arrow::ArrowWriter;
 use parquet::file::metadata::KeyValue;
@@ -57,6 +61,7 @@ pub(crate) struct Projected {
     pub judge_aggregate: Option<f64>,
     pub reasoning_tokens: u32,
     pub messages_json: String,
+    pub task_json: Option<String>,
 }
 
 /// Project a record into its export row. `messages_json` is the canonical conversation, serialized
@@ -66,7 +71,38 @@ pub(crate) struct Projected {
 ///
 /// `record_hash` falls back to a freshly computed content hash when the envelope's own hash is
 /// empty, so an externally-constructed record can never export `record_hash = ""`.
-pub(crate) fn project(rec: &TrainingRecord) -> Result<Projected> {
+pub(crate) fn project(rec: &TrainingRecord, version: ExportSchemaVersion) -> Result<Projected> {
+    let task_json = match version {
+        ExportSchemaVersion::ReviewedTasks => rec
+            .task_provenance
+            .as_ref()
+            .map(|task| {
+                let projection = ExportTaskProjection {
+                    provenance: task.clone(),
+                    verification_contract: rec.verification_contract.clone().ok_or_else(|| {
+                        crate::artifact::integrity(
+                            "reviewed task record lacks verification contract",
+                        )
+                    })?,
+                };
+                projection
+                    .validate(&rec.messages)
+                    .map_err(crate::artifact::integrity)?;
+                canonical_task_json(&projection)
+            })
+            .transpose()?,
+        ExportSchemaVersion::CanonicalMessages if rec.task_provenance.is_none() => None,
+        ExportSchemaVersion::CanonicalMessages => {
+            return Err(crate::artifact::integrity(
+                "v2 publication cannot attest task provenance added after preparation",
+            ));
+        }
+        ExportSchemaVersion::RoleContentText => {
+            return Err(crate::artifact::integrity(
+                "unsupported export column schema version",
+            ));
+        }
+    };
     Ok(Projected {
         record_id: rec.record_id.clone(),
         training_area: rec.training_area.clone(),
@@ -84,7 +120,14 @@ pub(crate) fn project(rec: &TrainingRecord) -> Result<Projected> {
         judge_aggregate: rec.judging.aggregate,
         reasoning_tokens: rec.cost.reasoning_tokens,
         messages_json: canonical_messages_json(&rec.messages)?,
+        task_json,
     })
+}
+
+pub(crate) fn canonical_task_json(task: &ExportTaskProjection) -> Result<String> {
+    let mut value = serde_json::to_value(task)?;
+    value.sort_all_objects();
+    Ok(serde_json::to_string(&value)?)
 }
 
 /// Serialize a conversation to the canonical `messages_json` payload: the serde form of the
@@ -112,10 +155,10 @@ fn resolved_record_hash(rec: &TrainingRecord) -> Result<String> {
     }
 }
 
-/// The fixed Arrow schema for the export projection. Every column is non-nullable except the two
-/// that genuinely can be absent (verdict / judge aggregate).
-pub(crate) fn export_schema() -> Arc<Schema> {
-    Arc::new(Schema::new(vec![
+/// The Arrow schema for the stored version. Verdict, judge aggregate, and v3 task provenance can
+/// genuinely be absent; other columns are required.
+pub(crate) fn export_schema(version: ExportSchemaVersion) -> Result<Arc<Schema>> {
+    let mut fields = vec![
         Field::new("record_id", DataType::Utf8, false),
         Field::new("training_area", DataType::Utf8, false),
         Field::new("record_hash", DataType::Utf8, false),
@@ -124,12 +167,24 @@ pub(crate) fn export_schema() -> Arc<Schema> {
         Field::new("judge_aggregate", DataType::Float64, true),
         Field::new("reasoning_tokens", DataType::UInt32, false),
         Field::new("messages_json", DataType::Utf8, false),
-    ]))
+    ];
+    match version {
+        ExportSchemaVersion::ReviewedTasks => {
+            fields.push(Field::new("task_json", DataType::Utf8, true))
+        }
+        ExportSchemaVersion::CanonicalMessages => (),
+        ExportSchemaVersion::RoleContentText => {
+            return Err(crate::artifact::integrity(
+                "unsupported export column schema version",
+            ));
+        }
+    }
+    Ok(Arc::new(Schema::new(fields)))
 }
 
 /// Assemble the projected rows into a single Arrow [`RecordBatch`].
-pub(crate) fn build_batch(rows: &[Projected]) -> Result<RecordBatch> {
-    let columns: Vec<ArrayRef> = vec![
+pub(crate) fn build_batch(rows: &[Projected], version: ExportSchemaVersion) -> Result<RecordBatch> {
+    let mut columns: Vec<ArrayRef> = vec![
         Arc::new(StringArray::from_iter_values(
             rows.iter().map(|r| r.record_id.as_str()),
         )),
@@ -155,7 +210,16 @@ pub(crate) fn build_batch(rows: &[Projected]) -> Result<RecordBatch> {
             rows.iter().map(|r| r.messages_json.as_str()),
         )),
     ];
-    Ok(RecordBatch::try_new(export_schema(), columns)?)
+    if version == ExportSchemaVersion::ReviewedTasks {
+        columns.push(Arc::new(StringArray::from_iter(
+            rows.iter().map(|r| r.task_json.as_deref()),
+        )));
+    } else if rows.iter().any(|r| r.task_json.is_some()) {
+        return Err(crate::artifact::integrity(
+            "older export schema cannot represent task provenance",
+        ));
+    }
+    Ok(RecordBatch::try_new(export_schema(version)?, columns)?)
 }
 
 /// Encode the rows to an in-memory Parquet byte buffer (sync; called from `spawn_blocking`).
@@ -164,7 +228,7 @@ pub(crate) fn write_parquet<W: std::io::Write + Send>(
     artifact: &ExportArtifact,
     output: W,
 ) -> Result<()> {
-    let batch = build_batch(rows)?;
+    let batch = build_batch(rows, artifact.manifest.column_schema_version)?;
     let props = WriterProperties::builder()
         .set_key_value_metadata(Some(vec![KeyValue::new(
             ARTIFACT_METADATA_KEY.to_string(),
@@ -219,6 +283,7 @@ pub(crate) fn write_parquet<W: std::io::Write + Send>(
 /// #             user_synth_model: None, user_turn_kind: None, in_scope_safe: None,
 /// #             judge_models: vec![], harness_version: "0.1.0".into(), git_commit: None },
 /// #         generation: Default::default(),
+/// #         task_provenance: None,
 /// #         verification_contract: None,
 /// #         execution_evidence: None,
 /// #         verification: Default::default(),

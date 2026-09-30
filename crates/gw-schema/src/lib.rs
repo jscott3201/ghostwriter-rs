@@ -41,6 +41,7 @@ mod hashes;
 mod judging;
 mod lifecycle;
 mod message;
+mod numeric;
 mod preference;
 mod provenance;
 mod rating;
@@ -48,6 +49,8 @@ mod reasoning_quality;
 mod record;
 mod run_manifest;
 mod sandbox;
+mod task;
+mod task_identity;
 mod verification;
 mod verification_contract;
 
@@ -60,6 +63,17 @@ pub use run_manifest::{
 
 // --- §1.3 conversation ---
 pub use message::{Content, ContentPart, FunctionCall, Message, ReasoningDetail, Role, ToolCall};
+pub use numeric::{NumericComparison, NumericExtraction, NumericTolerance, parse_finite_decimal};
+pub use task::{
+    NamespacedTaskId, NumericTaskDocument, NumericTaskKind, NumericTaskOracle, ReviewedNumericTask,
+    ReviewedNumericVerification, ReviewedTaskQc, ReviewedTaskRights, TASK_DOCUMENT_VERSION,
+    TaskDifficulty, TaskObservations, TaskPermittedUse, TaskPrompt, TaskRightsBasis, TaskSource,
+    TaskSplit, TaskSplitRole,
+};
+pub use task_identity::{
+    ExportTaskProjection, SemanticTaskIdentity, TASK_IDENTITY_VERSION, TaskDeclarations,
+    TaskProvenance,
+};
 
 // --- §1.4 provenance ---
 pub use provenance::{Provenance, TeacherRef};
@@ -258,6 +272,7 @@ mod tests {
                 reasoning_effort: Some(ReasoningEffort::Xhigh),
                 ..Default::default()
             },
+            task_provenance: None,
             verification_contract: None,
             // A carried execution report round-trips with the envelope: the persisted report IS the
             // record of which external evidence decided this candidate, so it must survive serde

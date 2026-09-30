@@ -61,10 +61,7 @@ pub async fn revise_once(
     if control.is_cancelled() {
         return Ok(original.clone());
     }
-    seed.candidate
-        .contract
-        .validate()
-        .map_err(|reason| EngineError::Invariant(reason.into()))?;
+    seed.candidate.validate_contract()?;
     crate::grade::validate_record_verification(original, area)?;
     area.assess_admission()?;
 
