@@ -75,15 +75,17 @@ struct SeedBarrierStatusTeacher {
     fatal_seed: i64,
     status: u16,
     calls: AtomicUsize,
+    cancel: CancellationToken,
 }
 
 impl SeedBarrierStatusTeacher {
-    fn new(n: usize, fatal_seed: i64, status: u16) -> Self {
+    fn new(n: usize, fatal_seed: i64, status: u16, cancel: CancellationToken) -> Self {
         Self {
             barrier: Arc::new(tokio::sync::Barrier::new(n)),
             fatal_seed,
             status,
             calls: AtomicUsize::new(0),
+            cancel,
         }
     }
 
@@ -99,12 +101,13 @@ impl Provider for SeedBarrierStatusTeacher {
         let seed = req.seed.unwrap_or_default();
         let fatal = seed == self.fatal_seed;
         let status = self.status;
+        let cancel = self.cancel.clone();
         Box::pin(async move {
             barrier.wait().await;
             if fatal {
                 return Err(ProviderError::from_status(status, None));
             }
-            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            cancel.cancelled().await;
             let answer = format!("answer-{seed}");
             let items = answer_cot(&answer, 0.01)
                 .into_iter()
@@ -366,10 +369,12 @@ async fn systemic_fatal_waits_for_sibling_fanout_to_settle() {
 
     let source = InMemorySeedSource::new(vec![good_candidate("What is 12*8?")], 1);
     let item = source.items_for_shard(0).remove(0);
+    let cancel = no_cancel();
     let teacher = Arc::new(SeedBarrierStatusTeacher::new(
         3,
         item.seed.wrapping_add(1),
         401,
+        cancel.clone(),
     ));
     let judge = Arc::new(ScriptedJudge::new(vec![
         &judge_body(0.95, "accept"),
@@ -378,13 +383,12 @@ async fn systemic_fatal_waits_for_sibling_fanout_to_settle() {
     let cl = clients(
         store.clone(),
         teacher.clone(),
-        judge,
+        judge.clone(),
         25.0,
         EventSink::disconnected(),
     );
     let budget = cl.budget.clone();
     let area = area_k(one_judge(), lenient_thresholds(), 3);
-    let cancel = no_cancel();
 
     let err = tokio::time::timeout(
         std::time::Duration::from_secs(2),
@@ -401,6 +405,12 @@ async fn systemic_fatal_waits_for_sibling_fanout_to_settle() {
         "the fatal is attributed to the 401 sibling"
     );
     assert_eq!(teacher.call_count(), 3);
+    assert!(cancel.is_cancelled());
+    assert_eq!(
+        judge.call_count(),
+        0,
+        "no new grading transition after the fatal"
+    );
     assert!(
         (budget.spent() - 0.02).abs() < 1e-12,
         "healthy siblings are allowed to settle and charge before the fatal returns"
@@ -417,8 +427,8 @@ async fn systemic_fatal_waits_for_sibling_fanout_to_settle() {
     );
     assert!(
         all.iter()
-            .all(|rec| rec.lifecycle.state == LifecycleState::Judged),
-        "healthy siblings stop at Judged because the group returns the fatal before finalization"
+            .all(|rec| rec.lifecycle.state == LifecycleState::AssistantGenerated),
+        "started generation persists, then cancellation stops the next transition"
     );
     let mut ids: Vec<_> = all.iter().map(|rec| rec.record_id.clone()).collect();
     ids.sort_unstable();

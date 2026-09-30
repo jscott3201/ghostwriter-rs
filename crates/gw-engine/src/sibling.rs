@@ -32,7 +32,7 @@ use gw_schema::{BudgetBreach, LifecycleState, TeacherRef, TrainingRecord};
 use gw_storage::{Store, now_rfc3339, prompt_hash};
 
 use crate::clients::{AreaConfig, Clients};
-use crate::control::RunControl;
+use crate::control::{GenerationOutcome, RunControl};
 use crate::error::{EngineError, Result};
 use crate::event::EngineEvent;
 use crate::seed::{SeedItem, record_id};
@@ -51,7 +51,9 @@ const TRUNCATION_RETRY_MAX_TOKENS: u32 = 32_000;
 /// reached before ANY sibling generates, the group is skipped (returns an empty result).
 ///
 /// # Errors
-/// Propagates the first [`EngineError`] from generation / driving / persistence.
+/// A fatal generation, driving, or persistence error cancels the shared run token immediately.
+/// Started sibling transitions settle before the first observed fatal [`EngineError`] is returned.
+/// Record-level errors remain isolated to their own siblings.
 pub async fn run_group(
     run_id: &str,
     shard: i64,
@@ -98,11 +100,15 @@ pub async fn run_group(
                 // The budget gate tripped before this sibling could generate (Drain). Under fan-out,
                 // other siblings may already be in flight; those still settle before we finalize.
                 Err(SiblingOutcome::BudgetGated) => {}
+                Err(SiblingOutcome::Interrupted) => interrupted = true,
                 // This sibling faulted at the record level: it is parked at `Error`; keep its (now
                 // terminal) envelope in the group so the report counts it.
                 Err(SiblingOutcome::Parked(parked)) => settled.push((completion_index, *parked)),
                 // A systemic/infrastructure fault — record it and continue joining siblings.
                 Err(SiblingOutcome::Fatal(e)) => {
+                    // Seal dispatch in every shard now, even while this group's started siblings
+                    // are still settling their provider transitions.
+                    control.cancel();
                     if first_fatal.is_none() {
                         first_fatal = Some(e);
                     }
@@ -150,6 +156,8 @@ pub struct GroupOutcome {
 /// (F1). `BudgetGated` stops the fan-out (Drain); `Parked` carries the sibling already advanced to
 /// `Error` (continue with the rest); `Fatal` is a systemic fault that aborts the run.
 enum SiblingOutcome {
+    /// Cancellation prevented a new generation transition; there is no record fault to park.
+    Interrupted,
     /// The budget cap was reached before this sibling could generate — stop fanning out (Drain).
     BudgetGated,
     /// A record-level fault struck this sibling; it has been parked at `Error` (correctly attributed).
@@ -194,6 +202,9 @@ async fn drive_sibling(
     let rec = match ctx.clients.store.get(rid).await {
         Ok(existing) => existing,
         Err(gw_storage::StorageError::NotFound(_)) => {
+            if ctx.control.is_cancelled() {
+                return Err(SiblingOutcome::Interrupted);
+            }
             // Budget gate: stop dispatching NEW teacher work once the cap is reached (Drain).
             if !ctx.clients.budget.may_dispatch() {
                 if ctx.control.on_breach() == BudgetBreach::Abort {
@@ -202,7 +213,8 @@ async fn drive_sibling(
                 return Err(SiblingOutcome::BudgetGated);
             }
             match generate_and_persist(ctx, rid, plan.sampling).await {
-                Ok(rec) => rec,
+                Ok(GenerationOutcome::Generated(rec)) => rec,
+                Ok(GenerationOutcome::Interrupted) => return Err(SiblingOutcome::Interrupted),
                 Err(e) => {
                     return Err(classify_sibling_fault(
                         e.attribute_to(rid),
@@ -327,7 +339,7 @@ async fn generate_and_persist(
     group: &GroupDrive<'_>,
     rid: &str,
     sampling: SamplingPreset,
-) -> Result<TrainingRecord> {
+) -> Result<GenerationOutcome<TrainingRecord>> {
     // Gate the candidate (no teacher spend if the four-bool QC gate fails).
     // Best-effort under concurrency: simultaneous sibling groups may snapshot before either admits.
     // Dedup failures use the existing Error/circuit-breaker path by design.
@@ -365,6 +377,9 @@ async fn generate_and_persist(
     }
 
     // The single teacher-spend, with one cost-accounted truncation retry if needed.
+    if group.control.is_cancelled() {
+        return Ok(GenerationOutcome::Interrupted);
+    }
     let generated =
         generate_assistant_with_truncation_retry(group.clients, rid, &gated, &call, group.control)
             .await?;
@@ -413,7 +428,9 @@ async fn generate_and_persist(
     charge_teacher_cost(group.clients, &rec.record_id, cost_usd);
 
     // Re-read so the returned envelope matches what was persisted.
-    Ok(group.clients.store.get(rid).await?)
+    Ok(GenerationOutcome::Generated(
+        group.clients.store.get(rid).await?,
+    ))
 }
 
 async fn generate_assistant_with_truncation_retry(

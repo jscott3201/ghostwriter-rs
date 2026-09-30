@@ -28,7 +28,7 @@ use gw_schema::{BudgetBreach, LifecycleState, TeacherRef, TrainingRecord};
 use gw_storage::{StorageError, now_rfc3339, prompt_hash};
 
 use crate::clients::{AreaConfig, Clients};
-use crate::control::RunControl;
+use crate::control::{GenerationOutcome, RunControl};
 use crate::error::{EngineError, Result};
 use crate::event::EngineEvent;
 use crate::seed::{SeedItem, record_id};
@@ -71,6 +71,9 @@ pub async fn revise_once(
     let retry = match clients.store.get(&retry_id).await {
         Ok(existing) => existing,
         Err(StorageError::NotFound(_)) => {
+            if control.is_cancelled() {
+                return Ok(original.clone());
+            }
             if !clients.budget.may_dispatch() {
                 if control.on_breach() == BudgetBreach::Abort {
                     control.cancel();
@@ -78,20 +81,24 @@ pub async fn revise_once(
                 // Budget exhausted: do not start the retry; the original stays at Revising.
                 return Ok(original.clone());
             }
-            generate_retry(
+            match generate_retry(
                 run_id,
                 &retry_id,
-                completion_index,
                 seed,
                 original,
                 clients,
                 area,
+                control,
             )
             .await
             // X1: attribute a record-level retry fault to the RETRY id so the shard parks the actual
             // faulting retry at `Error`, never a blindly-assumed `c0` (which may be the `Revising`
             // original or a healthy sibling).
             .map_err(|e| e.attribute_to(&retry_id))?
+            {
+                GenerationOutcome::Generated(retry) => retry,
+                GenerationOutcome::Interrupted => return Ok(original.clone()),
+            }
         }
         Err(e) => return Err(e.into()),
     };
@@ -121,12 +128,13 @@ pub async fn revise_once(
 async fn generate_retry(
     run_id: &str,
     retry_id: &str,
-    completion_index: u32,
     seed: &SeedItem,
     original: &TrainingRecord,
     clients: &Clients,
     area: &AreaConfig,
-) -> Result<TrainingRecord> {
+    control: RunControl<'_>,
+) -> Result<GenerationOutcome<TrainingRecord>> {
+    let completion_index = original.generation.completion_index.unwrap_or(0);
     // Seed-item identity is content-independent so only this item's own priors are excluded.
     let item_id = crate::priors::record_item_id(retry_id).ok_or_else(|| {
         EngineError::Invariant(format!("retry id has no item prefix: {retry_id}"))
@@ -159,6 +167,9 @@ async fn generate_retry(
         call = call.with_reasoning(ReasoningPolicy::MaxTokens(reasoning_max_tokens));
     }
 
+    if control.is_cancelled() {
+        return Ok(GenerationOutcome::Interrupted);
+    }
     let turn = generate_assistant(clients.teacher.as_ref(), &gated, &call).await?;
     let cost_usd = turn.cost.unwrap_or(0.0);
 
@@ -211,7 +222,9 @@ async fn generate_retry(
         run_total_usd: total,
     });
 
-    Ok(clients.store.get(retry_id).await?)
+    Ok(GenerationOutcome::Generated(
+        clients.store.get(retry_id).await?,
+    ))
 }
 
 #[cfg(test)]
