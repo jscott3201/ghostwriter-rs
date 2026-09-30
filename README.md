@@ -382,7 +382,7 @@ gw gen run      Headless run: generate → grade → admit → persist; prints t
 gw gen tui      The same run with the live ratatui dashboard.
 gw gen export   Export admitted records from a store to a Parquet shard (no providers).
 gw gen replay   Resume a started run from its persisted checkpoints.
-gw eval audit-separation   Selector-vs-random separation diagnostic over a store (JSON).
+gw eval audit-separation   Score diagnostics and optional independent outcome evidence (JSON).
 gw eval promote            Variance-aware promotion gate over two eval_results.json (JSON).
 ```
 
@@ -469,13 +469,92 @@ recorded as manifest metadata so a downstream trainer applies the matching loss 
 `gw-eval` is **off-path and model-free** — it reads persisted records and eval artifacts, never calls
 a provider:
 
-- **`gw eval audit-separation`** scores how well the selector separates admitted from random traces
-  over a store (with a data-ceiling guard), printing a JSON report.
+- **`gw eval audit-separation`** reports verifier mixedness and judge-score spread. Optional
+  independent outcomes evaluate the declared judge-score selection rule over a frozen corpus.
 - **`gw eval promote`** is a variance-aware gate over two `eval_results.json` snapshots
   (baseline vs candidate) plus a drift exit code, printing a binary promotion decision.
 
 Both accept `--check` to opt into decision-bearing process exits (`0` pass · `1` operational error ·
 `2` gate rejects) for CI.
+
+### Independent selector outcomes
+
+Judge-score spread is descriptive: a group's maximum necessarily reaches or exceeds its own mean.
+Without `--outcomes`, `outcome_evaluation.status` is `insufficient_evidence`, its `statistics` are
+`null`, and `--check` exits `2`. The diagnostic `--min-decidable-groups` and
+`--min-decidable-fraction` settings only control the mixedness warning.
+
+```sh
+gw eval audit-separation --db run.sqlite --run-id run-1 --outcomes outcomes.json --check
+```
+
+The version 1 outcome envelope uses one run, one area, one bounded metric, and one reference
+protocol for an explicit frozen corpus. Its JSON structure is:
+
+```json
+{
+  "version": 1,
+  "run_id": "run-1",
+  "training_area": "math",
+  "metric": {
+    "name": "task_success",
+    "version": "v1",
+    "direction": "higher_is_better"
+  },
+  "provenance": {
+    "source": "deterministic_task_reference",
+    "protocol_revision": "task-reference-v1",
+    "reference_artifact_digest": {
+      "algorithm": "sha256",
+      "hex": "<full 64-character lowercase digest of the reference artifact>"
+    }
+  },
+  "sampling_assumption": "independent_prompts",
+  "corpus": [],
+  "outcomes": []
+}
+```
+
+Replace the digest placeholder and populate both lists before evaluating. `corpus` contains exact
+bindings with `record_id`, `run_id`, `training_area`, `prompt_hash`, and `record_hash`. Use the full
+recomputed hashes: the Rust helper `gw_eval::outcomes::CandidateBinding::from_record` constructs
+them. `record_hash` follows the storage content-hash contract; run and area are also checked
+explicitly. Each `outcomes` entry contains `candidate` (the same complete binding) and `outcome`,
+either `{"status":"known","value":1.0}` or `{"status":"unknown","reason":"not measured"}`.
+Known values must be finite and in `[0,1]`.
+
+`adjudicated_reference` is the other accepted source; `blake3` is the other digest algorithm.
+Every label uses the envelope's single metric and provenance contract. Per-label overrides,
+unknown fields, duplicate labels, stale content hashes, conflicting identities, and labels outside
+the declared corpus are invalid. Store filters must retain every declared member. Later records
+outside the frozen member list do not enter its random-control population. A missing or unknown
+outcome anywhere in the declared corpus blocks qualification, including when other prompts have
+complete labels.
+
+The evaluated population is all-pass prompt groups with at least two scored candidates. The policy
+chooses the highest judge score and breaks ties by the lowest completion index; evaluated indices
+must be present and distinct within each prompt. It compares that candidate's independent outcome
+with the uniform-random expected outcome over the same scored candidates. Each distinct prompt hash
+receives equal weight, so repeated prompts do not increase the independent sample count.
+
+The report records the policy, metric, reference provenance, coverage, typed reasons, confidence
+level, and the declared independent-prompt sampling assumption. Under that assumption, its
+one-sided Hoeffding lower bound is `mean_gap - sqrt(2 * ln(1/alpha) / n)` for prompt gaps in `[-1,1]`,
+where `alpha = 1 - confidence_level`. Qualification requires a positive lower bound and at least
+30 evaluated prompts by default. `--confidence-level` (default `0.95`) and
+`--min-evaluated-prompts` make those settings explicit.
+
+Complete evidence with insufficient statistical support is `inconclusive`. Missing/unknown evidence
+is `insufficient_evidence`; both exit `0` after successful analysis or `2` with `--check`. Semantic
+invalidity prints an `invalid_evidence` report and exits `1` in either mode. Parse or I/O errors exit
+`1` without a report. Absent numeric comparisons serialize as `null`.
+
+Reference provenance is an auditable declaration, not proof of evaluator independence or blinding.
+Qualification concerns this selection rule and declared corpus. It does not qualify the engine's
+full admission policy, model quality outside that corpus, or downstream student learning benefit.
+Synthetic fixtures establish software behavior only.
+
+### Promotion
 
 Promotion requires every benchmark supplied on either side, plus the configured headline metric,
 to be present on both sides. Aggregate-only comparisons remain supported. Missing scores, reserved

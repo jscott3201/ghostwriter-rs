@@ -221,6 +221,12 @@ fn eval_audit_separation_parses() {
         "store.sqlite",
         "--run-id",
         "r1",
+        "--outcomes",
+        "outcomes.json",
+        "--min-evaluated-prompts",
+        "40",
+        "--confidence-level",
+        "0.99",
         "--min-decidable-groups",
         "5",
         "--min-decidable-fraction",
@@ -233,6 +239,9 @@ fn eval_audit_separation_parses() {
     };
     assert_eq!(args.db, PathBuf::from("store.sqlite"));
     assert_eq!(args.run_id, Some("r1".to_string()));
+    assert_eq!(args.outcomes, Some(PathBuf::from("outcomes.json")));
+    assert_eq!(args.min_evaluated_prompts, Some(40));
+    assert_eq!(args.confidence_level, Some(0.99));
     assert_eq!(args.min_decidable_groups, Some(5));
     assert_eq!(args.min_decidable_fraction, Some(0.1));
     assert!(args.check);

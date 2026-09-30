@@ -15,7 +15,7 @@ use gw_storage::{RecordFilter, Store};
 use common::{cleanup_db, record, seed_store, unique_temp_path, write_eval_results};
 
 /// A corpus with one mixed group (verifier-decidable) and one all-pass group with two scored
-/// siblings (selector-eligible): a deterministic separation signal.
+/// siblings (selector-eligible): descriptive judge-score variation.
 async fn seed_separation_store(path: &std::path::Path) -> Store {
     let recs = vec![
         // mixed group "m": one pass, one fail.
@@ -35,7 +35,7 @@ async fn seed_separation_store(path: &std::path::Path) -> Store {
             false,
             "m",
         ),
-        // all-pass group "ap": aggregates 0.9 and 0.5 (argmax 0.9 > mean 0.7 → selector wins).
+        // All-pass group "ap": scores 0.9 and 0.5 have a max-minus-mean spread of 0.2.
         record(
             "ap-hi",
             "run-1",
@@ -57,32 +57,51 @@ async fn seed_separation_store(path: &std::path::Path) -> Store {
 }
 
 #[tokio::test]
-async fn audit_separation_handler_runs_and_signal_matches() {
+async fn audit_separation_handler_reports_descriptive_scores_without_qualification() {
     let db = unique_temp_path("sep.sqlite");
     let store = seed_separation_store(&db).await;
 
-    // (a) The underlying diagnostic over the same store yields the expected, deterministic signal.
+    // The descriptive measurements remain available without any independent quality claim.
     let report = separation::analyze_store(
         &store,
         &RecordFilter::new().run_id("run-1"),
         &SeparationConfig::default(),
+        None,
     )
     .await
     .expect("analyze");
-    assert_eq!(report.n_mixed, 1, "the m group is verifier-decidable");
-    assert_eq!(report.n_allpass, 1, "the ap group is all-pass");
-    assert_eq!(report.n_selector_eligible, 1, "ap has 2 scored siblings");
+    assert_eq!(
+        report.diagnostics.n_mixed, 1,
+        "the m group is verifier-decidable"
+    );
+    assert_eq!(report.diagnostics.n_allpass, 1, "the ap group is all-pass");
+    assert_eq!(
+        report.diagnostics.n_score_groups, 1,
+        "ap has 2 scored siblings"
+    );
     assert!(
-        (report.selector_mean_gap - 0.2).abs() < 1e-12,
+        (report
+            .diagnostics
+            .judge_scores
+            .as_ref()
+            .unwrap()
+            .mean_max_minus_mean
+            - 0.2)
+            .abs()
+            < 1e-12,
         "argmax 0.9 - mean 0.7 == 0.2"
     );
-    assert!((report.selector_winrate - 1.0).abs() < 1e-12);
+    assert!(!report.passed());
+    assert!(report.outcome_evaluation.statistics.is_none());
     drop(store);
 
     // (b) The handler runs end-to-end (open → scan → analyze → serialize → print) and returns Ok.
     let args = AuditSeparationArgs {
         db: db.clone(),
         run_id: Some("run-1".into()),
+        outcomes: None,
+        min_evaluated_prompts: None,
+        confidence_level: None,
         min_decidable_groups: Some(1),
         min_decidable_fraction: Some(0.0),
         check: false,
@@ -96,7 +115,7 @@ async fn audit_separation_handler_runs_and_signal_matches() {
 }
 
 #[tokio::test]
-async fn audit_separation_check_rejects_on_low_data_and_passes_on_signal() {
+async fn audit_separation_diagnostic_thresholds_never_qualify_without_outcomes() {
     let db = unique_temp_path("sep-check.sqlite");
     let store = seed_separation_store(&db).await;
     drop(store);
@@ -104,6 +123,9 @@ async fn audit_separation_check_rejects_on_low_data_and_passes_on_signal() {
     let reject = AuditSeparationArgs {
         db: db.clone(),
         run_id: Some("run-1".into()),
+        outcomes: None,
+        min_evaluated_prompts: None,
+        confidence_level: None,
         min_decidable_groups: None,
         min_decidable_fraction: None,
         check: true,
@@ -113,17 +135,20 @@ async fn audit_separation_check_rejects_on_low_data_and_passes_on_signal() {
         .expect("audit-separation check reject runs");
     assert_eq!(outcome, CommandOutcome::GateRejected);
 
-    let pass = AuditSeparationArgs {
+    let relaxed = AuditSeparationArgs {
         db: db.clone(),
         run_id: Some("run-1".into()),
+        outcomes: None,
+        min_evaluated_prompts: None,
+        confidence_level: None,
         min_decidable_groups: Some(1),
         min_decidable_fraction: Some(0.0),
         check: true,
     };
-    let outcome = audit_separation(pass)
+    let outcome = audit_separation(relaxed)
         .await
-        .expect("audit-separation check pass runs");
-    assert_eq!(outcome, CommandOutcome::Success);
+        .expect("audit-separation with relaxed diagnostics runs");
+    assert_eq!(outcome, CommandOutcome::GateRejected);
 
     cleanup_db(&db);
 }

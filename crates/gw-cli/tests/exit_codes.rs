@@ -192,3 +192,34 @@ async fn audit_separation_check_returns_two_on_low_data_store() {
 
     cleanup_db(&db);
 }
+
+#[tokio::test]
+async fn audit_separation_score_spread_without_outcomes_never_qualifies() {
+    let db = unique_temp_path("exit-separation-no-outcomes.sqlite");
+    seed_low_data_store(&db).await;
+    let args = vec![
+        OsString::from("eval"),
+        OsString::from("audit-separation"),
+        OsString::from("--db"),
+        db.as_os_str().to_owned(),
+        OsString::from("--min-decidable-groups"),
+        OsString::from("0"),
+        OsString::from("--min-decidable-fraction"),
+        OsString::from("0"),
+    ];
+    let without_check = run_gw(args.clone());
+    let mut checked = args;
+    checked.push(OsString::from("--check"));
+    let with_check = run_gw(checked);
+    cleanup_db(&db);
+    for (output, exit) in [(without_check, 0), (with_check, 2)] {
+        assert_exit(&output, exit);
+        let report: gw_eval::SeparationReport = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            report.outcome_evaluation.status,
+            gw_eval::OutcomeStatus::InsufficientEvidence
+        );
+        assert!(report.outcome_evaluation.statistics.is_none());
+        assert!(report.diagnostics.judge_scores.unwrap().mean_max_minus_mean > 0.0);
+    }
+}

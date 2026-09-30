@@ -1,12 +1,11 @@
 //! `gw-eval` — the OFF-PATH, headless, GPU-free, read-only evaluation/diagnostics crate.
 //!
-//! Two v1 instruments, both model-free and reading only fields the harness already persists:
+//! Two model-free instruments reading persisted records and externally supplied evidence:
 //!
-//! - [`separation`] (A1) — a selector-vs-random **separation diagnostic** plus the
-//!   `decidable_fraction` judge-budget skip lever. Proves, model-free, that argmax-aggregate
-//!   selection beats random at equal budget ON THE REASONING-QUALITY AXIS, and reports the
-//!   fraction of sibling groups the deterministic verifier can actually decide (so panel judge
-//!   tokens can be skipped on the rest).
+//! - [`separation`] — descriptive verifier mixedness and judge-score spread, with optional
+//!   independent [`outcomes`] for a frozen corpus. Qualification applies to the declared
+//!   selection rule, reference metric and independent-prompt assumption; it does not establish
+//!   the engine's full admission quality or downstream learning benefit.
 //! - [`promote`] (A3 + ITEM 9) — a variance-aware **promotion gate**. Promotes a candidate
 //!   fine-tune only with complete, finite supplied evidence, a clean capability-drift probe, and
 //!   a `k·σ`-noise-band A/B comparison showing
@@ -23,6 +22,8 @@
 //! Library code never uses `anyhow`; every fallible path returns the typed [`EvalError`].
 
 mod error;
+mod outcome_analysis;
+pub mod outcomes;
 pub mod promote;
 pub mod separation;
 
@@ -30,8 +31,11 @@ pub mod separation;
 mod test_support;
 
 pub use error::{EvalError, Result};
+pub use outcomes::{OutcomeEvidence, OutcomeReport, OutcomeStatus};
 pub use promote::{
     BenchmarkOutcome, EvalResults, EvaluationSide, EvidenceIssue, PromoteConfig, PromotionReport,
     promote as promote_gate,
 };
-pub use separation::{SeparationConfig, SeparationReport, analyze, analyze_store};
+pub use separation::{
+    SeparationConfig, SeparationDiagnostics, SeparationReport, analyze, analyze_store,
+};
