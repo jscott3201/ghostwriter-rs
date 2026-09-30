@@ -3,6 +3,14 @@
 use gw_schema::BudgetBreach;
 use tokio_util::sync::CancellationToken;
 
+/// A new generation transition may be interrupted before dispatch without becoming a record fault.
+pub(crate) enum GenerationOutcome<T> {
+    /// The started generation completed and its record was persisted.
+    Generated(T),
+    /// Cancellation prevented dispatch; there is no new record or provider fault.
+    Interrupted,
+}
+
 /// The cancellation token plus budget-breach policy for one engine run.
 #[derive(Debug, Clone, Copy)]
 pub struct RunControl<'a> {

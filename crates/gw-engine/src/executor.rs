@@ -26,6 +26,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use tokio::sync::Semaphore;
+use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 use gw_schema::{BudgetBreach, CotPolicy, ExportManifest, LifecycleState, TrlFormat};
@@ -211,10 +212,15 @@ impl Engine {
     /// teacher is never re-spent). BUDGET: once the cap is reached, no new teacher work is dispatched
     /// (Drain) or cancels in-flight items at transition boundaries (Abort). CANCELLATION: a cancelled
     /// token stops dispatching new work and leaves in-flight items at their last persisted boundary.
+    /// Fatal shard errors and panics cancel the shared token, then join every owned shard before
+    /// reporting failure. Surviving shards settle transitions cooperatively; a provider that never
+    /// returns can delay this drain because the engine imposes no provider deadline. Dropping this future
+    /// aborts its shard tasks and does not guarantee durable settlement of their in-flight work.
     ///
     /// # Errors
-    /// Propagates the first [`EngineError`] from any shard. A shard error halts the run (status
-    /// `Failed`); records already persisted stand for a later resume.
+    /// Propagates the first shard failure observed in completion order. A shard error halts the run
+    /// (status `Failed`); records already persisted stand for a later resume. A secondary failure
+    /// recording that terminal status is logged and never replaces the primary error.
     pub async fn run<S: SeedSource + ?Sized>(
         &self,
         run_id: &str,
@@ -254,14 +260,14 @@ impl Engine {
         });
 
         if let Err(error) = self.seed_embedding_priors(run_id, &cancel).await {
-            mark_run_failed(&self.clients.store, &self.clients.events, run_id).await?;
+            mark_run_failed(&self.clients.store, &self.clients.events, run_id).await;
             return Err(error);
         }
 
         let semaphore = Arc::new(Semaphore::new(self.max_in_flight as usize));
         // F2: a run-level circuit-breaker shared across shards — aborts a systemically-broken run.
         let breaker = Arc::new(CircuitBreaker::new(CIRCUIT_BREAKER_PARKS));
-        let mut handles = Vec::with_capacity(shard_count);
+        let mut shards = JoinSet::new();
         for shard in 0..shard_count as i64 {
             let engine = self.clone();
             let run_id = run_id.to_string();
@@ -269,28 +275,32 @@ impl Engine {
             let semaphore = Arc::clone(&semaphore);
             let breaker = Arc::clone(&breaker);
             let cancel = cancel.clone();
-            handles.push(tokio::spawn(async move {
+            shards.spawn(async move {
                 engine
                     .run_shard(&run_id, shard, items, &semaphore, &breaker, &cancel)
                     .await
-            }));
+            });
         }
 
-        // Join all shards; the first error aborts the run (status Failed, records stand for resume).
-        for handle in handles {
-            match handle.await {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => {
-                    mark_run_failed(&self.clients.store, &self.clients.events, run_id).await?;
-                    return Err(e);
+        // Observe completion order and keep ownership through cooperative drain. Aborting here
+        // would discard started provider transitions before their results could be persisted.
+        let mut primary_failure = None;
+        while let Some(completed) = shards.join_next().await {
+            let error = match completed {
+                Ok(Ok(())) => continue,
+                Ok(Err(error)) => error,
+                Err(join_error) => {
+                    EngineError::Invariant(format!("shard task panicked/cancelled: {join_error}"))
                 }
-                Err(join_err) => {
-                    mark_run_failed(&self.clients.store, &self.clients.events, run_id).await?;
-                    return Err(EngineError::Invariant(format!(
-                        "shard task panicked/cancelled: {join_err}"
-                    )));
-                }
+            };
+            cancel.cancel();
+            if primary_failure.is_none() {
+                primary_failure = Some(error);
             }
+        }
+        if let Some(error) = primary_failure {
+            mark_run_failed(&self.clients.store, &self.clients.events, run_id).await;
+            return Err(error);
         }
 
         let halted = cancel.is_cancelled() || self.clients.budget.is_exhausted();
@@ -415,10 +425,15 @@ impl Engine {
             // Cap concurrent in-flight seed items across all shards. The permit is held for the whole
             // item and ALWAYS released (the `?`-free match below cannot early-return before `drop`), so
             // a record-level error never leaks a permit and deadlocks the pool (E5/E10).
-            let permit = semaphore
-                .acquire()
-                .await
-                .map_err(|e| EngineError::Invariant(format!("semaphore closed: {e}")))?;
+            let permit = tokio::select! {
+                biased;
+                () = cancel.cancelled() => break,
+                permit = semaphore.acquire() =>
+                    permit.map_err(|e| EngineError::Invariant(format!("semaphore closed: {e}")))?,
+            };
+            if cancel.is_cancelled() {
+                break;
+            }
 
             let control = RunControl::new(cancel, self.on_breach);
             let processed = self.process_item(run_id, shard, &item, control).await;
@@ -713,17 +728,14 @@ impl Engine {
     }
 }
 
-async fn mark_run_failed(
-    store: &gw_storage::Store,
-    events: &crate::EventSink,
-    run_id: &str,
-) -> Result<()> {
-    store.set_run_status(run_id, RunStatus::Failed).await?;
+async fn mark_run_failed(store: &gw_storage::Store, events: &crate::EventSink, run_id: &str) {
+    if let Err(error) = store.set_run_status(run_id, RunStatus::Failed).await {
+        tracing::warn!(run_id, %error, "failed to persist terminal Failed status after primary run failure");
+    }
     events.emit(EngineEvent::RunFinished {
         run_id: run_id.to_string(),
         completed: false,
     });
-    Ok(())
 }
 
 fn manifest_sidecar_path(dst: &Path) -> PathBuf {
@@ -843,9 +855,7 @@ mod failure_tests {
         store.create_run("failed-run", "{}", None).await.unwrap();
         let (events, mut receiver) = crate::EventSink::subscribe();
 
-        mark_run_failed(&store, &events, "failed-run")
-            .await
-            .unwrap();
+        mark_run_failed(&store, &events, "failed-run").await;
 
         assert_eq!(
             store.run_status("failed-run").await.unwrap().as_deref(),

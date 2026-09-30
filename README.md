@@ -301,6 +301,13 @@ different value would re-partition the space and duplicate or orphan records).
 > a prompt the **k** best-of-k candidates fan out concurrently. `--shards` × `k` is your throughput
 > dial; `--max-in-flight` bounds total concurrent items so you stay within provider limits.
 
+A fatal shard error or panic stops new work and joins every shard before the run reports failure.
+Surviving shards settle started transitions at a persisted boundary; grading may finish its panel and
+internal retries. The first observed shard failure remains the returned error even if saving the
+failed run status also fails. A provider that never returns can delay shutdown: the engine adds no
+provider deadline. Dropping the run future aborts its shard tasks without guaranteeing that their
+in-flight work is persisted.
+
 ---
 
 ## Export targets & CoT policy
