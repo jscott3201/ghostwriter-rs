@@ -341,6 +341,24 @@ a provider:
 Both accept `--check` to opt into decision-bearing process exits (`0` pass · `1` operational error ·
 `2` gate rejects) for CI.
 
+Promotion requires every benchmark supplied on either side, plus the configured headline metric,
+to be present on both sides. Aggregate-only comparisons remain supported. Missing scores, reserved
+aggregate names in benchmark maps, non-finite scores, and overflowing comparison arithmetic reject
+with `evidence_valid: false` and structured `evidence_issues`. Retuning the report cannot override
+that rejection. Valid threshold fields remain JSON numbers; invalid thresholds are `null` (the Rust
+report fields `ab_min_delta` and `ab_sigma_k` are `Option<f64>`). Without `--check`, a gate rejection
+still exits `0` and prints its report. Malformed JSON exits `1` in either mode.
+
+`aggregate` and `eval_results.aggregate` are aliases for one headline, reported under the dotted
+name. Either alias may name its sigma prior; if both priors are supplied, their normalized values
+must agree. Negative or non-finite sigma priors still normalize to zero. Missing priors still use
+zero, and `ab_avg_n` currently does not replace priors with measured variance.
+
+These artifacts carry metric names and scores, without task-version, dataset, checkpoint, template,
+or unit identity. The gate checks supplied evidence completeness; callers must establish those
+compatibility conditions. It does not enforce an external required benchmark suite or a `[0, 1]`
+score range.
+
 ---
 
 ## Security

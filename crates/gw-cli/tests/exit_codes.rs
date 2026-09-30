@@ -72,6 +72,71 @@ fn promote_process_exit_codes_follow_check_contract() {
     let _ = std::fs::remove_file(&reject_candidate);
 }
 
+#[test]
+fn incomplete_promotion_evidence_is_a_reported_gate_rejection() {
+    let baseline = unique_temp_path("incomplete-base.json");
+    let candidate = unique_temp_path("incomplete-cand.json");
+    std::fs::write(
+        &baseline,
+        r#"{"aggregate":0.50,"benchmarks":{"task":0.90}}"#,
+    )
+    .unwrap();
+    std::fs::write(&candidate, r#"{"aggregate":0.51}"#).unwrap();
+    for (check, exit) in [(true, 2), (false, 0)] {
+        let output = run_gw(promote_args(&baseline, &candidate, 0, check));
+        assert_exit(&output, exit);
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["promote"], false);
+        assert_eq!(report["evidence_valid"], false);
+        assert_eq!(report["evidence_issues"][0]["kind"], "missing_metric");
+        assert_eq!(report["evidence_issues"][0]["metric"], "task");
+        assert_eq!(report["evidence_issues"][0]["side"], "candidate");
+    }
+    std::fs::remove_file(baseline).unwrap();
+    std::fs::remove_file(candidate).unwrap();
+}
+
+#[test]
+fn promotion_numeric_overflow_rejects_but_malformed_json_is_an_error() {
+    let baseline = unique_temp_path("numeric-base.json");
+    let candidate = unique_temp_path("numeric-cand.json");
+    std::fs::write(
+        &baseline,
+        r#"{"aggregate":0.50,"benchmarks":{"task":-1.7976931348623157e308}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        &candidate,
+        r#"{"aggregate":0.60,"benchmarks":{"task":1.7976931348623157e308}}"#,
+    )
+    .unwrap();
+    for (check, exit) in [(true, 2), (false, 0)] {
+        let output = run_gw(promote_args(&baseline, &candidate, 0, check));
+        assert_exit(&output, exit);
+        let report: gw_eval::PromotionReport = serde_json::from_slice(&output.stdout).unwrap();
+        assert!(!report.promote && !report.evidence_valid);
+        assert_eq!(
+            report.evidence_issues,
+            [gw_eval::EvidenceIssue::NonFiniteDelta {
+                metric: "task".into()
+            }]
+        );
+        assert!(!report.rederive(0.0, 0.0));
+    }
+
+    std::fs::write(&candidate, r#"{"aggregate":NaN}"#).unwrap();
+    for check in [true, false] {
+        let output = run_gw(promote_args(&baseline, &candidate, 0, check));
+        assert_exit(&output, 1);
+        assert!(
+            output.stdout.is_empty(),
+            "a parse error cannot produce a decision report"
+        );
+    }
+    std::fs::remove_file(baseline).unwrap();
+    std::fs::remove_file(candidate).unwrap();
+}
+
 async fn seed_low_data_store(path: &Path) {
     let records = [
         record(
