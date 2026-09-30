@@ -1,13 +1,11 @@
-//! Engine/storage integration for physical request evidence, without monetary serialization.
+//! Engine/storage integration for physical request evidence, with policy-aware admission at each physical send.
 use crate::Clients;
 use gw_generate::{Embedder, EmbeddingFuture};
 use gw_providers::{
-    AttemptObserver, CallObservation, ChatRequest, ObservationContext, ObservationError,
-    ObservationFuture, Provider, StreamChatFuture,
+    CallObservation, ChatRequest, ObservationContext, Provider, ProviderError, StreamChatFuture,
 };
 use gw_schema::{
-    AccountingCapability, AttemptContext, AttemptIntent, AttemptMetadata, AttemptPurpose,
-    AttemptRole, LaunchCoverage, OutputInterpretation, TransportSettlement,
+    AccountingCapability, AttemptContext, AttemptPurpose, AttemptRole, LaunchCoverage,
 };
 use gw_storage::Store;
 use std::sync::Arc;
@@ -15,61 +13,40 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub(crate) struct LaunchObservation {
     pub(crate) coverage: LaunchCoverage,
-    observer: Arc<dyn AttemptObserver>,
+    pub(crate) observer: Arc<crate::admission::StoreObserver>,
+    priors_seeded: Arc<tokio::sync::OnceCell<()>>,
 }
 impl LaunchObservation {
-    pub(crate) fn new(coverage: LaunchCoverage, store: Store) -> Self {
+    pub(crate) fn new(
+        coverage: LaunchCoverage,
+        store: Store,
+        cancel: tokio_util::sync::CancellationToken,
+        events: crate::EventSink,
+    ) -> Self {
         Self {
+            priors_seeded: Arc::new(tokio::sync::OnceCell::new()),
+            observer: Arc::new(crate::admission::StoreObserver::new(
+                store,
+                coverage.clone(),
+                cancel,
+                events,
+            )),
             coverage,
-            observer: Arc::new(StoreObserver(store)),
         }
     }
 }
-struct StoreObserver(Store);
-impl AttemptObserver for StoreObserver {
-    fn begin(&self, intent: AttemptIntent) -> ObservationFuture<'_, String> {
-        Box::pin(async move {
-            self.0
-                .begin_model_attempt(&intent)
-                .await
-                .map_err(|e| ObservationError(e.to_string()))
-        })
-    }
-    fn metadata(
-        &self,
-        id: String,
-        sequence: u64,
-        metadata: AttemptMetadata,
-    ) -> ObservationFuture<'_, ()> {
-        Box::pin(async move {
-            self.0
-                .observe_model_attempt(&id, sequence, &metadata)
-                .await
-                .map_err(|e| ObservationError(e.to_string()))
-        })
-    }
-    fn settle(&self, id: String, settlement: TransportSettlement) -> ObservationFuture<'_, ()> {
-        Box::pin(async move {
-            self.0
-                .settle_model_attempt(&id, &settlement)
-                .await
-                .map_err(|e| ObservationError(e.to_string()))
-        })
-    }
-    fn interpret(
-        &self,
-        id: String,
-        interpretation: OutputInterpretation,
-    ) -> ObservationFuture<'_, ()> {
-        Box::pin(async move {
-            self.0
-                .interpret_model_attempt(&id, interpretation)
-                .await
-                .map_err(|e| ObservationError(e.to_string()))
-        })
-    }
-}
 impl Clients {
+    pub(crate) async fn prepare_generation_priors(&self) -> crate::Result<()> {
+        if let Some(launch) = &self.observation {
+            launch
+                .priors_seeded
+                .get_or_try_init(|| {
+                    crate::priors::seed(self, &launch.coverage.run_id, &launch.observer.cancel)
+                })
+                .await?;
+        }
+        Ok(())
+    }
     fn observation(
         &self,
         record_id: &str,
@@ -129,6 +106,15 @@ pub(crate) struct ContextProvider<'a> {
 }
 impl Provider for ContextProvider<'_> {
     fn stream_chat(&self, req: ChatRequest) -> StreamChatFuture<'_> {
+        if self.observation.is_none()
+            && self.inner.accounting_capability() != AccountingCapability::NoModelRequests
+        {
+            return Box::pin(async {
+                Err(ProviderError::Admission(
+                    gw_schema::AdmissionDenial::UnregisteredContext,
+                ))
+            });
+        }
         self.inner.stream_chat(req)
     }
     fn stream_chat_observed(
@@ -154,7 +140,14 @@ impl Embedder for ContextEmbedder<'_> {
     fn embed<'a>(&'a self, text: &'a str) -> EmbeddingFuture<'a> {
         match &self.observation {
             Some(context) => self.inner.embed_observed(text, context.call()),
-            None => self.inner.embed(text),
+            None if self.inner.accounting_capability() == AccountingCapability::NoModelRequests => {
+                self.inner.embed(text)
+            }
+            None => Box::pin(async {
+                Err(ProviderError::Admission(
+                    gw_schema::AdmissionDenial::UnregisteredContext,
+                ))
+            }),
         }
     }
     fn accounting_capability(&self) -> AccountingCapability {

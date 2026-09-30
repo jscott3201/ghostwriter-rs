@@ -113,7 +113,8 @@ impl Store {
     }
 
     /// Create a run row. `config_json` is a snapshot of the [`gw_schema::Config`] in force (or any
-    /// JSON the caller wants to pin); `budget_usd` mirrors the budget cap for audit.
+    /// JSON the caller wants to pin); `budget_usd` is retained as legacy audit data only.
+    /// Engine admission uses atomic accounting registration and never reads this historical column.
     ///
     /// Idempotent by `run_id`: re-creating an existing run overwrites the snapshot and resets
     /// status to `running` (a relaunch of the same run id). It deliberately leaves the run partition

@@ -67,13 +67,8 @@ async fn admitted_turn_is_appended_and_duplicate_parks_at_error() {
     let store = Store::open_in_memory().await.unwrap();
     let teacher: Arc<dyn Provider> = Arc::new(ScriptedTeacher::new(vec![good_cot(0.01)], 1));
     let judge: Arc<dyn Provider> = Arc::new(ScriptedJudge::new(vec![&judge_body(0.95, "accept")]));
-    let clients = clients_with_embedder(
-        store.clone(),
-        teacher,
-        judge,
-        Arc::new(SameVectorEmbedder),
-        25.0,
-    );
+    let clients =
+        clients_with_embedder(store.clone(), teacher, judge, Arc::new(SameVectorEmbedder));
     let engine = Engine::new(clients, area_k1(one_judge(), lenient_thresholds()), 1);
 
     let report = engine
@@ -106,7 +101,7 @@ async fn identical_text_from_distinct_seed_items_dedups_second() {
     );
     let teacher: Arc<dyn Provider> = Arc::new(ScriptedTeacher::new(vec![good_cot(0.01)], 1));
     let judge: Arc<dyn Provider> = Arc::new(ScriptedJudge::new(vec![&judge_body(0.95, "accept")]));
-    let clients = clients_with_embedder(store, teacher, judge, Arc::new(SameVectorEmbedder), 25.0);
+    let clients = clients_with_embedder(store, teacher, judge, Arc::new(SameVectorEmbedder));
     let report = Engine::new(clients, area_k1(one_judge(), lenient_thresholds()), 1)
         .run("exact-duplicate", &source, CancellationToken::new())
         .await
@@ -126,7 +121,6 @@ async fn resumed_run_seeds_priors_before_gating_remaining_item() {
         first_teacher,
         first_judge,
         Arc::new(SameVectorEmbedder),
-        0.01,
     );
     Engine::new(first_clients, area_k1(one_judge(), lenient_thresholds()), 1)
         .run("resume-priors", &two_items(), CancellationToken::new())
@@ -140,7 +134,6 @@ async fn resumed_run_seeds_priors_before_gating_remaining_item() {
         resume_teacher,
         resume_judge,
         Arc::new(SameVectorEmbedder),
-        25.0,
     );
     let report = Engine::new(
         resume_clients,
@@ -173,7 +166,7 @@ async fn revise_retry_dedups_against_other_items_prior() {
         Ok(vec![0.0, 1.0]),
         Ok(vec![1.0, 0.0]),
     ]));
-    let clients = clients_with_embedder(store.clone(), teacher, judge, embedder, 25.0);
+    let clients = clients_with_embedder(store.clone(), teacher, judge, embedder);
     let report = Engine::new(clients, area_k1(one_judge(), lenient_thresholds()), 1)
         .run("revise-priors", &two_items(), CancellationToken::new())
         .await
@@ -192,7 +185,7 @@ async fn append_and_resume_seed_embed_failures_do_not_abort_run() {
         Err("append probe".into()),
     ]));
     let source = InMemorySeedSource::new(vec![good_candidate("failure semantics")], 1);
-    let first = clients_with_embedder(store.clone(), teacher, judge, first_embedder, 25.0);
+    let first = clients_with_embedder(store.clone(), teacher, judge, first_embedder);
     let report = Engine::new(first, area_k1(one_judge(), lenient_thresholds()), 1)
         .run("failure-priors", &source, CancellationToken::new())
         .await
@@ -202,7 +195,7 @@ async fn append_and_resume_seed_embed_failures_do_not_abort_run() {
     let resume_teacher: Arc<dyn Provider> = Arc::new(ScriptedTeacher::new(vec![], 0));
     let resume_judge: Arc<dyn Provider> = Arc::new(ScriptedJudge::new(vec![]));
     let failing_seed = Arc::new(ScriptedEmbedder::new(vec![Err("seed probe".into())]));
-    let resume = clients_with_embedder(store, resume_teacher, resume_judge, failing_seed, 25.0);
+    let resume = clients_with_embedder(store, resume_teacher, resume_judge, failing_seed);
     let resumed = Engine::new(resume, area_k1(one_judge(), lenient_thresholds()), 1)
         .run("failure-priors", &source, CancellationToken::new())
         .await
@@ -228,7 +221,6 @@ async fn resumed_all_duplicate_stream_trips_circuit_breaker() {
         first_teacher,
         first_judge,
         Arc::new(SameVectorEmbedder),
-        0.01,
     );
     Engine::new(first, area_k1(one_judge(), lenient_thresholds()), 1)
         .run("breaker-priors", &source, CancellationToken::new())
@@ -237,7 +229,17 @@ async fn resumed_all_duplicate_stream_trips_circuit_breaker() {
 
     let teacher: Arc<dyn Provider> = Arc::new(ScriptedTeacher::new(vec![], 0));
     let judge: Arc<dyn Provider> = Arc::new(ScriptedJudge::new(vec![]));
-    let resume = clients_with_embedder(store, teacher, judge, Arc::new(SameVectorEmbedder), 25.0);
+    // Simulate only the first item checkpoint having committed before a crash.
+    store
+        .checkpoint(
+            "breaker-priors",
+            0,
+            "formatted",
+            &serde_json::json!({"next_offset": 1}),
+        )
+        .await
+        .unwrap();
+    let resume = clients_with_embedder(store, teacher, judge, Arc::new(SameVectorEmbedder));
     let error = Engine::new(resume, area_k1(one_judge(), lenient_thresholds()), 1)
         .run("breaker-priors", &source, CancellationToken::new())
         .await
@@ -262,7 +264,6 @@ async fn resumed_item_does_not_dedup_against_its_own_admitted_vector() {
         store.clone(),
         donor_teacher,
         donor_judge,
-        25.0,
         gw_engine::EventSink::disconnected(),
     );
     Engine::new(donor, area_k1(one_judge(), lenient_thresholds()), 1)
@@ -289,7 +290,7 @@ async fn resumed_item_does_not_dedup_against_its_own_admitted_vector() {
     let teacher = Arc::new(ScriptedTeacher::new(vec![good_cot(0.01)], 1));
     let teacher_probe = Arc::clone(&teacher);
     let judge: Arc<dyn Provider> = Arc::new(ScriptedJudge::new(vec![&judge_body(0.95, "accept")]));
-    let live = clients_with_embedder(store, teacher, judge, Arc::new(SameVectorEmbedder), 25.0);
+    let live = clients_with_embedder(store, teacher, judge, Arc::new(SameVectorEmbedder));
     Engine::new(live, area_k1(one_judge(), lenient_thresholds()), 1)
         .run("resume-own", &source, CancellationToken::new())
         .await
@@ -311,7 +312,6 @@ async fn pre_cancelled_resume_stops_prior_seeding_before_embed() {
         store.clone(),
         teacher,
         judge,
-        25.0,
         gw_engine::EventSink::disconnected(),
     );
     Engine::new(donor, area_k1(one_judge(), lenient_thresholds()), 1)
@@ -337,7 +337,7 @@ async fn pre_cancelled_resume_stops_prior_seeding_before_embed() {
 
     let no_teacher: Arc<dyn Provider> = Arc::new(ScriptedTeacher::new(vec![], 0));
     let no_judge: Arc<dyn Provider> = Arc::new(ScriptedJudge::new(vec![]));
-    let clients = clients_with_embedder(store, no_teacher, no_judge, Arc::new(PanicEmbedder), 25.0);
+    let clients = clients_with_embedder(store, no_teacher, no_judge, Arc::new(PanicEmbedder));
     let cancel = CancellationToken::new();
     cancel.cancel();
     let report = Engine::new(clients, area_k1(one_judge(), lenient_thresholds()), 1)

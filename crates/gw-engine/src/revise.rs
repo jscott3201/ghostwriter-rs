@@ -24,7 +24,7 @@ use gw_generate::{
     GatedUserTurn, ReasoningPolicy, RecordContext, SamplingPreset, TeacherCall, assemble,
     generate_assistant, synthesize_user_turn,
 };
-use gw_schema::{BudgetBreach, LifecycleState, TeacherRef, TrainingRecord};
+use gw_schema::{LifecycleState, TeacherRef, TrainingRecord};
 use gw_storage::{StorageError, now_rfc3339, prompt_hash};
 
 use crate::clients::{AreaConfig, Clients};
@@ -41,9 +41,8 @@ use crate::step::{drive, is_terminal};
 /// `Rejected`. Returns the terminal retry record. If the original is NOT at `Revising`, this is a
 /// no-op returning the original unchanged.
 ///
-/// The budget gate is consulted before the retry's teacher call (a retry is new teacher work). If the
-/// cap is reached, the retry is not generated and the original stays at `Revising` (it will be
-/// re-attempted on a later relaunch under budget).
+/// A fresh request passes physical admission. Denial leaves the original at `Revising` and returns
+/// an orderly halt to the executor; a persisted retry can resume without regenerating its teacher turn.
 ///
 /// # Errors
 /// Propagates the first [`EngineError`] from generation / driving / persistence.
@@ -64,6 +63,8 @@ pub async fn revise_once(
     }
     area.assess_admission()?;
 
+    seed.candidate.validate_framing()?;
+    clients.prepare_generation_priors().await?;
     let completion_index = original.generation.completion_index.unwrap_or(0);
     let retry_id = record_id(run_id, shard, seed.seed, 1, completion_index);
 
@@ -73,13 +74,6 @@ pub async fn revise_once(
         Ok(existing) => existing,
         Err(StorageError::NotFound(_)) => {
             if control.is_cancelled() {
-                return Ok(original.clone());
-            }
-            if !clients.budget.may_dispatch() {
-                if control.on_breach() == BudgetBreach::Abort {
-                    control.cancel();
-                }
-                // Budget exhausted: do not start the retry; the original stays at Revising.
                 return Ok(original.clone());
             }
             match generate_retry(
@@ -178,7 +172,6 @@ async fn generate_retry(
         &call,
     )
     .await?;
-    let cost_usd = turn.cost.unwrap_or(0.0);
 
     let teacher_ref = TeacherRef {
         provider: "openrouter".to_string(),
@@ -223,13 +216,6 @@ async fn generate_retry(
         record_id: rec.record_id.clone(),
         to: LifecycleState::AssistantGenerated,
     });
-    let total = clients.budget.charge(cost_usd);
-    clients.events.emit(EngineEvent::CostCharged {
-        record_id: rec.record_id.clone(),
-        usd: cost_usd,
-        run_total_usd: total,
-    });
-
     Ok(GenerationOutcome::Generated(
         clients.store.get(retry_id).await?,
     ))

@@ -13,8 +13,11 @@ earn it, and exports the winners as a model-agnostic supervised-fine-tuning (SFT
 run persists lifecycle transitions, reuses completed teacher outputs on resume, and records the
 model requests and grading evidence it observes.
 
-It is built for one job — **minting high-quality reasoning data you can trust** — and it treats every
-expensive call (teacher, judge) as something to be budgeted, graded, and accounted for.
+Its goal is reproducible selection of reasoning traces for open-model training, with retained
+verification, grading, request, and publication evidence. The current Rust core handles generation,
+grading, persistence, artifact publication, and model-free diagnostics. External trainer adapters,
+official tokenizer and loss-mask checks, immutable deployment identities, measured throughput,
+and held-out student evaluation are further work; the pipeline alone does not establish student improvement.
 
 > **Status:** active development toward `0.1.0`. The generation → grading → export pipeline runs
 > end-to-end today; the surfaces and config are stabilizing. APIs may still shift before the first
@@ -32,7 +35,8 @@ onto a few modes. ghostwriter-rs makes the quality bar **explicit and enforced**
 - a **judge panel** scores each trace against a rubric, and consensus is discounted when judges are
   correlated (so nine lookalike judges don't masquerade as nine independent votes);
 - **best-of-k** generates several candidates per prompt and admits only the best;
-- a **budget threshold** limits new dispatch using the current accounting projection.
+- an explicit **accounting policy** either observes normal concurrent work or admits physical sends
+  below a complete, known-spend dollar threshold.
 
 The output is a self-contained Parquet dataset with an embedded manifest, ready to render into the
 chat template of your target student model.
@@ -51,7 +55,7 @@ Ten crates in a strictly **acyclic** workspace — each tier depends only on the
 | `gw-providers` | Streaming OpenAI-compatible client with chain-of-thought capture, GCRA rate limiting, and retries. |
 | `gw-storage` | Run / queue / provenance state (SQLite) and columnar Parquet export. |
 | `gw-format` | Chat-template rendering and the SFT / preference export projection. |
-| `gw-generate` | Synthesizes the user turn and the teacher's assistant turn. |
+| `gw-generate` | Gates provided user turns and generates teacher assistant responses. |
 | `gw-judge` | The deterministic verifier and the model judge-panel grading + admission. |
 | `gw-engine` | The headless orchestrator: the lifecycle state machine and sharded executor. |
 | `gw-cli` | The `gw` command-line entrypoint. |
@@ -65,8 +69,9 @@ with `gw-eval` consuming only `schema` + `storage`.
 
 ## How it works
 
-Each prompt becomes a **record** that walks a 12-state lifecycle. Every transition is persisted, so a
-run is fully resumable and every admission decision is auditable after the fact.
+Each prompt becomes a **record** that walks a 12-state lifecycle. Persisted transitions and completed
+grades support resume and admission audits. An unresolved request may have reached its provider, so
+recovery cannot guarantee remote exactly-once execution.
 
 <p align="center"><img src="assets/pipeline.svg" alt="the record lifecycle from seed to exported training data" width="900"></p>
 
@@ -80,11 +85,12 @@ run is fully resumable and every admission decision is auditable after the fact.
    **n_eff** design-effect that discounts correlated judges.
 6. The verdict routes the record:
    - **Admitted** — the best of k (terminal-good for grading);
-   - **Rejected** — retained for preference (DPO) pairs and judge auditing;
+   - **Rejected** — retained for audit and potential preference-pair construction; no DPO qualification is implied;
    - **Revising** — a single bounded re-generation, then re-judged;
    - **NeedsReview** — parked for human/verifier adjudication.
-7. **Formatted → Exported** — admitted records are projected to the target template per the CoT
-   policy and written into a versioned Parquet shard.
+7. **Formatted → Exported** — `Formatted` records are ready for publication. `Exported` follows
+   verified artifact publication and database acknowledgment. Parquet preserves canonical messages;
+   the target template and CoT policy describe downstream training intent.
 
 `Error` is terminal-until-requeue: a faulted record carries its last error and attempt count, and a
 re-run picks it back up.
@@ -102,7 +108,9 @@ prompt framing, or interpretation invalidate the grade. Raw token caps that prod
 effective request can share a grade, as can identical requests from different runs. The old folded
 key helper is removed; legacy cache entries and historical audit records remain untouched but are
 not reused by the new cache. This identity does not cover provider-internal routing defaults,
-endpoint changes, or resolved model revisions.
+endpoint changes, or resolved model revisions. Cached grade audit data retains its originating
+run and physical attempt when known; historical origins stay unknown. Consuming a cached grade
+creates no new request receipt and imports no spend from the originating run.
 
 ---
 
@@ -128,8 +136,8 @@ cargo install --path crates/gw-cli
 ## Quickstart
 
 **1. Provide your provider key via the environment.** It is read only from `OPENROUTER_API_KEY` and is
-never a config field or a CLI flag, so it can't leak into shell history, a process listing, or a
-`--help` dump.
+never a config field or a CLI flag. A literal `export` command can still enter shell history; use
+your shell or secret manager's protected input mechanism when entering a real key.
 
 ```sh
 export OPENROUTER_API_KEY=sk-or-...
@@ -147,8 +155,8 @@ Design a rate limiter for an API gateway and justify the algorithm.
 **3. Write a review-only config** (`gw.toml`) — see the [reference](#configuration) below:
 
 ```toml
-db         = "gw-run.sqlite"
-budget_usd = 5.0
+db = "gw-run.sqlite"
+accounting_policy = { mode = "finite_usd", limit_usd = 5.0 }
 
 [area]
 training_area = "reasoning"
@@ -173,12 +181,12 @@ family = "deepseek"
 
 ```sh
 gw gen run --config gw.toml --run-id demo-001 --prompts prompts.txt \
-  --shards 8 --max-in-flight 8 --budget-usd 5.0
+  --shards 8 --max-in-flight 8
 ```
 
 Prefer a live dashboard? Swap `run` for `tui`. Crashed or interrupted? Re-run the **same** `--run-id`
 with the **same** `--prompts` and `--shards` to resume — already-committed work is skipped and the
-teacher is never re-spent.
+persisted teacher output is reused. Finite admission remains conservative about unresolved receipts.
 
 The quickstart keeps the conservative correlation prior and effective-count floor. Its single judge
 cannot clear that floor, so collection explicitly uses `review_only`. Otherwise admitted candidates
@@ -290,12 +298,10 @@ backend reported; absent model revisions remain absent.
 injected clients' capabilities assessed at each launch. Custom implementations default to
 `Unknown`; `NullEmbedder` explicitly performs no model requests. A declaration is a cooperative
 extension contract. Wrapping a logical call or accepting a no-op callback does not establish its
-hidden transmission behavior. Public direct `step`, `drive`, `drive_to_judged`, `run_group`, and
-`revise_once` helpers, as well as raw provider calls, have no run-owned receipts when called without
-observation context. These entry points cannot certify complete accounting history.
-A future dispatch boundary must
-require registered context or record incomplete coverage before engine-owned model requests;
-pure computation and cache-only paths remain usable without such context.
+hidden transmission behavior. Engine helpers such as `step`, `drive`, `drive_to_judged`, `run_group`,
+and `revise_once` reject model dispatch without registered launch context. Pure computation,
+cache hits, and implementations declaring `NoModelRequests` remain usable. Raw provider APIs are
+outside the engine's run accounting contract.
 
 Usage fields are optional evidence. A reported zero differs from omitted cost, and explicit null,
 negative, non-finite or malformed cost is invalid. Counts accept unsigned integers and integer
@@ -315,16 +321,42 @@ persisted intent to settlement; they do not measure GPU compute. Accounting fail
 and cannot become an automatic resend or a skipped prior-building warning. A committed admission
 remains recorded if its subsequent prior embedding fails.
 
-Request observation uses short write transactions. Concurrent unknown-priced calls can progress
-within the engine's existing shard and sibling bounds. Embedding calls are asynchronous, including
-the candidate gate, so a waiting candidate does not suspend an active sibling stream.
+### Accounting policy and replay
 
-**Current accounting limits:** this receipt layer records attempts without certifying complete
-run-wide history. Existing creation APIs leave history explicitly `Unknown`, including an empty
-ledger. Complete-from-creation qualification requires a future atomic run/coverage initialization.
-The current CLI/TUI budget and restart summaries still use legacy record-derived totals, which
-omit some requests. Receipt-based monetary admission, replay totals, cache-origin links and
-reporting remain to be integrated. A dispatch threshold cannot guarantee an invoice ceiling.
+The shared policy is a tagged value:
+
+- `observation_only` records available tokens, client wall time, and costs without requiring prices.
+  It retains the engine's existing bounded concurrency, including concurrent unknown-priced calls.
+- `finite_usd` requires a finite, nonnegative `limit_usd`. Every physical chat or embedding POST,
+  including retries, checks its captured policy epoch, historical coverage, unsettled intents,
+  invalid/conflicting evidence, and known spend in the transaction that writes its intent. At most
+  one request is unresolved per run under this policy. It waits only for requests held by the live
+  coordinator; an orphan or foreign unresolved receipt halts new dispatch.
+
+A finite limit is a **dispatch threshold**, not an invoice ceiling. A last response may cross it;
+local grading finalization, caching, persistence and publication can still complete. If another
+request is needed, that send is denied and the item keeps its unfinished checkpoint. Zero is valid
+and permits cache-only or local completion, while denying fresh physical requests.
+
+Fresh engine runs atomically persist the run, seed partition, operational policy and actual client
+coverage before any startup embedding or model request. Older runs remain explicitly incomplete;
+an empty legacy receipt table does not prove zero historical spend. A finite launch requires
+complete history and known coverage of every lane. A later replacement with an unknown client is
+reassessed and cannot inherit the previous client's certification.
+
+The policy is operational authority with a durable epoch, separate from generation request and
+cache identity. Reusing an unchanged policy preserves its epoch. Changing to a finite policy requires
+complete, settled, valid price evidence; observation-only can supersede a finite policy despite an
+unresolved receipt. Old authorized requests may settle, but the superseded coordinator cannot send
+again. Replay uses the complete run receipt ledger, including failed or malformed outputs and
+embeddings. It never reconstructs spend by summing record-level teacher projections.
+
+CLI terminal reports refresh SQLite after run, replay, or TUI settlement, including best-effort
+failure reporting without replacing the primary error. They show requested, configured and effective
+policies, epochs, known dollars, unknown/invalid/conflicting/unresolved counts, coverage, optional token
+totals and client wall-clock milliseconds. Token categories can overlap and are not added together.
+The dashboard applies absolute snapshots by revision, so corrections may reduce a displayed subtotal;
+dropped events never become the authoritative final accounting. Observation-only shows no monetary gauge.
 
 Dropping a request performs no background persistence or drain. Process loss after intent leaves
 an unresolved receipt: it may or may not have transmitted. Resuming does not establish remote
@@ -342,10 +374,10 @@ requires a nonempty judge panel and a valid admission configuration before any p
 ```toml
 # ─── run-wide ───────────────────────────────────────────────────────────────
 db          = "gw-run.sqlite"   # SQLite store: run state, queue, provenance
-budget_usd  = 5.0               # legacy dispatch threshold; see accounting limits below
-on_breach   = "drain"           # at the cap: "drain" (let in-flight finish) | "abort"
+accounting_policy = { mode = "finite_usd", limit_usd = 5.0 }
+# For local/unpriced backends: accounting_policy = { mode = "observation_only" }
 provider_base_url = "https://openrouter.ai/api/v1"   # OpenAI-compatible endpoint
-provider_rpm      = 60          # per-lane requests/min for the rate limiter
+provider_rpm      = 60          # shared teacher + judge chat requests/min
 
 # ─── the training area: what to generate and how to grade it ────────────────
 [area]
@@ -385,7 +417,7 @@ family = "deepseek"        # coarse family tag for same-family exclusion
 # ─── optional end-of-run export ─────────────────────────────────────────────
 [export]
 out             = "out/dataset.parquet"
-format          = "chat-ml"      # see Export targets below
+format          = "chatml"       # TOML enum spelling; CLI uses chat-ml
 cot             = "supervised"   # supervised | masked | stripped
 dataset_version = "0.1.0"
 ```
@@ -396,8 +428,14 @@ Notes:
 - `judge_reasoning_max_tokens` and `judge_reasoning_effort` are **mutually exclusive** in the same
   table — set one or the other, not both. The same holds for per-judge `reasoning_max_tokens` /
   `reasoning_effort`.
-- Any field can be overridden by an env var (`GW_BUDGET_USD=10.0`) or, for the common knobs, a CLI
-  flag (`--budget-usd`, `--k`, `--shards`, `--on-breach`, `--admission-intent`). The intent environment
+- Configuration keys can be overridden with `GW_` variables. For example,
+  `GW_ACCOUNTING_POLICY__MODE=observation_only` selects a complete policy, replacing a finite
+  policy from the file. `GW_ACCOUNTING_POLICY__MODE=finite_usd` requires a same-layer
+  `GW_ACCOUNTING_POLICY__LIMIT_USD`. CLI `--accounting-policy finite-usd --limit-usd 10` or
+  `--accounting-policy observation-only` replaces the complete file/env policy.
+  The default is finite USD 5 only when no policy was supplied. Observation-only with a limit,
+  nonfinite or negative limits, missing finite limits, removed `budget_usd` / `on_breach` keys,
+  and removed flags are errors. Other common flags include `--k`, `--shards`, and `--admission-intent`. The intent environment
   setting is `GW_AREA__ADMISSION_INTENT=review_only`; its CLI spelling is `--admission-intent review-only`.
 
 ### Admission preflight
@@ -465,23 +503,28 @@ gw eval promote            Variance-aware promotion gate over two eval_results.j
 | `--shards <N>` | Partition the seed space into N shards (default `1`) — the primary concurrency axis. |
 | `--max-in-flight <N>` | Cap on seed items in flight across all shards (default `4`). |
 | `--k <K>` | Override the best-of-k fan-out. |
-| `--budget-usd <USD>` | Override the run-wide budget cap. |
-| `--on-breach <MODE>` | `drain` or `abort` at the cap. |
+| `--accounting-policy <MODE>` | `observation-only` or `finite-usd`; shared by run, replay, and TUI. |
+| `--limit-usd <USD>` | Required with explicit `finite-usd`; forbidden with observation-only. |
+| `--admission-intent <INTENT>` | `automatic` or `review-only`; also accepted by replay. |
 
-**`gw gen export`** — `--db`, `--out`, `--run-id` (optional), `--format`, `--cot`.
+**`gw gen export`** — `--db`, `--out`, optional `--run-id`, `--format`, `--cot`, and
+`--dataset-version`. `--resume-publication <ID>` substitutes for `--out` and rejects projection overrides.
 Standalone and automatic end-of-run exports use the same SFT eligibility rule: records need an
 `admit` judging verdict and an `admitted`, `formatted`, or `exported` lifecycle state. Retained
 best-of-k losers keep their individual grades in the store but do not enter the dataset. Unfinished,
 rejected, review, and error states are excluded. The manifest counts all scanned records in
 `n_records`; `n_admitted` and `build_inputs_hash` describe only the selected exported rows.
 
-**`gw gen replay`** — resumes `--run-id` from a store; you must pass the **same** `--config`,
-`--prompts`, and `--shards` the original run used (the seed→shard partition is `index % shards`, so a
-different value would re-partition the space and duplicate or orphan records).
+**`gw gen replay`** — resumes `--run-id` from a store using matching generation settings and the
+**same** `--prompts` and `--shards` the original run used (the seed→shard partition is `index % shards`, so a
+different value would re-partition the space and duplicate or orphan records). Replay accepts the
+same accounting flags as run/TUI; an explicit policy change follows the epoch rules above.
 
-> **Concurrency, briefly.** The shard is the real unit of parallelism (one task per shard), and within
-> a prompt the **k** best-of-k candidates fan out concurrently. `--shards` × `k` is your throughput
-> dial; `--max-in-flight` bounds total concurrent items so you stay within provider limits.
+> **Concurrency.** `--max-in-flight` bounds seed groups across shard tasks; it does not count
+> physical HTTP requests. Each group's `k` siblings may overlap under observation-only, while each
+> sibling's cached judge panel is evaluated in sequence. Teacher and judge chat calls share the
+> configured RPM limiter. Embedding calls have their own asynchronous path. Finite accounting
+> serializes physical model requests regardless of these pipeline concurrency bounds.
 
 A fatal shard error or panic stops new work and joins every shard before the run reports failure.
 Surviving shards settle started transitions at a persisted boundary; grading may finish its panel and
@@ -500,7 +543,7 @@ produced downstream from the manifest plus the conversation column:
 
 | `--format` | Target |
 |---|---|
-| `gemma4` | Gemma-4. Token bytes are transcribed from the research spec and golden-file tested; they are **pending a byte-for-byte diff-verify against the official pinned `chat_template.jinja`** before production SFT (nothing fetches the template at runtime). The system turn is folded into the following `user` turn and the upstream `<\|think\|>` marker is not emitted. |
+| `gemma4` | Gemma-4. The renderer has golden-file tests; they are **pending a byte-for-byte diff-verify against the official pinned `chat_template.jinja`** before production SFT (nothing fetches the template at runtime). The system turn is folded into the following `user` turn and the upstream `<\|think\|>` marker is not emitted. |
 | `chat-ml` | ChatML. |
 | `sharegpt` | ShareGPT. |
 | `openai-messages` | OpenAI `messages` conversational. |
@@ -516,11 +559,11 @@ a tool-faithful target is to export the canonical `messages_json` conversation a
 official chat template in a consumer that owns that template. Text-only conversations are unaffected
 on every target.
 
-`--cot` controls how the captured reasoning is projected:
+`--cot` records downstream training intent. Every policy preserves the same canonical messages in Parquet:
 
-- **`supervised`** — reasoning is rendered into the loss region (train on the chain-of-thought).
-- **`masked`** — reasoning is rendered but masked out of the loss.
-- **`stripped`** — reasoning is dropped (answer-only).
+- **`supervised`** — train on captured reasoning.
+- **`masked`** — include reasoning as context while excluding it from loss.
+- **`stripped`** — construct an answer-only training example downstream.
 
 The export is a columnar Parquet dump plus a manifest. One `messages_json` column holds the canonical
 `Message[]` JSON in conversation order, losslessly: the `content` variant (including `null`),
@@ -529,6 +572,9 @@ consumer decodes it straight back into `Message[]`. (The historical v1 `{role, c
 parallel `reasoning_json` pair was lossy — `reasoning_json` is gone, and `column_schema_version` in
 the manifest records which contract a shard was written under.) The CoT policy and the target are
 recorded as manifest metadata so a downstream trainer applies the matching loss mask and template.
+The exporter does not emit token IDs or loss labels and does not qualify official tokenizer,
+truncation, or trainer behavior. TOML format values are `gemma4`, `chatml`, `share_gpt`,
+`open_ai_messages`, `harmony`, and `trl_prompt_completion`; CLI spellings are shown in the table.
 
 ---
 

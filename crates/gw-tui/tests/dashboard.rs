@@ -86,38 +86,54 @@ fn table_shows_record_states() {
     assert!(out.contains("rejected"), "rejected label:\n{out}");
 }
 
-#[test]
-fn cost_gauge_reflects_run_total() {
-    let mut app = drive(vec![
-        EngineEvent::CostCharged {
-            record_id: "rec-aaa".into(),
-            usd: 2.5,
-            run_total_usd: 2.5,
-        },
-        EngineEvent::CostCharged {
-            record_id: "rec-bbb".into(),
-            usd: 1.0,
-            run_total_usd: 3.5,
-        },
-    ]);
-    let out = render_to_string(&mut app, 100, 24);
-    assert!(out.contains("$3.50"), "cost gauge shows total:\n{out}");
+fn accounting(finite: bool) -> gw_schema::AccountingSnapshot {
+    gw_schema::AccountingSnapshot {
+        revision: 3,
+        configured: None,
+        effective: Some(gw_schema::PolicyState {
+            version: 1,
+            epoch: 1,
+            policy: if finite {
+                gw_schema::AccountingPolicy::FiniteUsd { limit_usd: 10.0 }
+            } else {
+                gw_schema::AccountingPolicy::ObservationOnly
+            },
+        }),
+        history: gw_schema::AccountingHistory::RecordedFromCreation,
+        unknown_coverage_lanes: 0,
+        attempts: 2,
+        known_usd: Some(3.5),
+        unknown_cost_attempts: 1,
+        invalid_cost_attempts: 0,
+        conflicting_attempts: 0,
+        unresolved_attempts: 0,
+        prompt_tokens: Default::default(),
+        completion_tokens: Default::default(),
+        total_tokens: Default::default(),
+        reasoning_tokens: Default::default(),
+        elapsed_ms: Some(17),
+    }
 }
-
 #[test]
-fn budget_banner_and_log_on_budget_reached() {
-    let mut app = drive(vec![EngineEvent::BudgetReached {
-        run_id: "run-1".into(),
-        spent: 9.99,
-        cap: 10.0,
+fn observation_only_has_no_monetary_gauge_and_exposes_unknown_cost() {
+    let mut app = drive(vec![EngineEvent::AccountingSnapshot {
+        run_id: "r".into(),
+        snapshot: accounting(false),
     }]);
-    let out = render_to_string(&mut app, 100, 24);
-    assert!(
-        out.contains("BUDGET REACHED"),
-        "budget banner in log:\n{out}"
-    );
-    // With a cap known, the gauge renders the spend/cap pair.
-    assert!(out.contains("/ $10.00"), "gauge cap label:\n{out}");
+    let out = render_to_string(&mut app, 160, 35);
+    assert!(out.contains("Observation only"), "{out}");
+    assert!(out.contains("unknown 1"), "{out}");
+    assert!(!out.contains("USD dispatch threshold"), "{out}");
+}
+#[test]
+fn finite_policy_labels_known_spend_as_a_dispatch_threshold() {
+    let mut app = drive(vec![EngineEvent::AccountingSnapshot {
+        run_id: "r".into(),
+        snapshot: accounting(true),
+    }]);
+    let out = render_to_string(&mut app, 160, 35);
+    assert!(out.contains("known USD dispatch threshold"), "{out}");
+    assert!(out.contains("$3.5000 / $10.0000"), "{out}");
 }
 
 #[test]

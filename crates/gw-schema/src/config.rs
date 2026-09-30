@@ -14,6 +14,7 @@ use crate::sandbox::SandboxConfig;
 
 /// The top-level layered config handed to `gw-engine`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     // --- paths & output ---
     /// SQLite run-ledger. default `"./gw-run.sqlite"`.
@@ -35,8 +36,9 @@ pub struct Config {
     #[serde(default)]
     pub providers: BTreeMap<String, ProviderLimits>,
 
-    // --- budget cap ---
-    pub budget: BudgetConfig,
+    /// Operational physical-request accounting policy, resolved after configuration layering.
+    #[serde(default)]
+    pub accounting_policy: Option<crate::AccountingPolicy>,
 
     // --- teacher routing defaults ---
     /// teacher slug -> routing.
@@ -62,7 +64,7 @@ impl Default for Config {
             max_in_flight: 8,
             default_rpm: 60,
             providers: BTreeMap::new(),
-            budget: BudgetConfig::default(),
+            accounting_policy: None,
             teacher_defaults: BTreeMap::new(),
             embedding: EmbeddingConfig::default(),
             sandbox: SandboxConfig::default(),
@@ -87,48 +89,6 @@ pub struct ProviderLimits {
     /// per-provider in-flight cap; None = use global `max_in_flight`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_in_flight: Option<u32>,
-}
-
-/// Budget cap — the PRIMARY spend guard (CONFIG §4).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct BudgetConfig {
-    /// hard cap value. default 25.0 (pilot-safe).
-    pub cap_usd: f64,
-    pub granularity: BudgetGranularity,
-    pub on_breach: BudgetBreach,
-}
-
-impl Default for BudgetConfig {
-    fn default() -> Self {
-        Self {
-            cap_usd: 25.0,
-            granularity: BudgetGranularity::PerRun,
-            on_breach: BudgetBreach::Drain,
-        }
-    }
-}
-
-/// The window the cost meter sums over.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BudgetGranularity {
-    #[default]
-    PerRun,
-    PerShard,
-    PerDay,
-}
-
-/// What happens at the cap.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BudgetBreach {
-    /// Stop dispatching new records; let in-flight finish + persist; then halt cleanly.
-    #[default]
-    Drain,
-    /// Like Drain but the engine parks instead of exiting.
-    Pause,
-    /// Cancel in-flight immediately.
-    Abort,
 }
 
 /// Per-teacher OpenRouter routing default (CONFIG §1.1). The serde-able mirror of OpenRouter

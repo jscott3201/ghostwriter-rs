@@ -38,7 +38,7 @@ pub async fn tui(args: RunArgs) -> anyhow::Result<()> {
 
     // The connected sink (into the engine's Clients) + its receiver (drained by the dashboard).
     let (sink, rx) = EventSink::subscribe();
-    let (engine, _store) = build_engine(&config, sink, args.max_in_flight)
+    let (engine, store) = build_engine(&config, sink, args.max_in_flight)
         .await
         .context("building the engine")?;
 
@@ -61,23 +61,12 @@ pub async fn tui(args: RunArgs) -> anyhow::Result<()> {
 
     // Await the engine task so its RunReport / error is not lost (joining regardless of how the
     // dashboard exited — a clean quit fired `cancel`, which winds the engine task down).
-    let report = handle.await.context("joining the engine task")?;
-
-    // Surface a TUI error first (it owns the terminal); otherwise surface any engine error, then print.
+    let joined = handle.await.context("joining the engine task");
+    let report = joined.as_ref().ok().and_then(|result| result.as_ref().ok());
+    super::accounting::terminal(&store, &args.run_id, &config.effective_policy(), report).await;
+    // Accounting readback never masks the primary engine or terminal failure.
+    joined?.context("running the engine")?;
     tui_result?;
-    let report = report.context("running the engine")?;
-    println!(
-        "run {} {} — admitted {}, rejected {}, errored {}",
-        args.run_id,
-        if report.completed {
-            "completed"
-        } else {
-            "halted"
-        },
-        report.admitted,
-        report.rejected,
-        report.errored,
-    );
     Ok(())
 }
 

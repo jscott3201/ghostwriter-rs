@@ -1,4 +1,4 @@
-//! Best-of-k run-control regressions: Abort/cancellation must not double-admit a sibling group.
+//! Best-of-k run-control regressions: Cancellation must not double-admit a sibling group.
 
 mod common;
 
@@ -17,7 +17,7 @@ use gw_generate::{
     RecordContext, SamplingPreset, SiblingPlan, TeacherCall, assemble, generate_assistant,
     synthesize_user_turn,
 };
-use gw_schema::{BudgetBreach, CotPolicy, LifecycleState, TeacherRef, TrainingRecord, TrlFormat};
+use gw_schema::{CotPolicy, LifecycleState, TeacherRef, TrainingRecord, TrlFormat};
 use gw_storage::{RecordFilter, Store, now_rfc3339, prompt_hash};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use tokio::sync::mpsc::Receiver;
@@ -215,7 +215,6 @@ async fn partial_revising_winner_resume_does_not_elect_judged_runner_up() {
         store.clone(),
         teacher.clone(),
         judge.clone(),
-        25.0,
         EventSink::disconnected(),
     );
     let winner_id = record_id(run_id, 0, item.seed, 0, 0);
@@ -289,11 +288,10 @@ async fn revising_winner_cancel_window_resumes_without_second_admit_and_exports_
     let (sink, rx) = EventSink::subscribe();
     let cancel_task = cancel_on_state(rx, cancel.clone(), LifecycleState::Revising);
     let first_engine = Engine::new(
-        clients(store.clone(), teacher.clone(), judge.clone(), 25.0, sink),
+        clients(store.clone(), teacher.clone(), judge.clone(), sink),
         area_k(one_judge(), lenient_thresholds(), 2),
         1,
-    )
-    .with_on_breach(BudgetBreach::Abort);
+    );
 
     let first = first_engine
         .run("run-revising-window", &seed_source, cancel)
@@ -335,13 +333,11 @@ async fn revising_winner_cancel_window_resumes_without_second_admit_and_exports_
             store.clone(),
             teacher.clone(),
             judge.clone(),
-            25.0,
             EventSink::disconnected(),
         ),
         area_k(one_judge(), lenient_thresholds(), 2),
         1,
     )
-    .with_on_breach(BudgetBreach::Abort)
     .with_export(export_spec(dst.clone()));
     let resumed = resumed_engine
         .run(
@@ -382,7 +378,7 @@ async fn formatted_winner_cancel_window_retains_runner_and_resumes_one_admit() {
     let (sink, rx) = EventSink::subscribe();
     let cancel_task = cancel_on_state(rx, cancel.clone(), LifecycleState::Formatted);
     let first_engine = Engine::new(
-        clients(store.clone(), teacher.clone(), judge.clone(), 25.0, sink),
+        clients(store.clone(), teacher.clone(), judge.clone(), sink),
         area_k(one_judge(), lenient_thresholds(), 2),
         1,
     );
@@ -421,7 +417,6 @@ async fn formatted_winner_cancel_window_retains_runner_and_resumes_one_admit() {
             store.clone(),
             teacher.clone(),
             judge.clone(),
-            25.0,
             EventSink::disconnected(),
         ),
         area_k(one_judge(), lenient_thresholds(), 2),
@@ -447,104 +442,6 @@ async fn formatted_winner_cancel_window_retains_runner_and_resumes_one_admit() {
 }
 
 #[tokio::test]
-async fn in_group_abort_budget_gate_commits_settled_group_and_resume_no_respend() {
-    let store = Store::open_in_memory().await.unwrap();
-    let teacher = Arc::new(ScriptedTeacher::new(
-        vec![answer_cot("first", 0.01), answer_cot("second", 0.01)],
-        2,
-    ));
-    let judge = Arc::new(ScriptedJudge::new(vec![
-        &judge_body(0.95, "accept"),
-        &judge_body(0.90, "accept"),
-    ]));
-    let seed_source = source(&["q0"], 1);
-    let first_engine = Engine::new(
-        clients(
-            store.clone(),
-            teacher.clone(),
-            judge.clone(),
-            0.005,
-            EventSink::disconnected(),
-        ),
-        area_k(one_judge(), lenient_thresholds(), 2),
-        1,
-    )
-    .with_on_breach(BudgetBreach::Abort);
-
-    let first = first_engine
-        .run(
-            "run-k2-ingroup-abort",
-            &seed_source,
-            CancellationToken::new(),
-        )
-        .await
-        .unwrap();
-
-    assert!(!first.completed);
-    assert_eq!(
-        teacher.call_count(),
-        2,
-        "fan-out permits both siblings to pass the budget gate before either charge lands"
-    );
-    assert_eq!(judge.call_count(), 2);
-    let states = records(&store, "run-k2-ingroup-abort")
-        .await
-        .into_iter()
-        .map(|record| record.lifecycle.state)
-        .collect::<Vec<_>>();
-    assert_eq!(states.len(), 2);
-    assert!(
-        states.iter().any(|state| matches!(
-            state,
-            LifecycleState::Exported | LifecycleState::Admitted | LifecycleState::Formatted
-        )),
-        "one sibling is still admitted before the abort boundary: {states:?}"
-    );
-    assert!(
-        states.contains(&LifecycleState::Rejected),
-        "the non-winning sibling is retained: {states:?}"
-    );
-    assert_eq!(
-        load_cursor(&store, "run-k2-ingroup-abort", 0)
-            .await
-            .unwrap()
-            .next_offset,
-        1
-    );
-
-    let resumed_engine = Engine::new(
-        clients(
-            store.clone(),
-            teacher.clone(),
-            judge.clone(),
-            25.0,
-            EventSink::disconnected(),
-        ),
-        area_k(one_judge(), lenient_thresholds(), 2),
-        1,
-    )
-    .with_on_breach(BudgetBreach::Abort);
-    let resumed = resumed_engine
-        .run(
-            "run-k2-ingroup-abort",
-            &seed_source,
-            CancellationToken::new(),
-        )
-        .await
-        .unwrap();
-
-    assert!(resumed.completed);
-    assert_eq!(resumed.admitted, 1);
-    assert_eq!(resumed.rejected, 1);
-    assert_eq!(
-        teacher.call_count(),
-        2,
-        "resume does not re-spend already generated siblings"
-    );
-    assert_eq!(judge.call_count(), 2);
-}
-
-#[tokio::test]
 async fn pre_cancelled_drive_helpers_return_unchanged_without_provider_calls() {
     let store = Store::open_in_memory().await.unwrap();
     let teacher = Arc::new(ScriptedTeacher::new(
@@ -556,7 +453,6 @@ async fn pre_cancelled_drive_helpers_return_unchanged_without_provider_calls() {
         store.clone(),
         teacher.clone(),
         judge.clone(),
-        25.0,
         EventSink::disconnected(),
     );
     let area = area_k1(one_judge(), lenient_thresholds());

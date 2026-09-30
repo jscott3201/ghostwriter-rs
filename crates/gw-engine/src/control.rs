@@ -1,6 +1,5 @@
 //! Shared run-control policy passed through the executor's cooperative boundaries.
 
-use gw_schema::BudgetBreach;
 use tokio_util::sync::CancellationToken;
 
 /// A new generation transition may be interrupted before dispatch without becoming a record fault.
@@ -11,30 +10,23 @@ pub(crate) enum GenerationOutcome<T> {
     Interrupted,
 }
 
-/// The cancellation token plus budget-breach policy for one engine run.
+/// The cancellation token for one engine run.
 #[derive(Debug, Clone, Copy)]
 pub struct RunControl<'a> {
     cancel: &'a CancellationToken,
-    on_breach: BudgetBreach,
 }
 
 impl<'a> RunControl<'a> {
-    /// Build run-control context from the shared cancellation token and breach policy.
+    /// Build run-control context from the shared cancellation token.
     #[must_use]
-    pub fn new(cancel: &'a CancellationToken, on_breach: BudgetBreach) -> Self {
-        Self { cancel, on_breach }
+    pub fn new(cancel: &'a CancellationToken) -> Self {
+        Self { cancel }
     }
 
     /// Return the shared cancellation token.
     #[must_use]
     pub fn token(&self) -> &'a CancellationToken {
         self.cancel
-    }
-
-    /// Return the configured budget-breach behavior.
-    #[must_use]
-    pub fn on_breach(&self) -> BudgetBreach {
-        self.on_breach
     }
 
     /// Return whether cancellation has been requested.

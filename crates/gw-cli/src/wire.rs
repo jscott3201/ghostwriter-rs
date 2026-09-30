@@ -11,7 +11,7 @@
 //! | `judge`    | the SAME provider `Arc` (one endpoint for both rails in v1)            |
 //! | `embedder` | configured OpenAI-compatible client, or [`NullEmbedder`] when absent   |
 //! | `sandbox`  | [`NullSandboxOracle`] (D-SANDBOX deferred per `gw-judge`)              |
-//! | `budget`   | [`BudgetMeter`] at `config.budget_usd`                                 |
+//! | `policy`   | [`AccountingPolicy`] from `config.effective_policy()`                                 |
 //! | `events`   | the caller's [`EventSink`] (disconnected for headless, subscribed for  |
 //! |            | the TUI)                                                               |
 //!
@@ -34,7 +34,7 @@ use std::sync::Arc;
 use anyhow::Context;
 use tokio_util::sync::CancellationToken;
 
-use gw_engine::{AreaConfig, BudgetMeter, Clients, Engine, EventSink, ExportSpec};
+use gw_engine::{AccountingPolicy, AreaConfig, Clients, Engine, EventSink, ExportSpec};
 use gw_generate::{Embedder, NullEmbedder};
 use gw_judge::NullSandboxOracle;
 use gw_providers::{EmbeddingsClient, OpenRouterProvider, Provider};
@@ -79,7 +79,7 @@ pub async fn open_store(config: &Config) -> anyhow::Result<Store> {
 }
 
 /// Assemble the live [`Clients`] bundle from an already-opened [`Store`], a [`Provider`], the caller's
-/// [`EventSink`], and `config.budget_usd`.
+/// [`EventSink`], and `config.effective_policy()`.
 ///
 /// The teacher and judge rails share one provider `Arc`. The embedder is configured when an
 /// embedding section is present and otherwise uses [`NullEmbedder`]. The sandbox remains the
@@ -92,7 +92,7 @@ pub fn build_clients(
     store: Store,
     provider: Arc<dyn Provider>,
     events: EventSink,
-    budget_usd: f64,
+    policy: AccountingPolicy,
     embedding: Option<&gw_schema::EmbeddingConfig>,
 ) -> anyhow::Result<Clients> {
     let embedder: Arc<dyn Embedder + Send + Sync> = match embedding {
@@ -124,7 +124,7 @@ pub fn build_clients(
         provider,              // judge rail (same endpoint in v1)
         embedder,
         Arc::new(NullSandboxOracle),
-        BudgetMeter::new(budget_usd),
+        policy,
         events,
         HARNESS_VERSION,
     ))
@@ -146,6 +146,7 @@ pub async fn build_engine(
     events: EventSink,
     max_in_flight: u32,
 ) -> anyhow::Result<(Engine, Store)> {
+    config.validate_accounting_policy()?;
     let area: AreaConfig = config.area_config();
     area.assess_admission()
         .context("validating panel admission settings")?;
@@ -155,7 +156,7 @@ pub async fn build_engine(
         store.clone(),
         provider,
         events,
-        config.budget_usd,
+        config.effective_policy(),
         config.embedding.as_ref(),
     )?;
     let engine = configure_engine(Engine::new(clients, area, max_in_flight), config);
@@ -163,7 +164,6 @@ pub async fn build_engine(
 }
 
 fn configure_engine(mut engine: Engine, config: &Config) -> Engine {
-    engine = engine.with_on_breach(config.on_breach);
     if let Some(spec) = export_spec(config) {
         engine = engine.with_export(spec);
     }
@@ -195,7 +195,7 @@ mod tests {
     async fn build_clients_wires_shared_provider_into_both_rails() {
         // A provider built with an explicit key (no env, no network call) is enough to assert the
         // structural wiring: both rails point at the same Arc, the embedder/sandbox are the v1 seams,
-        // and the budget meter carries the configured cap.
+        // and the clients carry the resolved policy.
         let provider: Arc<dyn Provider> = Arc::new(
             OpenRouterProvider::builder()
                 .build_with_key("DUMMY-TEST-KEY-NOT-A-CREDENTIAL")
@@ -206,15 +206,18 @@ mod tests {
             store,
             Arc::clone(&provider),
             EventSink::disconnected(),
-            12.5,
+            AccountingPolicy::FiniteUsd { limit_usd: 12.5 },
             None,
         )
         .expect("clients build");
 
         // Both rails are the SAME provider Arc in v1.
         assert!(Arc::ptr_eq(&clients.teacher, &clients.judge));
-        // The budget cap flowed through.
-        assert!((clients.budget.cap() - 12.5).abs() < 1e-12);
+        // The finite policy flowed through.
+        assert_eq!(
+            clients.policy,
+            AccountingPolicy::FiniteUsd { limit_usd: 12.5 }
+        );
         // The harness version is the crate version.
         assert_eq!(clients.harness_version, HARNESS_VERSION);
     }
@@ -261,26 +264,6 @@ mod tests {
         assert_eq!(spec.dataset_version, Some(semver::Version::new(1, 2, 3)));
     }
 
-    #[tokio::test]
-    async fn on_breach_config_maps_to_engine_policy() {
-        let provider: Arc<dyn Provider> = Arc::new(
-            OpenRouterProvider::builder()
-                .build_with_key("DUMMY-TEST-KEY-NOT-A-CREDENTIAL")
-                .expect("provider builds with an explicit test key"),
-        );
-        let store = Store::open_in_memory().await.expect("in-memory store");
-        let clients = build_clients(store, provider, EventSink::disconnected(), 1.0, None)
-            .expect("clients build");
-        let config = Config {
-            on_breach: gw_schema::BudgetBreach::Abort,
-            ..Config::default()
-        };
-
-        let engine = configure_engine(Engine::new(clients, config.area_config(), 1), &config);
-
-        assert_eq!(engine.on_breach(), gw_schema::BudgetBreach::Abort);
-    }
-
     fn test_provider() -> Arc<dyn Provider> {
         Arc::new(
             OpenRouterProvider::builder()
@@ -300,7 +283,7 @@ mod tests {
             store,
             test_provider(),
             EventSink::disconnected(),
-            1.0,
+            AccountingPolicy::ObservationOnly,
             Some(&embedding),
         );
         let error = match result {
@@ -322,7 +305,7 @@ mod tests {
             store,
             test_provider(),
             EventSink::disconnected(),
-            1.0,
+            AccountingPolicy::ObservationOnly,
             Some(&embedding),
         );
         let error = match result {
@@ -340,7 +323,7 @@ mod tests {
             store,
             test_provider(),
             EventSink::disconnected(),
-            1.0,
+            AccountingPolicy::ObservationOnly,
             Some(&embedding),
         )
         .expect("keyless client construction does not perform a request");

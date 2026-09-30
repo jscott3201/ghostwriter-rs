@@ -73,7 +73,6 @@ async fn crash_resume_reenters_at_last_persisted_state() {
         store.clone(),
         teacher.clone(),
         judge,
-        25.0,
         EventSink::disconnected(),
     );
     let area = area_k1(one_judge(), lenient_thresholds());
@@ -116,7 +115,6 @@ async fn restart_does_not_respend_the_teacher() {
         store.clone(),
         teacher.clone(),
         judge,
-        25.0,
         EventSink::disconnected(),
     );
     let area = area_k1(one_judge(), lenient_thresholds());
@@ -169,7 +167,6 @@ async fn revise_drives_exactly_one_retry_then_no_second_revising() {
         store.clone(),
         teacher.clone(),
         judge,
-        25.0,
         EventSink::disconnected(),
     );
     let area = area_k1(one_judge(), lenient_thresholds());
@@ -231,13 +228,7 @@ async fn step_replay_is_deterministic() {
         let teacher = Arc::new(ScriptedTeacher::new(vec![good_cot(0.01)], 1));
         let judge = Arc::new(ScriptedJudge::new(vec![&judge_body(0.9, "accept")]));
         let rec = seed_assistant_generated_named(&store, &teacher, run_id, "rec-x").await;
-        let cl = clients(
-            store.clone(),
-            teacher,
-            judge,
-            25.0,
-            EventSink::disconnected(),
-        );
+        let cl = clients(store.clone(), teacher, judge, EventSink::disconnected());
         let area = area_k1(one_judge(), lenient_thresholds());
         let done = drive(rec, &cl, &area, &CancellationToken::new())
             .await
@@ -321,7 +312,6 @@ async fn executor_resumes_from_shard_checkpoint() {
         store.clone(),
         teacher.clone(),
         judge.clone(),
-        25.0,
         EventSink::disconnected(),
     );
     let engine1 = Engine::new(cl1, area_k1(one_judge(), lenient_thresholds()), 1);
@@ -337,7 +327,6 @@ async fn executor_resumes_from_shard_checkpoint() {
         store.clone(),
         teacher.clone(),
         judge,
-        25.0,
         EventSink::disconnected(),
     );
     let engine2 = Engine::new(cl2, area_k1(one_judge(), lenient_thresholds()), 1);
@@ -382,13 +371,7 @@ async fn multi_shard_run_is_concurrent_and_consistent() {
             .map(|_| "{\"score\":0.95,\"verdict\":\"accept\"}")
             .collect(),
     ));
-    let cl = clients(
-        store.clone(),
-        teacher,
-        judge,
-        25.0,
-        EventSink::disconnected(),
-    );
+    let cl = clients(store.clone(), teacher, judge, EventSink::disconnected());
     let area = area_k1(one_judge(), lenient_thresholds());
     let engine = Engine::new(cl, area, 4);
 
@@ -430,13 +413,7 @@ async fn cancelled_run_dispatches_no_new_work() {
     // The teacher must NEVER be called: cancellation precedes any dispatch.
     let teacher = Arc::new(ExplodingTeacher);
     let judge = Arc::new(ScriptedJudge::new(vec![]));
-    let cl = clients(
-        store.clone(),
-        teacher,
-        judge,
-        25.0,
-        EventSink::disconnected(),
-    );
+    let cl = clients(store.clone(), teacher, judge, EventSink::disconnected());
     let area = area_k1(one_judge(), lenient_thresholds());
     let engine = Engine::new(cl, area, 4);
 
@@ -461,177 +438,6 @@ async fn cancelled_run_dispatches_no_new_work() {
     );
 }
 
-/// E2: a budget-gated bounded revise is NOT permanently lost. When the budget exhausts during a
-/// group's generation so the best sibling reconciles to `Revising` but the retry cannot run, the shard
-/// must NOT commit the cursor past the item — a relaunch under fresh budget re-drives it and completes
-/// the bounded retry. (Before the fix the cursor advanced past the stranded `Revising` record and it
-/// was skipped forever, silently uncounted.)
-#[tokio::test]
-async fn budget_gated_revise_is_not_lost_and_completes_on_relaunch() {
-    let store = Store::open_in_memory().await.unwrap();
-    // The original generation costs 0.10 and the cap is 0.10, so AFTER generation the meter is AT the
-    // cap → the revise retry is budget-gated. The retry generation (a 2nd teacher call) must not run on
-    // the first launch; it runs on the relaunch (fresh budget). Allow 2 total teacher calls.
-    let teacher = Arc::new(ScriptedTeacher::new(
-        vec![good_cot(0.10), good_cot(0.01)],
-        2,
-    ));
-    // The original is judged into the REVISE band (0.65 ∈ [0.5, 0.8)); the retry (2nd judge call) is
-    // judged Accept so the relaunch completes it.
-    let judge = Arc::new(ScriptedJudge::new(vec![
-        &judge_body(0.65, "revise"),
-        &judge_body(0.95, "accept"),
-    ]));
-    let source = InMemorySeedSource::new(vec![good_candidate("q-revise")], 1);
-
-    // Launch 1: cap 0.10. The original generates (spends 0.10 → at cap), judged Revise → Revising; the
-    // retry is budget-gated. The cursor must NOT advance (the item is not settled).
-    let cl1 = clients(
-        store.clone(),
-        teacher.clone(),
-        judge.clone(),
-        0.10,
-        EventSink::disconnected(),
-    );
-    let engine1 = Engine::new(cl1, area_k1(one_judge(), lenient_thresholds()), 1);
-    let report1 = engine1
-        .run("run-bgr", &source, CancellationToken::new())
-        .await
-        .unwrap();
-    assert_eq!(
-        teacher.call_count(),
-        1,
-        "only the original generated under the tight cap"
-    );
-    assert_eq!(
-        report1.revising, 1,
-        "the record is parked at Revising, counted (not lost)"
-    );
-    assert_eq!(report1.admitted, 0);
-    // The shard cursor must still be at offset 0 (NOT advanced past the un-settled item).
-    let cursor = gw_engine::load_cursor(&store, "run-bgr", 0).await.unwrap();
-    assert_eq!(
-        cursor.next_offset, 0,
-        "the cursor must NOT advance past a pending revise"
-    );
-
-    // Launch 2: fresh budget (cap 25.0). The item re-drives: the original is at Revising → the bounded
-    // retry now generates (2nd teacher call), is judged Accept → the retry completes to Formatted.
-    let cl2 = clients(
-        store.clone(),
-        teacher.clone(),
-        judge,
-        25.0,
-        EventSink::disconnected(),
-    );
-    let engine2 = Engine::new(cl2, area_k1(one_judge(), lenient_thresholds()), 1);
-    let report2 = engine2
-        .run("run-bgr", &source, CancellationToken::new())
-        .await
-        .unwrap();
-    assert_eq!(
-        teacher.call_count(),
-        2,
-        "the relaunch generates the bounded retry (never re-spent the original)"
-    );
-    assert_eq!(report2.exported, 0);
-    assert_eq!(
-        report2.admitted, 1,
-        "the retry completes to Formatted on the relaunch"
-    );
-    // The original stays at Revising (the audit row); the retry (attempt 1) is the Formatted record.
-    let all = store
-        .scan(&RecordFilter::new().run_id("run-bgr"))
-        .await
-        .unwrap();
-    let retry = all
-        .iter()
-        .find(|r| r.record_id.contains("-a1-"))
-        .expect("the attempt-1 retry exists");
-    assert_eq!(retry.lifecycle.state, LifecycleState::Formatted);
-}
-
-/// E3: the budget meter is REHYDRATED from persisted spend on a restart — a fresh process does not
-/// re-grant the full cap. Run 1 spends up to the cap over 2 items (cursor advances to 2). A restart
-/// with a BRAND-NEW meter (reset to 0 in memory) must rehydrate to the persisted spend and BLOCK the
-/// 3rd item, not re-grant a full cap. (Before the fix the fresh meter started at 0 and the resumed run
-/// could spend the full cap AGAIN — an effective N×cap bound.)
-#[tokio::test]
-async fn budget_meter_rehydrates_from_persisted_spend_on_restart() {
-    let store = Store::open_in_memory().await.unwrap();
-    // 3 items @ 0.10 each; cap 0.20. The teacher is allowed EXACTLY 2 calls total — a 3rd generation
-    // (item2 dispatching because the meter forgot prior spend) would panic.
-    let teacher = Arc::new(ScriptedTeacher::new(
-        vec![good_cot(0.10), good_cot(0.10), good_cot(0.10)],
-        2,
-    ));
-    let judge = Arc::new(ScriptedJudge::new(vec![
-        &judge_body(0.95, "accept"),
-        &judge_body(0.95, "accept"),
-        &judge_body(0.95, "accept"),
-    ]));
-    let source = InMemorySeedSource::new(
-        vec![
-            good_candidate("q0"),
-            good_candidate("q1"),
-            good_candidate("q2"),
-        ],
-        1,
-    );
-
-    // Launch 1 (fresh meter, cap 0.20): item0 spends 0.10 (<0.20 ok), item1 spends 0.10 → total 0.20,
-    // item2 gated (0.20 >= 0.20). Two items processed; cursor advances to 2.
-    let cl1 = clients(
-        store.clone(),
-        teacher.clone(),
-        judge.clone(),
-        0.20,
-        EventSink::disconnected(),
-    );
-    let engine1 = Engine::new(cl1, area_k1(one_judge(), lenient_thresholds()), 1);
-    let report1 = engine1
-        .run("run-rehydrate", &source, CancellationToken::new())
-        .await
-        .unwrap();
-    assert_eq!(
-        teacher.call_count(),
-        2,
-        "two items generated under the 0.20 cap"
-    );
-    assert!(!report1.completed, "run halted on budget, not completed");
-
-    // Launch 2: a BRAND-NEW meter (so in-memory spend starts at 0) over the SAME run id and cap. E3
-    // must rehydrate the meter to the persisted 0.20 spend, so item2 is STILL gated — the teacher is
-    // NEVER called a 3rd time (max_calls=2 would panic otherwise).
-    let cl2 = clients(
-        store.clone(),
-        teacher.clone(),
-        judge,
-        0.20,
-        EventSink::disconnected(),
-    );
-    let engine2 = Engine::new(cl2, area_k1(one_judge(), lenient_thresholds()), 1);
-    engine2
-        .run("run-rehydrate", &source, CancellationToken::new())
-        .await
-        .unwrap();
-    assert_eq!(
-        teacher.call_count(),
-        2,
-        "a restart must NOT re-grant the cap — item2 stays gated by the rehydrated spend"
-    );
-    // Only the two within-budget items exist; item2 was never generated.
-    let all = store
-        .scan(&RecordFilter::new().run_id("run-rehydrate"))
-        .await
-        .unwrap();
-    assert_eq!(
-        all.len(),
-        2,
-        "the 3rd item was never dispatched across both launches"
-    );
-}
-
 /// E5 + E10: a RECORD-LEVEL teacher fault on ONE record is ISOLATED — that record parks at `Error`,
 /// `RecordErrored` is emitted, and the run CONTINUES so other records still complete. The whole run is
 /// NOT aborted. A subsequent run resumes without a Semaphore-permit deadlock.
@@ -643,7 +449,7 @@ async fn record_level_teacher_fault_is_isolated_run_continues() {
     let teacher = Arc::new(FailingTeacher::new(1, 0.01));
     let judge = Arc::new(ScriptedJudge::new(vec![&judge_body(0.95, "accept")]));
     let (sink, mut rx) = EventSink::subscribe();
-    let cl = clients(store.clone(), teacher.clone(), judge, 25.0, sink);
+    let cl = clients(store.clone(), teacher.clone(), judge, sink);
     let area = area_k1(one_judge(), lenient_thresholds());
     let engine = Engine::new(cl, area, 1);
 
@@ -695,13 +501,7 @@ async fn record_level_teacher_fault_is_isolated_run_continues() {
     // path) and must complete cleanly. item0's offset committed-as-errored; item1 already exported.
     let teacher2 = Arc::new(FailingTeacher::new(999, 0.01)); // never fails this time
     let judge2 = Arc::new(ScriptedJudge::new(vec![&judge_body(0.95, "accept")]));
-    let cl2 = clients(
-        store.clone(),
-        teacher2,
-        judge2,
-        25.0,
-        EventSink::disconnected(),
-    );
+    let cl2 = clients(store.clone(), teacher2, judge2, EventSink::disconnected());
     let engine2 = Engine::new(cl2, area_k1(one_judge(), lenient_thresholds()), 1);
     let report2 = engine2
         .run("run-err", &source, CancellationToken::new())
@@ -711,63 +511,5 @@ async fn record_level_teacher_fault_is_isolated_run_continues() {
     assert!(
         report2.completed,
         "the resumed run completes without a permit deadlock"
-    );
-}
-
-/// E8: the concurrent budget OVERSHOOT is BOUNDED. The gate is checked before dispatch and the charge
-/// happens after the spend, so several in-flight jobs can all pass `may_dispatch()` before any charges
-/// — but the overshoot can never exceed the in-flight window. With `max_in_flight = N`, a barrier
-/// teacher forces exactly N concurrent teacher calls (all past the gate at budget 0) under a cap that
-/// one call already exceeds; the teacher is called AT MOST N times (no unbounded blow-past). This pins
-/// the bound against a regression that widens the gate/charge window.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn concurrent_budget_overshoot_is_bounded_by_max_in_flight() {
-    let store = Store::open_in_memory().await.unwrap();
-    let n = 3usize;
-    // Each call costs 0.01; the cap is 0.005, so the FIRST charge already exceeds it. The barrier
-    // releases only when all N calls are in flight — proving all N passed the gate while the meter was
-    // still 0. After they charge, the gate is closed; no further item dispatches.
-    let teacher = Arc::new(BarrierTeacher::new(n, 0.01));
-    let judge = Arc::new(ScriptedJudge::new(
-        (0..n)
-            .map(|_| "{\"score\":0.95,\"verdict\":\"accept\"}")
-            .collect(),
-    ));
-    let cl = clients(
-        store.clone(),
-        teacher.clone(),
-        judge,
-        0.005,
-        EventSink::disconnected(),
-    );
-    let area = area_k1(one_judge(), lenient_thresholds());
-    let engine = Engine::new(cl, area, n as u32);
-
-    // N items across N shards (1 each), so all N dispatch concurrently up to the semaphore cap.
-    let items: Vec<_> = (0..n).map(|i| good_candidate(&format!("q{i}"))).collect();
-    let source = InMemorySeedSource::new(items, n);
-
-    let report = engine
-        .run("run-overshoot", &source, CancellationToken::new())
-        .await
-        .unwrap();
-
-    // The teacher was called AT MOST N times — the overshoot is bounded by the in-flight window, never
-    // unbounded. (Exactly N here: the barrier requires N to make progress.)
-    assert_eq!(
-        teacher.call_count(),
-        n,
-        "the concurrent overshoot is bounded by max_in_flight (no unbounded blow-past)"
-    );
-    assert!(!report.completed, "the run halted on the budget cap");
-    // The cap was overshot (expected, bounded Drain) but only by the in-flight window.
-    let all = store
-        .scan(&RecordFilter::new().run_id("run-overshoot"))
-        .await
-        .unwrap();
-    assert_eq!(
-        all.len(),
-        n,
-        "exactly the N in-flight items were generated, no more"
     );
 }

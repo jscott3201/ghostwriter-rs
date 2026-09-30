@@ -13,7 +13,7 @@
 //! - **`embedder`** — the [`Embedder`] for the user-turn `diverse` dedup.
 //! - **`sandbox`** — the [`SandboxOracle`] for `Oracle::SandboxExecution` ground truth (default
 //!   [`NullSandboxOracle`](gw_judge::NullSandboxOracle); D-SANDBOX deferred).
-//! - **`budget`** — the shared [`BudgetMeter`].
+//! - **`policy`** — the explicit [`AccountingPolicy`].
 //! - **`events`** — the [`EventSink`].
 //!
 //! ## The R-prior is config, not a constant (INVARIANT — never identity for k>1)
@@ -35,8 +35,8 @@ use gw_providers::Provider;
 use gw_schema::AdmissionIntent;
 use gw_storage::Store;
 
-use crate::budget::BudgetMeter;
 use crate::event::EventSink;
+use gw_schema::AccountingPolicy;
 
 /// The default cold-start inter-judge correlation prior `rho` (≈ 0.7, JUDGE-DESIGN §5.4). Used to
 /// build `CorrelationMatrix::uniform_offdiagonal(k, rho)` for a `k > 1` panel grade — NEVER identity.
@@ -195,8 +195,8 @@ impl AreaConfig {
 /// The injected bundle of side-effecting clients the step machine drives, plus the per-area config.
 ///
 /// Cheap to clone — the `Provider`s, `Embedder`, and `SandboxOracle` are `Arc`-wrapped trait objects,
-/// the `Store` / `BudgetMeter` / `EventSink` are `Arc`-backed handles — so each spawned shard worker
-/// holds its own clone and they all share one store, one budget meter, and one event channel.
+/// the `Store` / `EventSink` are shared handles — so each spawned shard worker
+/// holds its own clone and they all share one store, one durable admission authority, and one event channel.
 #[derive(Clone)]
 pub struct Clients {
     /// The authoritative data plane.
@@ -217,8 +217,8 @@ pub struct Clients {
     /// resolves nothing and leaves the execution axis inert). A keyed lookup — the harness never
     /// executes anything itself; the report already exists.
     pub execution_evidence: Arc<dyn ExecutionEvidenceSource + Send + Sync>,
-    /// The shared run-wide budget meter.
-    pub budget: BudgetMeter,
+    /// Operational admission policy, registered durably at every launch.
+    pub policy: AccountingPolicy,
     /// The observability event sink.
     pub events: EventSink,
     /// The harness version stamped into provenance.
@@ -232,7 +232,7 @@ impl std::fmt::Debug for Clients {
         // The trait-object clients are not Debug; show the structural shape instead.
         f.debug_struct("Clients")
             .field("store", &self.store)
-            .field("budget", &self.budget)
+            .field("policy", &self.policy)
             .field("harness_version", &self.harness_version)
             .field("git_commit", &self.git_commit)
             .finish_non_exhaustive()
@@ -251,7 +251,7 @@ impl Clients {
         judge: Arc<dyn Provider>,
         embedder: Arc<dyn Embedder + Send + Sync>,
         sandbox: Arc<dyn SandboxOracle + Send + Sync>,
-        budget: BudgetMeter,
+        policy: AccountingPolicy,
         events: EventSink,
         harness_version: impl Into<String>,
     ) -> Self {
@@ -264,7 +264,7 @@ impl Clients {
             priors: crate::priors::new(),
             sandbox,
             execution_evidence: Arc::new(NullExecutionEvidenceSource),
-            budget,
+            policy,
             events,
             harness_version: harness_version.into(),
             git_commit: None,

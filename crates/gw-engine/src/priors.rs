@@ -81,6 +81,7 @@ pub(crate) fn snapshot(priors: &Priors, item_id: &str) -> Arc<Vec<Vec<f32>>> {
     )
 }
 
+#[cfg(test)]
 pub(crate) fn replace(priors: &Priors, tagged: Vec<(String, Vec<f32>)>) {
     let (item_ids, vectors): (Vec<_>, Vec<_>) = tagged.into_iter().unzip();
     let items_with_vectors = item_ids.iter().cloned().collect();
@@ -102,6 +103,71 @@ fn insert(priors: &Priors, item_id: String, vector: Vec<f32>) {
     state.item_ids.push(item_id.clone());
     state.items_with_vectors.insert(item_id);
     state.exclusion_indices.clear();
+}
+
+/// Rebuild historical vectors only when a new generation actually needs the diversity gate.
+/// The launch owns the one-time initializer; no synchronous lock spans an embedding request.
+pub(crate) async fn seed(
+    clients: &crate::Clients,
+    run_id: &str,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> crate::Result<()> {
+    let records = clients
+        .store
+        .scan(&gw_storage::RecordFilter::new().run_id(run_id))
+        .await?;
+    for record in records.into_iter().filter(|record| {
+        matches!(
+            record.lifecycle.state,
+            gw_schema::LifecycleState::Admitted
+                | gw_schema::LifecycleState::Formatted
+                | gw_schema::LifecycleState::Exported
+        )
+    }) {
+        if cancel.is_cancelled() {
+            return Err(
+                gw_generate::GenerateError::Embed(gw_providers::ProviderError::Cancelled).into(),
+            );
+        }
+        let (Some(text), Some(item)) = (user_turn_text(&record), record_item_id(&record.record_id))
+        else {
+            continue;
+        };
+        if clients
+            .priors
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .items_with_vectors
+            .contains(&item)
+        {
+            continue;
+        }
+        match clients
+            .embedder_for(&record.record_id, gw_schema::AttemptPurpose::ResumePrior)
+            .embed(&text)
+            .await
+        {
+            Ok(vector) => {
+                // Another already-paid record may append while this initializer is awaiting I/O.
+                let mut state = clients
+                    .priors
+                    .write()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if state.items_with_vectors.insert(item.clone()) {
+                    Arc::make_mut(&mut state.all).push(vector);
+                    state.item_ids.push(item);
+                    state.exclusion_indices.clear();
+                }
+            }
+            Err(error) if error.is_accounting() => {
+                return Err(gw_generate::GenerateError::Embed(error).into());
+            }
+            Err(error) => {
+                tracing::warn!(record_id = %record.record_id, %error, "failed to seed embedding prior; continuing run")
+            }
+        }
+    }
+    Ok(())
 }
 
 pub(crate) async fn append_record(

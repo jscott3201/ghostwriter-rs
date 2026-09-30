@@ -2,7 +2,7 @@
 //!
 //! [`Engine::run`] partitions the seed space into shards (per the injected [`SeedSource`]), drives
 //! each shard concurrently under a [`tokio::sync::Semaphore`] (the `max_in_flight` cap), and wires a
-//! per-run [`CancellationToken`] so a Ctrl-C / `Abort` breach
+//! per-run [`CancellationToken`] so cancellation or denied admission
 //! tears down cleanly. Each shard:
 //!
 //! 1. reads its resume cursor (crash-recovery: skip already-committed seed items);
@@ -11,7 +11,7 @@
 //! 3. re-enters generation for any `Revising` member (the bounded single retry,
 //!    [`crate::revise_once`]);
 //! 4. commits the shard cursor past the item (checkpoint);
-//! 5. stops dispatching NEW work when the budget cap is reached (Drain) or the token is cancelled.
+//! 5. honors cancellation, including a denied physical request, without losing unfinished checkpoints.
 //!
 //! ## Concurrency model
 //!
@@ -29,10 +29,7 @@ use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
-use gw_generate::Embedder;
-use gw_schema::{
-    BudgetBreach, CotPolicy, ExportManifest, ExportOptions, ExportScope, LifecycleState, TrlFormat,
-};
+use gw_schema::{CotPolicy, ExportManifest, ExportOptions, ExportScope, LifecycleState, TrlFormat};
 use gw_storage::{ExportPurpose, RecordFilter, RunStatus};
 
 use crate::checkpoint::{commit_cursor, load_cursor};
@@ -58,18 +55,17 @@ pub struct Engine {
     clients: Clients,
     area: AreaConfig,
     max_in_flight: u32,
-    on_breach: BudgetBreach,
     export: Option<ExportSpec>,
 }
 
 /// Whether a processed seed item is fully settled (safe to commit the cursor past) or still has
-/// pending work that must be re-driven on a later relaunch (E2: a budget-gated bounded revise).
+/// pending work that must be re-driven on a later relaunch (E2: an admission-denied bounded revise).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ItemOutcome {
     /// Every member reached a terminal state — the shard cursor may advance past this item.
     Settled,
-    /// A member is parked at `Revising` because the budget was exhausted before its retry could run.
-    /// The cursor MUST NOT advance past this item; a relaunch under fresh budget completes the retry.
+    /// A member is parked at `Revising` because the next request was denied before its retry could run.
+    /// The cursor MUST NOT advance past this item; a relaunch after a valid policy change completes the retry.
     PendingRevise,
     /// Cancellation stopped this item at a persisted transition boundary. The cursor MUST NOT advance
     /// past it; a relaunch resumes from the persisted record state without re-spending.
@@ -132,7 +128,7 @@ impl CircuitBreaker {
 }
 
 /// The terminal summary: persisted record states, this invocation's export, and whether it drained.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct RunReport {
     /// Records admitted (reached `Admitted` or beyond — `Admitted`/`Formatted`/`Exported`).
     pub admitted: usize,
@@ -144,7 +140,7 @@ pub struct RunReport {
     /// Records parked at `NeedsReview` (LEFT the automated pipeline — not exported, not admitted).
     pub needs_review: usize,
     /// Records still at `Revising` — a NON-TERMINAL bucket (E2): a bounded revise that has not yet
-    /// completed (e.g. its retry was budget-gated). These are re-driven on a later relaunch; they are
+    /// completed (e.g. its retry was admission-denied). These are re-driven on a later relaunch; they are
     /// neither admitted nor rejected, and counting them here keeps the in-progress state from being
     /// silently lost from the report.
     pub revising: usize,
@@ -152,6 +148,12 @@ pub struct RunReport {
     pub errored: usize,
     /// `true` after every shard drains and any configured artifact is acknowledged.
     pub completed: bool,
+    /// Seed items whose checkpoint remains unfinished.
+    pub pending_items: usize,
+    /// Explicit reason for an orderly halt, when generation did not complete.
+    pub halted_reason: Option<String>,
+    /// Authoritative terminal evidence read after owned requests settle.
+    pub accounting: Option<gw_schema::AccountingSnapshot>,
 }
 
 /// Optional end-of-run Parquet shard export configuration.
@@ -161,7 +163,7 @@ pub struct ExportSpec {
     pub dst: PathBuf,
     /// The target training-data template recorded in the export manifest.
     pub target: TrlFormat,
-    /// Whether reasoning enters the supervised loss region for this export.
+    /// Downstream reasoning-loss policy recorded in this artifact.
     pub cot: CotPolicy,
     /// Optional dataset version fixed in the artifact's footer manifest before encoding.
     pub dataset_version: Option<semver::Version>,
@@ -176,22 +178,8 @@ impl Engine {
             clients,
             area,
             max_in_flight: max_in_flight.max(1),
-            on_breach: BudgetBreach::Drain,
             export: None,
         }
-    }
-
-    /// Set the run-control policy for a budget breach. The default is [`BudgetBreach::Drain`].
-    #[must_use]
-    pub fn with_on_breach(mut self, policy: BudgetBreach) -> Self {
-        self.on_breach = policy;
-        self
-    }
-
-    /// Return the configured budget-breach policy.
-    #[must_use]
-    pub fn on_breach(&self) -> BudgetBreach {
-        self.on_breach
     }
 
     /// Enable an end-of-run Parquet shard export. Without this builder, [`Self::run`] skips the export
@@ -213,8 +201,8 @@ impl Engine {
     ///
     /// CRASH-RECOVERY: re-running the SAME `run_id` over the SAME `source` resumes — each shard skips
     /// its committed seed items, and any mid-flight record re-enters at its last persisted state (the
-    /// teacher is never re-spent). BUDGET: once the cap is reached, no new teacher work is dispatched
-    /// (Drain) or cancels in-flight items at transition boundaries (Abort). CANCELLATION: a cancelled
+    /// persisted teacher result is reused). Physical sends require registered accounting context; finite
+    /// policies use the complete durable ledger before each send. CANCELLATION: a cancelled
     /// token stops dispatching new work and leaves in-flight items at their last persisted boundary.
     /// Fatal shard errors and panics cancel the shared token, then join every owned shard before
     /// reporting failure. Surviving shards settle transitions cooperatively; a provider that never
@@ -243,63 +231,46 @@ impl Engine {
         self.area.assess_admission()?;
         let shard_count = source.shard_count().max(1);
         let prompts_hash = source.prompts_hash()?;
-        self.clients
+        let config_json = serde_json::to_string(&self.operational_snapshot())?;
+        let coverage = self
+            .clients
             .store
-            .validate_or_record_run_partition(run_id, shard_count, &prompts_hash)
+            .register_accounting_launch(gw_storage::LaunchRequest {
+                run_id,
+                config_json: &config_json,
+                shard_count,
+                prompts_hash: &prompts_hash,
+                policy: &self.clients.policy,
+                teacher: self.clients.teacher.accounting_capability(),
+                judge: self.clients.judge.accounting_capability(),
+                embedding: self.clients.embedder.accounting_capability(),
+            })
             .await
-            .map_err(|err| match err {
+            .map_err(|error| match error {
                 gw_storage::StorageError::RunPartitionMismatch { .. } => {
-                    EngineError::Invariant(err.to_string())
+                    EngineError::Invariant(error.to_string())
                 }
                 other => other.into(),
             })?;
-        // Snapshot the config + budget cap into the run row (idempotent: re-creating resets to running).
-        let config_json = serde_json::to_string(&self.budget_snapshot())?;
-        self.clients
-            .store
-            .create_run(run_id, &config_json, Some(self.clients.budget.cap()))
-            .await?;
-
-        // Assess the actual clients on every launch; public client fields may have been replaced.
-        let coverage = match self
-            .clients
-            .store
-            .begin_model_launch(
-                run_id,
-                self.clients.teacher.accounting_capability(),
-                self.clients.judge.accounting_capability(),
-                self.clients.embedder.accounting_capability(),
-            )
-            .await
-        {
-            Ok(coverage) => coverage,
-            Err(error) => {
-                mark_run_failed(&self.clients.store, &self.clients.events, run_id).await;
-                return Err(error.into());
-            }
-        };
+        self.clients.priors = crate::priors::new();
         self.clients.observation = Some(crate::attempts::LaunchObservation::new(
             coverage,
             self.clients.store.clone(),
+            cancel.clone(),
+            self.clients.events.clone(),
         ));
-
-        // E3: rehydrate the budget meter from spend already persisted for this run (a prior, possibly
-        // crashed, launch). The in-memory meter resets to 0 each process, so without this a restart
-        // would re-grant the FULL cap and a resumed run could spend up to N×cap across N launches. Sum
-        // the persisted `cost.usd` and SET the meter (idempotent across in-process re-runs + restarts),
-        // BEFORE any shard dispatches so the gate is correct from the first item.
-        let prior_spend = self.persisted_spend(run_id).await?;
-        self.clients.budget.reset_to(prior_spend);
+        self.clients
+            .observation
+            .as_ref()
+            .expect("registered launch")
+            .observer
+            .publish()
+            .await;
 
         self.clients.events.emit(EngineEvent::RunStarted {
             run_id: run_id.to_string(),
             shards: shard_count,
         });
-
-        if let Err(error) = self.seed_embedding_priors(run_id, &cancel).await {
-            mark_run_failed(&self.clients.store, &self.clients.events, run_id).await;
-            return Err(error);
-        }
 
         let semaphore = Arc::new(Semaphore::new(self.max_in_flight as usize));
         // F2: a run-level circuit-breaker shared across shards — aborts a systemically-broken run.
@@ -340,7 +311,7 @@ impl Engine {
             return Err(error);
         }
 
-        let halted = cancel.is_cancelled() || self.clients.budget.is_exhausted();
+        let halted = cancel.is_cancelled();
         // Keep ownership through publication, including a shutdown arriving during blocking I/O.
         // Running remains authoritative until publication and its SQLite acknowledgment succeed.
         let finalized = async {
@@ -362,6 +333,30 @@ impl Engine {
                 .as_ref()
                 .map_or(0, |manifest| manifest.n_admitted as usize);
             report.completed = !halted;
+            report.halted_reason = halted.then(|| {
+                self.clients
+                    .observation
+                    .as_ref()
+                    .and_then(|launch| launch.observer.reason())
+                    .map_or("cancelled before all work completed".into(), |reason| {
+                        reason.to_string()
+                    })
+            });
+            for shard in 0..shard_count as i64 {
+                let cursor = load_cursor(&self.clients.store, run_id, shard).await?;
+                report.pending_items += source
+                    .items_for_shard(shard)
+                    .iter()
+                    .filter(|item| item.offset >= cursor.next_offset)
+                    .count();
+            }
+            let mut accounting = self.clients.store.accounting_snapshot(run_id).await?;
+            accounting.configured = self
+                .clients
+                .observation
+                .as_ref()
+                .and_then(|launch| launch.coverage.policy.clone());
+            report.accounting = Some(accounting);
             self.clients
                 .store
                 .set_run_status(
@@ -396,56 +391,6 @@ impl Engine {
         Ok(report)
     }
 
-    async fn seed_embedding_priors(&self, run_id: &str, cancel: &CancellationToken) -> Result<()> {
-        let records = self
-            .clients
-            .store
-            .scan(&RecordFilter::new().run_id(run_id))
-            .await?;
-        let mut vectors = Vec::new();
-        for record in records.into_iter().filter(|record| {
-            matches!(
-                record.lifecycle.state,
-                LifecycleState::Admitted | LifecycleState::Formatted | LifecycleState::Exported
-            )
-        }) {
-            if cancel.is_cancelled() {
-                tracing::warn!(
-                    run_id,
-                    "embedding-prior seeding cancelled; continuing without remaining priors"
-                );
-                break;
-            }
-            let Some(text) = crate::priors::user_turn_text(&record) else {
-                tracing::warn!(record_id = %record.record_id, "admitted record has no user turn; skipping embedding prior");
-                continue;
-            };
-            let Some(item_id) = crate::priors::record_item_id(&record.record_id) else {
-                tracing::warn!(record_id = %record.record_id, "admitted record has no seed-item identity; skipping embedding prior");
-                continue;
-            };
-            // Embed without holding the shared lock; gate snapshots remain short-lived.
-            match self
-                .clients
-                .embedder_for(&record.record_id, gw_schema::AttemptPurpose::ResumePrior)
-                .embed(&text)
-                .await
-            {
-                Ok(vector) => vectors.push((item_id, vector)),
-                Err(error) if error.is_accounting() => {
-                    return Err(gw_generate::GenerateError::Embed(error).into());
-                }
-                Err(error) => tracing::warn!(
-                    record_id = %record.record_id,
-                    %error,
-                    "failed to seed embedding prior; continuing run"
-                ),
-            }
-        }
-        crate::priors::replace(&self.clients.priors, vectors);
-        Ok(())
-    }
-
     /// Drive one shard's seed items sequentially, resuming from the persisted cursor, under the shared
     /// semaphore + cancellation token. Commits the shard cursor after each item terminates.
     async fn run_shard(
@@ -470,22 +415,10 @@ impl Engine {
             if item.offset < cursor.next_offset {
                 continue;
             }
-            // Stop dispatching new work on cancellation or budget exhaustion.
+            // Stop dispatching new work on cancellation or denied admission.
             if cancel.is_cancelled() {
                 break;
             }
-            if !self.clients.budget.may_dispatch() {
-                self.clients.events.emit(EngineEvent::BudgetReached {
-                    run_id: run_id.to_string(),
-                    spent: self.clients.budget.spent(),
-                    cap: self.clients.budget.cap(),
-                });
-                if self.on_breach == BudgetBreach::Abort {
-                    cancel.cancel();
-                }
-                break;
-            }
-
             // Cap concurrent in-flight seed items across all shards. The permit is held for the whole
             // item and ALWAYS released (the `?`-free match below cannot early-return before `drop`), so
             // a record-level error never leaks a permit and deadlocks the pool (E5/E10).
@@ -499,7 +432,7 @@ impl Engine {
                 break;
             }
 
-            let control = RunControl::new(cancel, self.on_breach);
+            let control = RunControl::new(cancel);
             let processed = self.process_item(run_id, shard, &item, control).await;
             drop(permit);
 
@@ -513,6 +446,10 @@ impl Engine {
                 // counts as `AllErrored` toward the circuit-breaker (F2). An INFRASTRUCTURE fault
                 // (Storage/Serde/Invariant, or a SYSTEMIC non-retryable auth/config provider fault — F2)
                 // is fatal and propagates to abort the run.
+                Err(e) if e.is_halt() => {
+                    cancel.cancel();
+                    break;
+                }
                 Err(e) if e.is_record_level() => {
                     self.park_item_errored(run_id, shard, &item, &e).await?;
                     // The item is settled-as-errored: advance the cursor past it (do not retry a
@@ -542,18 +479,11 @@ impl Engine {
                     commit_cursor(&self.clients.store, run_id, shard, item.offset, "committed")
                         .await?;
                 }
-                // E2: a budget-gated revise is still pending. Do NOT commit the cursor past this item;
-                // stop dispatching here (the budget is exhausted) so a relaunch re-drives it. Breaking
+                // E2: an admission-denied revise is still pending. Do NOT commit the cursor past this item;
+                // stop dispatching here (a request was denied) so a relaunch re-drives it. Breaking
                 // also prevents committing LATER offsets over this un-settled one (monotone cursor).
-                ItemOutcome::PendingRevise => {
-                    self.clients.events.emit(EngineEvent::BudgetReached {
-                        run_id: run_id.to_string(),
-                        spent: self.clients.budget.spent(),
-                        cap: self.clients.budget.cap(),
-                    });
-                    break;
-                }
-                // A cancellation/Abort interrupted this item at a persisted boundary. Do not commit the
+                ItemOutcome::PendingRevise => break,
+                // A cancellation or admission denial interrupted this item at a persisted boundary. Do not commit the
                 // cursor past it; a relaunch re-drives from the record state and never re-spends.
                 ItemOutcome::Interrupted => break,
             }
@@ -642,9 +572,9 @@ impl Engine {
     /// member. Errors on a member are surfaced (the record's last state stands for resume).
     ///
     /// Returns whether the item is FULLY SETTLED (every member reached a terminal state) and may be
-    /// committed past. When a member is left at `Revising` because the budget was exhausted before its
+    /// committed past. When a member is left at `Revising` because admission was denied before its
     /// bounded retry could generate (E2), this returns `false` so the shard does NOT commit the cursor
-    /// past the item — a relaunch under fresh budget re-drives it and completes the retry. Without this,
+    /// past the item — a relaunch after a valid policy change re-drives it and completes the retry. Without this,
     /// the cursor would advance past a stranded `Revising` record and it would be skipped forever.
     async fn process_item(
         &self,
@@ -655,7 +585,7 @@ impl Engine {
     ) -> Result<(ItemOutcome, Option<ItemHealth>)> {
         let outcome = run_group(run_id, shard, item, &self.clients, &self.area, control).await?;
         // F2: the group's circuit-breaker health — did this item produce ANY non-`Error` record? Computed
-        // from the group's terminal siblings (an empty group is a budget-Drain skip → neutral `None`).
+        // from the group's terminal siblings (an empty group is an admission-denied skip → neutral `None`).
         let health = group_health(&outcome.siblings);
         if outcome.interrupted {
             return Ok((ItemOutcome::Interrupted, None));
@@ -678,9 +608,9 @@ impl Engine {
                 .await
                 {
                     Ok(retry) => {
-                        // E2: if the revise could not run (budget-gated), the ORIGINAL is still at
+                        // E2: if the revise could not run (admission-denied), the ORIGINAL is still at
                         // `Revising` and the retry was never generated/terminated. The item is NOT
-                        // settled — do not commit past it, so a relaunch under fresh budget completes it.
+                        // settled — do not commit past it, so a relaunch after a valid policy change completes it.
                         if control.is_cancelled() && !is_terminal(retry.lifecycle.state) {
                             return Ok((ItemOutcome::Interrupted, None));
                         }
@@ -708,35 +638,16 @@ impl Engine {
         Ok((ItemOutcome::Settled, health))
     }
 
-    /// A JSON snapshot of the budget config pinned into the run row (the cap is the audit-relevant bit).
-    fn budget_snapshot(&self) -> serde_json::Value {
+    /// Resolved operational settings recorded at launch, separate from semantic request identity.
+    fn operational_snapshot(&self) -> serde_json::Value {
         serde_json::json!({
-            "cap_usd": self.clients.budget.cap(),
-            "on_breach": self.on_breach,
+            "accounting_policy": self.clients.policy,
             "max_in_flight": self.max_in_flight,
             "training_area": self.area.training_area,
             "teacher_slug": self.area.teacher_slug,
             "k": self.area.k,
             "admission_intent": self.area.admission_intent,
         })
-    }
-
-    /// Sum the `cost.usd` already persisted across every record in `run_id` — the run's spend so far
-    /// (E3). The store is authoritative: `gw-generate::assemble` stamps `cost.usd` on every record at
-    /// generation, so this recovers the exact spend a prior launch incurred. Non-finite/negative costs
-    /// are treated as 0 (mirroring the meter's charge clamp), so a garbled row never corrupts the total.
-    async fn persisted_spend(&self, run_id: &str) -> Result<f64> {
-        let records = self
-            .clients
-            .store
-            .scan(&RecordFilter::new().run_id(run_id))
-            .await?;
-        let total = records
-            .iter()
-            .map(|r| r.cost.usd)
-            .filter(|c| c.is_finite() && *c > 0.0)
-            .sum();
-        Ok(total)
     }
 
     /// Publish this run's records as one self-contained artifact, then acknowledge the exact rows.
@@ -794,7 +705,7 @@ impl Engine {
         report.admitted = exported + admitted_only + formatted;
         report.rejected = count(LifecycleState::Rejected).await?;
         report.needs_review = count(LifecycleState::NeedsReview).await?;
-        // E2: a non-terminal `Revising` bucket — a bounded revise still in flight (e.g. budget-gated).
+        // E2: a non-terminal `Revising` bucket — a bounded revise still in flight (e.g. admission-denied).
         report.revising = count(LifecycleState::Revising).await?;
         report.errored = count(LifecycleState::Error).await?;
         Ok(report)
@@ -804,6 +715,12 @@ impl Engine {
 async fn mark_run_failed(store: &gw_storage::Store, events: &crate::EventSink, run_id: &str) {
     if let Err(error) = store.set_run_status(run_id, RunStatus::Failed).await {
         tracing::warn!(run_id, %error, "failed to persist terminal Failed status after primary run failure");
+    }
+    if let Ok(snapshot) = store.accounting_snapshot(run_id).await {
+        events.emit(EngineEvent::AccountingSnapshot {
+            run_id: run_id.into(),
+            snapshot,
+        });
     }
     events.emit(EngineEvent::RunFinished {
         run_id: run_id.to_string(),
@@ -850,7 +767,7 @@ fn park_allowed(state: LifecycleState, attributed: bool) -> bool {
 /// or the `Revising` handoff), which DISARMS the breaker; otherwise `AllErrored` (every sibling errored,
 /// or — defensively — none reached a decision). A NON-decision forward state (e.g. a sibling stranded at
 /// `Verified`) does NOT count as `Decided`, so a systemic judge outage cannot falsely disarm the breaker.
-/// An EMPTY group — the budget gate tripped before any sibling generated (a Drain, not a fault) — is
+/// An EMPTY group — admission was denied before any sibling generated (an interruption) — is
 /// `None`: NEUTRAL, it neither arms nor disarms the breaker.
 fn group_health(siblings: &[gw_schema::TrainingRecord]) -> Option<ItemHealth> {
     if siblings.is_empty() {
@@ -928,6 +845,7 @@ mod failure_tests {
             store.run_status("failed-run").await.unwrap().as_deref(),
             Some("failed")
         );
+        let _snapshot = receiver.try_recv().unwrap();
         assert!(matches!(
             receiver.try_recv().unwrap(),
             EngineEvent::RunFinished {

@@ -45,17 +45,10 @@ pub enum Action {
         /// The state the record advanced TO.
         to: LifecycleState,
     },
-    /// A teacher/judge call's marginal cost was charged; `run_total_usd` is the cumulative spend.
-    CostCharged {
-        /// The cumulative USD spent for the run after this charge.
-        run_total_usd: f64,
-    },
-    /// The budget cap was reached; no new teacher work will dispatch.
-    BudgetReached {
-        /// The cumulative USD spent.
-        spent: f64,
-        /// The configured cap.
-        cap: f64,
+    /// Absolute accounting evidence, ordered by durable revision.
+    AccountingSnapshot {
+        /// Configured/effective policy, known quantities, and completeness limits.
+        snapshot: Box<gw_schema::AccountingSnapshot>,
     },
     /// A record failed unrecoverably and was parked at [`LifecycleState::Error`].
     RecordErrored {
@@ -81,7 +74,7 @@ pub enum Action {
     },
     /// The run finished; `completed` is `true` only if every shard drained cleanly.
     RunFinished {
-        /// `true` if the run drained cleanly; `false` if it halted on budget/cancellation.
+        /// `true` if the run drained cleanly; `false` if it halted on denied admission or cancellation.
         completed: bool,
     },
 
@@ -94,7 +87,7 @@ pub enum Action {
     SelectFirst,
     /// Jump the table selection to the last row.
     SelectLast,
-    /// A periodic tick: advance animated/derived UI state (gauges, sparkline samples).
+    /// A periodic tick: advance animated/derived UI state (accounting display).
     Tick,
     /// The terminal was resized.
     Resize {
@@ -137,8 +130,9 @@ impl Action {
                 Action::ShardStarted { shard, resumed }
             }
             EngineEvent::StateAdvanced { record_id, to } => Action::StateAdvanced { record_id, to },
-            EngineEvent::CostCharged { run_total_usd, .. } => Action::CostCharged { run_total_usd },
-            EngineEvent::BudgetReached { spent, cap, .. } => Action::BudgetReached { spent, cap },
+            EngineEvent::AccountingSnapshot { snapshot, .. } => Action::AccountingSnapshot {
+                snapshot: Box::new(snapshot),
+            },
             EngineEvent::RecordErrored { record_id, error } => {
                 Action::RecordErrored { record_id, error }
             }
@@ -191,22 +185,12 @@ mod tests {
                 },
             ),
             (
-                EngineEvent::CostCharged {
-                    record_id: "rec".into(),
-                    usd: 0.1,
-                    run_total_usd: 1.5,
-                },
-                Action::CostCharged { run_total_usd: 1.5 },
-            ),
-            (
-                EngineEvent::BudgetReached {
+                EngineEvent::AccountingSnapshot {
                     run_id: "r".into(),
-                    spent: 10.0,
-                    cap: 10.0,
+                    snapshot: crate::model::snapshot(1, 1.5),
                 },
-                Action::BudgetReached {
-                    spent: 10.0,
-                    cap: 10.0,
+                Action::AccountingSnapshot {
+                    snapshot: Box::new(crate::model::snapshot(1, 1.5)),
                 },
             ),
             (

@@ -48,7 +48,6 @@ async fn held_candidate_embedding_does_not_suspend_an_active_sibling_stream_or_b
         Arc::new(server.provider()),
         Arc::new(ScriptedJudge::new(vec![&judge_body(0.95, "accept")])),
         Arc::new(server.embedder()),
-        25.0,
     );
     let (events, mut rx) = EventSink::subscribe();
     clients.events = events;
@@ -152,7 +151,6 @@ async fn unknown_priced_physical_requests_overlap_within_the_existing_fanout_bou
             &judge_body(0.95, "accept"),
             &judge_body(0.95, "accept"),
         ])),
-        25.0,
         EventSink::disconnected(),
     );
     let engine = Engine::new(clients, area_k(one_judge(), lenient_thresholds(), 2), 1);

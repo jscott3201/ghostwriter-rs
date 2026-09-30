@@ -37,7 +37,7 @@ fn engine(store: &Store, sink: EventSink, accept: bool) -> Engine {
     );
     let judge = Arc::new(ScriptedJudge::new(vec![&body]));
     Engine::new(
-        clients(store.clone(), teacher, judge, 25.0, sink),
+        clients(store.clone(), teacher, judge, sink),
         area_k1(one_judge(), lenient_thresholds()),
         1,
     )
@@ -82,7 +82,6 @@ async fn resume_without_output(store: &Store, run_id: &str) -> RunReport {
             store.clone(),
             teacher.clone(),
             judge.clone(),
-            25.0,
             EventSink::disconnected(),
         ),
         area_k1(one_judge(), lenient_thresholds()),
@@ -241,7 +240,7 @@ async fn acknowledgment_failure_leaves_running_until_failure_and_replay_never_re
     let judge = Arc::new(ScriptedJudge::new(vec![&judge_body(0.95, "accept")]));
     let (sink, mut events) = EventSink::subscribe();
     let engine = Engine::new(
-        clients(store.clone(), teacher.clone(), judge.clone(), 25.0, sink),
+        clients(store.clone(), teacher.clone(), judge.clone(), sink),
         area_k1(one_judge(), lenient_thresholds()),
         1,
     )

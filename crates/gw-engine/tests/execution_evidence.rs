@@ -51,7 +51,6 @@ async fn run_with(
         store.clone(),
         teacher,
         judge.clone(),
-        25.0,
         EventSink::disconnected(),
     )
     .with_execution_evidence_source(Arc::new(source));
@@ -345,14 +344,8 @@ async fn the_report_round_trips_through_put_get_and_a_resumed_verify() {
     store.put(&rec).await.unwrap();
 
     let source = ScriptedEvidence::new(|key| Some(passing_report(key)));
-    let cl = clients(
-        store.clone(),
-        teacher,
-        judge,
-        25.0,
-        EventSink::disconnected(),
-    )
-    .with_execution_evidence_source(Arc::new(source));
+    let cl = clients(store.clone(), teacher, judge, EventSink::disconnected())
+        .with_execution_evidence_source(Arc::new(source));
     let area = area_k1(one_judge(), lenient_thresholds());
 
     // The engine-derived key IS the candidate's identity; a well-behaved report binds to it.
@@ -401,13 +394,7 @@ async fn an_area_with_no_evaluator_is_unaffected() {
     let teacher = Arc::new(ScriptedTeacher::new(vec![answer_cot("96", 0.01)], 1));
     let judge = Arc::new(ScriptedJudge::new(vec![&judge_body(0.95, "accept")]));
     // `clients(...)` wires the NULL evidence source.
-    let cl = clients(
-        store.clone(),
-        teacher,
-        judge,
-        25.0,
-        EventSink::disconnected(),
-    );
+    let cl = clients(store.clone(), teacher, judge, EventSink::disconnected());
     let area = area_k1(one_judge(), lenient_thresholds());
     let engine = Engine::new(cl, area, 4);
     let report = engine
@@ -459,13 +446,7 @@ async fn a_non_cot_area_under_explicit_policy_still_admits() {
     ];
     let teacher = Arc::new(ScriptedTeacher::new(vec![no_reasoning], 1));
     let judge = Arc::new(ScriptedJudge::new(vec![&judge_body(0.95, "accept")]));
-    let cl = clients(
-        store.clone(),
-        teacher,
-        judge,
-        25.0,
-        EventSink::disconnected(),
-    );
+    let cl = clients(store.clone(), teacher, judge, EventSink::disconnected());
     let area = area_k1(one_judge(), lenient_thresholds()).with_cot_required(false);
     let engine = Engine::new(cl, area, 4);
     let report = engine

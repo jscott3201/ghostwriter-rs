@@ -15,7 +15,7 @@ use gw_engine::{EventSink, InMemorySeedSource, RunControl, SeedSource, run_group
 use gw_providers::{
     ChatRequest, DeltaStream, Provider, ProviderError, StreamChatFuture, StreamDelta,
 };
-use gw_schema::{BudgetBreach, LifecycleState};
+use gw_schema::LifecycleState;
 use gw_storage::{RecordFilter, Store};
 use tokio_util::sync::CancellationToken;
 
@@ -24,7 +24,7 @@ fn no_cancel() -> CancellationToken {
 }
 
 fn control(cancel: &CancellationToken) -> RunControl<'_> {
-    RunControl::new(cancel, BudgetBreach::Drain)
+    RunControl::new(cancel)
 }
 
 struct SeedBarrierFaultTeacher {
@@ -48,6 +48,9 @@ impl SeedBarrierFaultTeacher {
 }
 
 impl Provider for SeedBarrierFaultTeacher {
+    fn accounting_capability(&self) -> gw_schema::AccountingCapability {
+        gw_schema::AccountingCapability::NoModelRequests
+    }
     fn stream_chat(&self, req: ChatRequest) -> StreamChatFuture<'_> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         let barrier = Arc::clone(&self.barrier);
@@ -95,6 +98,9 @@ impl SeedBarrierStatusTeacher {
 }
 
 impl Provider for SeedBarrierStatusTeacher {
+    fn accounting_capability(&self) -> gw_schema::AccountingCapability {
+        gw_schema::AccountingCapability::NoModelRequests
+    }
     fn stream_chat(&self, req: ChatRequest) -> StreamChatFuture<'_> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         let barrier = Arc::clone(&self.barrier);
@@ -136,13 +142,7 @@ async fn best_of_k_resume_does_not_double_admit() {
         &judge_body(0.95, "accept"),
         &judge_body(0.90, "accept"),
     ]));
-    let cl = clients(
-        store.clone(),
-        teacher,
-        judge,
-        25.0,
-        EventSink::disconnected(),
-    );
+    let cl = clients(store.clone(), teacher, judge, EventSink::disconnected());
     let area = area_k(one_judge(), lenient_thresholds(), 2);
 
     // The one seed item for shard 0.
@@ -238,13 +238,7 @@ async fn later_sibling_fault_does_not_clobber_healthy_sibling() {
     // call 1 = c0 (good → Judged → admitted), call 2 = c1 (FAULT → record-level → parked at Error).
     let teacher = Arc::new(FailingTeacher::new(2, 0.01));
     let judge = Arc::new(ScriptedJudge::new(vec![&judge_body(0.95, "accept")]));
-    let cl = clients(
-        store.clone(),
-        teacher,
-        judge,
-        25.0,
-        EventSink::disconnected(),
-    );
+    let cl = clients(store.clone(), teacher, judge, EventSink::disconnected());
     let area = area_k(one_judge(), lenient_thresholds(), 2);
     let source = InMemorySeedSource::new(vec![good_candidate("What is 12*8?")], 1);
     let item = source.items_for_shard(0).remove(0);
@@ -311,7 +305,6 @@ async fn concurrent_sibling_faults_park_only_faulting_records() {
         store.clone(),
         teacher.clone(),
         judge,
-        25.0,
         EventSink::disconnected(),
     );
     let area = area_k(one_judge(), lenient_thresholds(), 3);
@@ -384,10 +377,8 @@ async fn systemic_fatal_waits_for_sibling_fanout_to_settle() {
         store.clone(),
         teacher.clone(),
         judge.clone(),
-        25.0,
         EventSink::disconnected(),
     );
-    let budget = cl.budget.clone();
     let area = area_k(one_judge(), lenient_thresholds(), 3);
 
     let err = tokio::time::timeout(
@@ -410,10 +401,6 @@ async fn systemic_fatal_waits_for_sibling_fanout_to_settle() {
         judge.call_count(),
         0,
         "no new grading transition after the fatal"
-    );
-    assert!(
-        (budget.spent() - 0.02).abs() < 1e-12,
-        "healthy siblings are allowed to settle and charge before the fatal returns"
     );
 
     let all = store
@@ -457,13 +444,7 @@ async fn resume_drives_established_winner_to_formatted() {
         &judge_body(0.95, "accept"),
         &judge_body(0.90, "accept"),
     ]));
-    let cl = clients(
-        store.clone(),
-        teacher,
-        judge,
-        25.0,
-        EventSink::disconnected(),
-    );
+    let cl = clients(store.clone(), teacher, judge, EventSink::disconnected());
     let area = area_k(one_judge(), lenient_thresholds(), 2);
     let source = InMemorySeedSource::new(vec![good_candidate("What is 12*8?")], 1);
     let item = source.items_for_shard(0).remove(0);

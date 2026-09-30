@@ -19,11 +19,8 @@ use gw_schema::LifecycleState;
 
 use crate::action::Action;
 
-/// How many recent error/budget log lines to retain in the log pane (older lines are dropped).
+/// How many recent error log lines to retain in the log pane (older lines are dropped).
 pub const ERROR_LOG_CAPACITY: usize = 200;
-
-/// How many cost samples to retain for the cost sparkline (one per [`Action::CostCharged`]).
-pub const COST_HISTORY_CAPACITY: usize = 256;
 
 /// The run-level header state: ids and shard progress, populated from run/shard boundary actions.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -52,31 +49,6 @@ pub struct RecordRow {
     pub updates: u64,
 }
 
-/// The cost meter: cumulative spend, the cap (once known), and whether the cap was reached.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct CostMeter {
-    /// The cumulative USD spent for the run (last `run_total_usd` seen).
-    pub spent_usd: f64,
-    /// The configured cap, known only once a [`Action::BudgetReached`] arrives (the engine reports the
-    /// cap on that event; `None` until then).
-    pub cap_usd: Option<f64>,
-    /// `true` once the budget cap has been reached.
-    pub budget_reached: bool,
-}
-
-impl CostMeter {
-    /// The spend fraction in `[0.0, 1.0]` for the cost gauge, or `None` if no cap is known yet. Clamped
-    /// so a late/overshooting `spent` never produces a ratio outside the gauge's domain.
-    #[must_use]
-    pub fn fraction(&self) -> Option<f64> {
-        let cap = self.cap_usd?;
-        if cap <= 0.0 {
-            return Some(1.0);
-        }
-        Some((self.spent_usd / cap).clamp(0.0, 1.0))
-    }
-}
-
 /// The complete application model. The view is a pure function of this; `update` is the sole mutator.
 #[derive(Debug, Default)]
 pub struct App {
@@ -88,12 +60,10 @@ pub struct App {
     /// Selection/scroll state for the lifecycle `Table` — stored in the MODEL (not the render fn) so it
     /// survives across frames (ARCHITECTURE §1.2).
     pub table_state: TableState,
-    /// The cost meter (gauge + budget banner source).
-    pub cost: CostMeter,
-    /// Recent error/budget log lines, newest last; capped at `ERROR_LOG_CAPACITY`.
+    /// Latest absolute durable snapshot; absent means accounting is still loading.
+    pub accounting: Option<gw_schema::AccountingSnapshot>,
+    /// Recent error log lines, newest last; capped at `ERROR_LOG_CAPACITY`.
     pub error_log: Vec<String>,
-    /// Cumulative-spend samples for the cost sparkline, capped at `COST_HISTORY_CAPACITY`.
-    pub cost_history: Vec<u64>,
     /// `true` once a quit was requested; the event loop checks this to break.
     pub should_quit: bool,
     /// Tick counter (drives any animated UI; incremented on every [`Action::Tick`]).
@@ -183,23 +153,14 @@ impl App {
                 row.updates += 1;
                 self.clamp_selection();
             }
-            Action::CostCharged { run_total_usd } => {
-                // Monotone guard: the cumulative total never decreases, so ignore a stale/out-of-order
-                // lower value (a dropped-then-late event must not rewind the gauge).
-                if run_total_usd > self.cost.spent_usd {
-                    self.cost.spent_usd = run_total_usd;
+            Action::AccountingSnapshot { snapshot } => {
+                if self
+                    .accounting
+                    .as_ref()
+                    .is_none_or(|old| snapshot.revision > old.revision)
+                {
+                    self.accounting = Some(*snapshot);
                 }
-                self.push_cost_sample();
-            }
-            Action::BudgetReached { spent, cap } => {
-                self.cost.budget_reached = true;
-                self.cost.cap_usd = Some(cap);
-                if spent > self.cost.spent_usd {
-                    self.cost.spent_usd = spent;
-                }
-                self.push_log(format!(
-                    "BUDGET REACHED — spent ${spent:.2} of ${cap:.2} cap"
-                ));
             }
             Action::RecordErrored { record_id, error } => {
                 self.push_log(format!("ERROR {record_id}: {error}"));
@@ -265,16 +226,6 @@ impl App {
         self.error_log.push(line);
     }
 
-    /// Push the current cumulative spend (as whole cents) onto the cost sparkline history.
-    fn push_cost_sample(&mut self) {
-        if self.cost_history.len() >= COST_HISTORY_CAPACITY {
-            self.cost_history.remove(0);
-        }
-        // Cents keep the sparkline integer-valued and monotone without precision drama.
-        let cents = (self.cost.spent_usd * 100.0).round().max(0.0) as u64;
-        self.cost_history.push(cents);
-    }
-
     /// Move the selection by `delta` rows (saturating at the ends); a no-op on an empty table.
     fn move_selection(&mut self, delta: i64) {
         let len = self.record_count();
@@ -307,6 +258,32 @@ impl App {
             Some(_) if len == 0 => self.table_state.select(None),
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn snapshot(revision: u64, known: f64) -> gw_schema::AccountingSnapshot {
+    gw_schema::AccountingSnapshot {
+        revision,
+        configured: None,
+        effective: Some(gw_schema::PolicyState {
+            version: 1,
+            epoch: 1,
+            policy: gw_schema::AccountingPolicy::ObservationOnly,
+        }),
+        history: gw_schema::AccountingHistory::RecordedFromCreation,
+        unknown_coverage_lanes: 0,
+        attempts: 1,
+        known_usd: Some(known),
+        unknown_cost_attempts: 1,
+        invalid_cost_attempts: 0,
+        conflicting_attempts: 0,
+        unresolved_attempts: 0,
+        prompt_tokens: Default::default(),
+        completion_tokens: Default::default(),
+        total_tokens: Default::default(),
+        reasoning_tokens: Default::default(),
+        elapsed_ms: Some(0),
     }
 }
 
@@ -396,27 +373,20 @@ mod tests {
     }
 
     #[test]
-    fn cost_charged_is_monotone() {
+    fn snapshot_revisions_accept_corrections_and_reject_stale_events() {
         let mut app = App::new();
-        app.update(Action::CostCharged { run_total_usd: 5.0 });
-        app.update(Action::CostCharged { run_total_usd: 3.0 }); // stale/out-of-order — ignored
-        app.update(Action::CostCharged { run_total_usd: 7.5 });
-        assert!((app.cost.spent_usd - 7.5).abs() < f64::EPSILON);
-        assert_eq!(app.cost_history.len(), 3);
-        assert_eq!(*app.cost_history.last().unwrap(), 750);
-    }
-
-    #[test]
-    fn budget_reached_sets_banner_and_logs() {
-        let mut app = App::new();
-        app.update(Action::BudgetReached {
-            spent: 10.0,
-            cap: 10.0,
+        assert!(app.accounting.is_none());
+        app.update(Action::AccountingSnapshot {
+            snapshot: Box::new(snapshot(2, 5.0)),
         });
-        assert!(app.cost.budget_reached);
-        assert_eq!(app.cost.cap_usd, Some(10.0));
-        assert_eq!(app.cost.fraction(), Some(1.0));
-        assert!(app.error_log.last().unwrap().contains("BUDGET REACHED"));
+        app.update(Action::AccountingSnapshot {
+            snapshot: Box::new(snapshot(3, 3.0)),
+        });
+        app.update(Action::AccountingSnapshot {
+            snapshot: Box::new(snapshot(2, 9.0)),
+        });
+        assert_eq!(app.accounting.as_ref().unwrap().known_usd, Some(3.0));
+        assert_eq!(app.accounting.as_ref().unwrap().revision, 3);
     }
 
     #[test]

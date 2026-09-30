@@ -514,7 +514,7 @@ pub(crate) async fn grade_request<P: Provider + ?Sized>(
     let reasoning = req.reasoning;
     let (stream, observation) = gw_providers::observed_chat(provider, req).await?;
     let mut truncated = false;
-    let result = async {
+    let mut result = async {
         let drained = drain_content(stream).await?;
         truncated = drained.hit_length_cap();
         if drained.content.trim().is_empty() {
@@ -531,6 +531,15 @@ pub(crate) async fn grade_request<P: Provider + ?Sized>(
         }
     }
     .await;
+    if let Ok(grade) = &mut result {
+        grade.raw["attempt_origin"] = observation
+            .as_ref()
+            .and_then(|call| {
+                call.attempt_id()
+                    .map(|id| serde_json::json!({"run_id": call.run_id(), "attempt_id": id}))
+            })
+            .unwrap_or(serde_json::Value::Null);
+    }
     if let Some(call) = observation {
         let interpretation = match &result {
             Ok(_) => gw_schema::OutputInterpretation::Accepted,

@@ -35,8 +35,29 @@ fn real_clients(store: &Store, server: &Server) -> gw_engine::Clients {
         provider.clone(),
         provider,
         Arc::new(server.embedder()),
-        25.0,
     )
+}
+
+fn unfinished_source() -> InMemorySeedSource {
+    InMemorySeedSource::new(
+        vec![
+            good_candidate("What is 12*8?"),
+            good_candidate("Compute twelve times eight."),
+        ],
+        1,
+    )
+}
+async fn interrupt_after_first_record(engine: &Engine, store: &Store, run: &str) {
+    sqlx::query("CREATE TRIGGER interrupt_checkpoint BEFORE INSERT ON checkpoints BEGIN SELECT RAISE(FAIL, 'checkpoint interruption'); END").execute(store.raw_pool()).await.unwrap();
+    let error = engine
+        .run(run, &unfinished_source(), CancellationToken::new())
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("checkpoint interruption"));
+    sqlx::query("DROP TRIGGER interrupt_checkpoint")
+        .execute(store.raw_pool())
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -48,11 +69,7 @@ async fn real_teacher_judge_and_all_three_embedding_purposes_retain_context_and_
         area_k1(one_judge(), lenient_thresholds()),
         1,
     );
-    let first = engine
-        .run("all-lanes", &one_item_source(), CancellationToken::new())
-        .await
-        .unwrap();
-    assert_eq!(first.admitted, 1);
+    interrupt_after_first_record(&engine, &store, "all-lanes").await;
     let receipts = store.model_attempts("all-lanes").await.unwrap();
     assert_eq!(receipts.len(), 4);
     for purpose in [
@@ -92,14 +109,18 @@ async fn real_teacher_judge_and_all_three_embedding_purposes_retain_context_and_
     assert_eq!(launches[0].teacher, Cap::PhysicalAttemptsV1);
     assert_eq!(launches[0].judge, Cap::PhysicalAttemptsV1);
     assert_eq!(launches[0].embedding, Cap::PhysicalAttemptsV1);
-    assert_eq!(launches[0].history, AccountingHistory::Unknown);
+    assert_eq!(launches[0].history, AccountingHistory::RecordedFromCreation);
     let first_launch = launches[0].launch_id.clone();
     engine
-        .run("all-lanes", &one_item_source(), CancellationToken::new())
+        .run("all-lanes", &unfinished_source(), CancellationToken::new())
         .await
         .unwrap();
     let after = store.model_attempts("all-lanes").await.unwrap();
-    assert_eq!(after.len(), 5, "resume only rebuilds the admitted prior");
+    assert_eq!(
+        after.len(),
+        6,
+        "resume rebuilds the prior and gates the still-new candidate"
+    );
     let resumed = after
         .iter()
         .find(|r| r.intent.context.purpose == Purpose::ResumePrior)
@@ -130,7 +151,6 @@ async fn truncation_retry_has_separate_receipt_and_success_does_not_erase_failed
         store.clone(),
         provider.clone(),
         provider,
-        25.0,
         EventSink::disconnected(),
     );
     Engine::new(clients, area_k1(one_judge(), lenient_thresholds()), 1)
@@ -186,7 +206,6 @@ async fn revision_uses_its_intended_retry_record_and_separate_purpose() {
         store.clone(),
         Arc::new(server.provider()),
         judge,
-        25.0,
         EventSink::disconnected(),
     );
     Engine::new(clients, area_k1(one_judge(), lenient_thresholds()), 1)
@@ -232,7 +251,6 @@ async fn malformed_teacher_or_grade_preserves_observed_cost_and_transport_succes
             store.clone(),
             provider.clone(),
             provider,
-            25.0,
             EventSink::disconnected(),
         );
         let report = Engine::new(clients, area_k1(one_judge(), lenient_thresholds()), 1)
@@ -278,10 +296,7 @@ async fn candidate_and_resume_prior_accounting_failures_are_fatal_and_send_nothi
             1,
         );
         if purpose == "resume_prior" {
-            engine
-                .run("prior-error", &one_item_source(), CancellationToken::new())
-                .await
-                .unwrap();
+            interrupt_after_first_record(&engine, &store, "prior-error").await;
         }
         let before = server.requests.lock().unwrap().len();
         let trigger = if purpose == "candidate_qc" {
@@ -294,7 +309,11 @@ async fn candidate_and_resume_prior_accounting_failures_are_fatal_and_send_nothi
             .await
             .unwrap();
         let error = engine
-            .run("prior-error", &one_item_source(), CancellationToken::new())
+            .run(
+                "prior-error",
+                &unfinished_source(),
+                CancellationToken::new(),
+            )
             .await
             .unwrap_err();
         assert!(!error.is_record_level());
@@ -380,7 +399,6 @@ async fn replacing_a_public_client_is_reassessed_and_null_embedder_stays_request
         store.clone(),
         pure.clone(),
         pure.clone(),
-        25.0,
         EventSink::disconnected(),
     );
     clients.teacher = Arc::new(UnknownProvider(pure));
@@ -402,7 +420,7 @@ async fn replacing_a_public_client_is_reassessed_and_null_embedder_stays_request
     assert_eq!(coverage.teacher, Cap::Unknown);
     assert_eq!(coverage.judge, Cap::NoModelRequests);
     assert_eq!(coverage.embedding, Cap::NoModelRequests);
-    assert_eq!(coverage.history, AccountingHistory::Unknown);
+    assert_eq!(coverage.history, AccountingHistory::RecordedFromCreation);
     assert!(
         store
             .model_attempts("empty-unknown")
@@ -422,7 +440,6 @@ async fn a_later_judge_accounting_failure_preserves_completed_judges_in_the_cach
         store.clone(),
         provider.clone(),
         provider,
-        25.0,
         EventSink::disconnected(),
     );
     let engine = Engine::new(
@@ -494,7 +511,7 @@ async fn a_later_judge_accounting_failure_preserves_completed_judges_in_the_cach
 }
 
 #[tokio::test]
-async fn launch_coverage_persistence_failure_prevents_startup_requests_and_marks_failure() {
+async fn launch_coverage_persistence_failure_atomically_rolls_back_fresh_run() {
     let store = Store::open_in_memory().await.unwrap();
     sqlx::query("CREATE TRIGGER reject_launch BEFORE INSERT ON model_launches BEGIN SELECT RAISE(FAIL, 'launch failed'); END").execute(store.raw_pool()).await.unwrap();
     let server = normal_server().await;
@@ -515,7 +532,7 @@ async fn launch_coverage_persistence_failure_prevents_startup_requests_and_marks
     assert!(server.requests.lock().unwrap().is_empty());
     assert_eq!(
         store.run_status("launch-failed").await.unwrap().as_deref(),
-        Some("failed")
+        None
     );
 }
 
@@ -528,7 +545,6 @@ async fn an_unknown_logical_wrapper_runs_with_explicit_incomplete_lane_coverage(
         store.clone(),
         Arc::new(UnknownProvider(provider.clone())),
         provider,
-        25.0,
         EventSink::disconnected(),
     );
     let report = Engine::new(clients, area_k1(one_judge(), lenient_thresholds()), 1)
@@ -565,31 +581,21 @@ async fn unknown_embedding_coverage_and_typed_cancellation_remain_visible_on_res
     let store = Store::open_in_memory().await.unwrap();
     let server = normal_server().await;
     let area = area_k1(one_judge(), lenient_thresholds());
-    Engine::new(real_clients(&store, &server), area.clone(), 1)
+    let original = Engine::new(real_clients(&store, &server), area.clone(), 1);
+    interrupt_after_first_record(&original, &store, "cancelled-embedding").await;
+    let before = server.requests.lock().unwrap().len();
+    let mut clients = real_clients(&store, &server);
+    clients.embedder = Arc::new(CancelledEmbedding);
+    let report = Engine::new(clients, area, 1)
         .run(
             "cancelled-embedding",
-            &one_item_source(),
+            &unfinished_source(),
             CancellationToken::new(),
         )
         .await
         .unwrap();
-    let before = server.requests.lock().unwrap().len();
-    let mut clients = real_clients(&store, &server);
-    clients.embedder = Arc::new(CancelledEmbedding);
-    let error = Engine::new(clients, area, 1)
-        .run(
-            "cancelled-embedding",
-            &one_item_source(),
-            CancellationToken::new(),
-        )
-        .await
-        .unwrap_err();
-    assert!(matches!(
-        error,
-        gw_engine::EngineError::Generate(gw_generate::GenerateError::Embed(
-            gw_providers::ProviderError::Cancelled
-        ))
-    ));
+    assert!(!report.completed);
+    assert_eq!(report.pending_items, 1);
     assert_eq!(server.requests.lock().unwrap().len(), before);
     let launches = store.model_launches("cancelled-embedding").await.unwrap();
     assert_eq!(launches.len(), 2);

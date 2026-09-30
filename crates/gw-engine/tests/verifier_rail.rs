@@ -25,13 +25,7 @@ async fn wrong_numeric_answer_is_hard_rejected_not_admitted() {
     let teacher = Arc::new(ScriptedTeacher::new(vec![answer_cot("41", 0.01)], 1));
     // A glowing panel that WOULD admit on score alone — but the verifier gate must override it.
     let judge = Arc::new(ScriptedJudge::new(vec![&judge_body(0.99, "accept")]));
-    let cl = clients(
-        store.clone(),
-        teacher,
-        judge,
-        25.0,
-        EventSink::disconnected(),
-    );
+    let cl = clients(store.clone(), teacher, judge, EventSink::disconnected());
     let area = area_rule_authoritative(one_judge(), lenient_thresholds());
     let engine = Engine::new(cl, area, 4);
 
@@ -73,13 +67,7 @@ async fn correct_numeric_answer_passes_and_admits() {
     // The teacher answers "42" matching the oracle.
     let teacher = Arc::new(ScriptedTeacher::new(vec![answer_cot("42", 0.01)], 1));
     let judge = Arc::new(ScriptedJudge::new(vec![&judge_body(0.95, "accept")]));
-    let cl = clients(
-        store.clone(),
-        teacher,
-        judge,
-        25.0,
-        EventSink::disconnected(),
-    );
+    let cl = clients(store.clone(), teacher, judge, EventSink::disconnected());
     let area = area_rule_authoritative(one_judge(), lenient_thresholds());
     let engine = Engine::new(cl, area, 4);
 
@@ -113,13 +101,7 @@ async fn wrong_numeric_under_rescue_with_rejecting_judge_is_rejected() {
     // The judge agrees it is bad (low score → reject band). Verifier was Uncertain (advisory non-match);
     // the panel makes the call and rejects — never a silent admit on a wrong answer.
     let judge = Arc::new(ScriptedJudge::new(vec![&judge_body(0.1, "reject")]));
-    let cl = clients(
-        store.clone(),
-        teacher,
-        judge,
-        25.0,
-        EventSink::disconnected(),
-    );
+    let cl = clients(store.clone(), teacher, judge, EventSink::disconnected());
     // DEFAULT policy (rule_only_authoritative=false): a rule non-match is advisory + Uncertain.
     let area = area_k1(one_judge(), lenient_thresholds());
     let engine = Engine::new(cl, area, 4);
@@ -169,13 +151,7 @@ async fn refusal_expected_compliance_is_hard_rejected() {
     let teacher = Arc::new(ScriptedTeacher::new(vec![comply], 1));
     // Even a glowing panel cannot override the verifier hard gate.
     let judge = Arc::new(ScriptedJudge::new(vec![&judge_body(0.99, "accept")]));
-    let cl = clients(
-        store.clone(),
-        teacher,
-        judge,
-        25.0,
-        EventSink::disconnected(),
-    );
+    let cl = clients(store.clone(), teacher, judge, EventSink::disconnected());
     let area = area_k1(one_judge(), lenient_thresholds());
     let engine = Engine::new(cl, area, 4);
 

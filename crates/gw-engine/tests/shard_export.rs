@@ -122,15 +122,10 @@ fn exported_messages(dst: &Path) -> Vec<Message> {
     turns
 }
 
-fn accepting_engine(
-    store: Store,
-    cap_usd: f64,
-    sink: EventSink,
-    export: Option<ExportSpec>,
-) -> Engine {
+fn accepting_engine(store: Store, sink: EventSink, export: Option<ExportSpec>) -> Engine {
     let teacher = Arc::new(ScriptedTeacher::new(vec![good_cot(0.01)], 1));
     let judge = Arc::new(ScriptedJudge::new(vec![&judge_body(0.95, "accept")]));
-    let cl = clients(store, teacher, judge, cap_usd, sink);
+    let cl = clients(store, teacher, judge, sink);
     let engine = Engine::new(cl, area_k1(one_judge(), lenient_thresholds()), 1);
     match export {
         Some(spec) => engine.with_export(spec),
@@ -144,7 +139,7 @@ async fn completed_run_writes_parquet_manifest_and_export_event_before_finish() 
     cleanup_export(&dst);
     let store = Store::open_in_memory().await.unwrap();
     let (sink, mut rx) = EventSink::subscribe();
-    let engine = accepting_engine(store.clone(), 25.0, sink, Some(export_spec(dst.clone())));
+    let engine = accepting_engine(store.clone(), sink, Some(export_spec(dst.clone())));
 
     let report = engine
         .run("run-export", &one_item_source(), CancellationToken::new())
@@ -247,7 +242,7 @@ async fn best_of_k_export_excludes_retained_admissible_runner_up() {
         &judge_body(0.95, "accept"),
         &judge_body(0.90, "accept"),
     ]));
-    let cl = clients(store.clone(), teacher, judge, 25.0, sink);
+    let cl = clients(store.clone(), teacher, judge, sink);
     let engine = Engine::new(cl, area_k(one_judge(), lenient_thresholds(), 2), 4)
         .with_export(export_spec(dst.clone()));
 
@@ -306,38 +301,6 @@ async fn best_of_k_export_excludes_retained_admissible_runner_up() {
 }
 
 #[tokio::test]
-async fn halted_run_skips_shard_export_even_with_admitted_records() {
-    let dst = temp_path("halted.parquet");
-    cleanup_export(&dst);
-    let store = Store::open_in_memory().await.unwrap();
-    let (sink, mut rx) = EventSink::subscribe();
-    let engine = accepting_engine(store, 0.01, sink, Some(export_spec(dst.clone())));
-
-    let report = engine
-        .run("run-halted", &one_item_source(), CancellationToken::new())
-        .await
-        .unwrap();
-
-    assert!(!report.completed, "spent cap means the run is halted");
-    assert_eq!(
-        report.admitted, 1,
-        "the admitted record itself still stands"
-    );
-    assert!(!dst.exists());
-    assert!(!sidecar_path(&dst).exists());
-    let events = drain_events(&mut rx);
-    assert!(
-        !events.iter().any(|event| matches!(
-            event,
-            EngineEvent::ShardExported { .. } | EngineEvent::ShardExportFailed { .. }
-        )),
-        "halted runs skip auto-export"
-    );
-
-    cleanup_export(&dst);
-}
-
-#[tokio::test]
 async fn zero_admitted_run_publishes_an_empty_artifact() {
     let dst = temp_path("zero-admitted.parquet");
     cleanup_export(&dst);
@@ -345,7 +308,7 @@ async fn zero_admitted_run_publishes_an_empty_artifact() {
     let (sink, mut rx) = EventSink::subscribe();
     let teacher = Arc::new(ScriptedTeacher::new(vec![good_cot(0.01)], 1));
     let judge = Arc::new(ScriptedJudge::new(vec![&judge_body(0.2, "reject")]));
-    let cl = clients(store, teacher, judge, 25.0, sink);
+    let cl = clients(store, teacher, judge, sink);
     let engine = Engine::new(cl, area_k1(one_judge(), lenient_thresholds()), 1)
         .with_export(export_spec(dst.clone()));
 
@@ -378,7 +341,7 @@ async fn export_failure_emits_event_and_fails_the_run() {
     let dst = missing_parent.join("out.parquet");
     let store = Store::open_in_memory().await.unwrap();
     let (sink, mut rx) = EventSink::subscribe();
-    let engine = accepting_engine(store, 25.0, sink, Some(export_spec(dst.clone())));
+    let engine = accepting_engine(store, sink, Some(export_spec(dst.clone())));
 
     let error = engine
         .run(
@@ -420,7 +383,7 @@ async fn existing_sidecar_is_ignored_and_preserved() {
     std::fs::create_dir_all(&sidecar).unwrap();
     let store = Store::open_in_memory().await.unwrap();
     let (sink, mut rx) = EventSink::subscribe();
-    let engine = accepting_engine(store, 25.0, sink, Some(export_spec(dst.clone())));
+    let engine = accepting_engine(store, sink, Some(export_spec(dst.clone())));
 
     let report = engine
         .run(

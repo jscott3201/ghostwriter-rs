@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use gw_cli::cli::{Cli, Command, EvalCommand, ExportCot, ExportFormat, GenCommand, OnBreach};
+use gw_cli::cli::{AccountingMode, Cli, Command, EvalCommand, ExportCot, ExportFormat, GenCommand};
 
 #[test]
 fn gen_run_parses_required_and_default_args() {
@@ -28,8 +28,8 @@ fn gen_run_parses_required_and_default_args() {
     assert_eq!(args.max_in_flight, 4);
     assert!(args.config.is_none());
     assert!(args.db.is_none());
-    assert!(args.budget_usd.is_none());
-    assert!(args.on_breach.is_none());
+    assert!(args.accounting.accounting_policy.is_none());
+    assert!(args.accounting.limit_usd.is_none());
     assert!(args.k.is_none());
 }
 
@@ -49,10 +49,10 @@ fn gen_run_accepts_all_overrides() {
         "p.txt",
         "--shards",
         "3",
-        "--budget-usd",
+        "--limit-usd",
         "12.5",
-        "--on-breach",
-        "abort",
+        "--accounting-policy",
+        "finite-usd",
         "--k",
         "4",
         "--max-in-flight",
@@ -65,14 +65,17 @@ fn gen_run_accepts_all_overrides() {
     assert_eq!(args.config, Some(PathBuf::from("gw.toml")));
     assert_eq!(args.db, Some(PathBuf::from("store.sqlite")));
     assert_eq!(args.shards, 3);
-    assert_eq!(args.budget_usd, Some(12.5));
-    assert_eq!(args.on_breach, Some(OnBreach::Abort));
+    assert_eq!(args.accounting.limit_usd, Some(12.5));
+    assert_eq!(
+        args.accounting.accounting_policy,
+        Some(AccountingMode::FiniteUsd)
+    );
     assert_eq!(args.k, Some(4));
     assert_eq!(args.max_in_flight, 8);
 }
 
 #[test]
-fn gen_run_on_breach_rejects_pause() {
+fn gen_run_rejects_removed_breach_flag() {
     let err = Cli::try_parse_from([
         "gw",
         "gen",
@@ -84,7 +87,7 @@ fn gen_run_on_breach_rejects_pause() {
         "--on-breach",
         "pause",
     ]);
-    assert!(err.is_err(), "--on-breach exposes only drain|abort");
+    assert!(err.is_err(), "removed flag must fail");
 }
 
 #[test]

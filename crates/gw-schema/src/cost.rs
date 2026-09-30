@@ -3,8 +3,8 @@
 use serde::{Deserialize, Serialize};
 
 /// Per-record token + spend accounting. `reasoning_tokens > 0` is part of the Verify gate
-/// (§1.6); the engine cost meter sums `usd` across in-flight records to gate a run against a
-/// budget cap.
+/// (§1.6). These fields project the accepted teacher response for the record; physical attempt
+/// receipts, including failed calls and other model lanes, are authoritative for run accounting.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct Cost {
     #[serde(default)]

@@ -8,7 +8,7 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 use gw_engine::{
-    AreaConfig, BudgetMeter, Clients, Engine, EventSink, ExportSpec, InMemorySeedSource,
+    AccountingPolicy, AreaConfig, Clients, Engine, EventSink, ExportSpec, InMemorySeedSource,
 };
 use gw_generate::{NullEmbedder, UserSeed, UserTurnCandidate, user_message};
 use gw_judge::{AreaThresholds, NullSandboxOracle, PanelJudge};
@@ -117,7 +117,7 @@ async fn standalone_export_matches_automatic_best_of_k_and_replay() {
         judge.clone(),
         Arc::new(NullEmbedder),
         Arc::new(NullSandboxOracle),
-        BudgetMeter::new(25.0),
+        AccountingPolicy::ObservationOnly,
         EventSink::disconnected(),
         "test",
     );

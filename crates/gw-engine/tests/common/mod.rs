@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use gw_engine::{AreaConfig, BudgetMeter, Clients, EventSink, InMemorySeedSource};
+use gw_engine::{AccountingPolicy, AreaConfig, Clients, EventSink, InMemorySeedSource};
 use gw_generate::{Embedder, NullEmbedder, UserSeed, UserTurnCandidate, user_message};
 use gw_judge::{AreaThresholds, ExecutionEvidenceSource, NullSandboxOracle, PanelJudge};
 use gw_providers::{
@@ -517,7 +517,6 @@ pub fn clients(
     store: Store,
     teacher: Arc<dyn Provider>,
     judge: Arc<dyn Provider>,
-    cap_usd: f64,
     events: EventSink,
 ) -> Clients {
     Clients::new(
@@ -526,7 +525,7 @@ pub fn clients(
         judge,
         Arc::new(NullEmbedder),
         Arc::new(NullSandboxOracle),
-        BudgetMeter::new(cap_usd),
+        AccountingPolicy::ObservationOnly,
         events,
         "0.1.0-test",
     )
@@ -538,7 +537,6 @@ pub fn clients_with_embedder(
     teacher: Arc<dyn Provider>,
     judge: Arc<dyn Provider>,
     embedder: Arc<dyn Embedder + Send + Sync>,
-    cap_usd: f64,
 ) -> Clients {
     Clients::new(
         store,
@@ -546,7 +544,7 @@ pub fn clients_with_embedder(
         judge,
         embedder,
         Arc::new(NullSandboxOracle),
-        BudgetMeter::new(cap_usd),
+        AccountingPolicy::ObservationOnly,
         EventSink::disconnected(),
         "0.1.0-test",
     )

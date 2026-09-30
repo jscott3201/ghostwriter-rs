@@ -175,6 +175,9 @@ pub enum OutputInterpretation {
 pub struct AttemptReceipt {
     /// Durable unique identity allocated before transmission.
     pub attempt_id: String,
+    /// Operational epoch authorizing dispatch; absent for older observation-only receipts.
+    #[serde(default)]
+    pub policy_epoch: Option<u64>,
     /// Immutable pre-send evidence.
     pub intent: AttemptIntent,
     /// Latest cumulative metadata; never sum snapshots from one attempt.
@@ -200,7 +203,7 @@ pub enum AccountingHistory {
 }
 
 /// Coverage assessed from actual clients at one engine launch.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LaunchCoverage {
     /// Coverage contract version, currently 1.
@@ -211,6 +214,9 @@ pub struct LaunchCoverage {
     pub launch_id: String,
     /// Historical completeness is independent of this launch's lane capabilities.
     pub history: AccountingHistory,
+    /// Captured operational policy/epoch; absent for earlier unqualified launches.
+    #[serde(default)]
+    pub policy: Option<crate::PolicyState>,
     /// Actual teacher client's capability.
     pub teacher: AccountingCapability,
     /// Actual judge client's capability.
