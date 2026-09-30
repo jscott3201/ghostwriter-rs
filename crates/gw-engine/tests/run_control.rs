@@ -206,7 +206,7 @@ async fn abort_budget_breach_interrupts_in_flight_item_and_resume_does_not_respe
         "Abort leaves one in-flight item at a persisted non-terminal boundary: {first_states:?}"
     );
     assert!(
-        first_states.contains(&LifecycleState::Exported),
+        first_states.contains(&LifecycleState::Formatted),
         "one sibling completed before the budget breach fired: {first_states:?}"
     );
     assert_eq!(
@@ -246,7 +246,7 @@ async fn abort_budget_breach_interrupts_in_flight_item_and_resume_does_not_respe
         states(&store, "run-abort-budget")
             .await
             .into_iter()
-            .filter(|state| *state == LifecycleState::Exported)
+            .filter(|state| *state == LifecycleState::Formatted)
             .count(),
         4
     );
@@ -286,7 +286,7 @@ async fn drain_budget_breach_lets_in_flight_items_reach_terminal_states() {
     assert_eq!(
         run_states
             .iter()
-            .filter(|state| **state == LifecycleState::Exported)
+            .filter(|state| **state == LifecycleState::Formatted)
             .count(),
         2,
         "Drain preserves the old behavior: already-started items finish"

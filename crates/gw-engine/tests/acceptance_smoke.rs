@@ -84,7 +84,9 @@ use gw_schema::{
     Content, CotPolicy, ExportSchemaVersion, Lifecycle, LifecycleState, Message, Provenance,
     TeacherRef, TrainingRecord, TrlFormat, Verdict,
 };
-use gw_storage::{RecordFilter, Store, export_parquet, export_parquet_bytes};
+use gw_storage::{
+    ArtifactVerification, ExportPurpose, RecordFilter, Store, export_parquet_bytes, verify_artifact,
+};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
@@ -391,11 +393,11 @@ async fn one_tool_trajectory_survives_the_whole_chain_and_the_negatives_do_not()
          record never reaches a panel, so it cannot be rescued or sunk by a score"
     );
 
-    // Bound + corroborated pass → admitted, all the way to the exported terminal.
+    // Bound + corroborated pass → admitted, all the way to readiness for publication.
     assert_eq!(
         outcomes[0],
-        (ADMITTED, LifecycleState::Exported, Some(Verdict::Admit)),
-        "a bound, corroborated pass must reach the exported terminal"
+        (ADMITTED, LifecycleState::Formatted, Some(Verdict::Admit)),
+        "a bound, corroborated pass must reach readiness for publication"
     );
     // A STALE report (same attempt, moved content) is never followed and never sinks the record.
     assert_eq!(
@@ -470,7 +472,7 @@ async fn one_tool_trajectory_survives_the_whole_chain_and_the_negatives_do_not()
         .collect();
     assert_eq!(
         history,
-        vec!["verified", "judged", "admitted", "formatted", "exported"],
+        vec!["verified", "judged", "admitted", "formatted"],
         "the admitted record's edges are the ones the chain claims"
     );
     for (id, terminal, _) in &outcomes[1..] {
@@ -495,7 +497,7 @@ async fn one_tool_trajectory_survives_the_whole_chain_and_the_negatives_do_not()
         );
     }
     store
-        .checkpoint(RUN, 0, "exported", &serde_json::json!({"seed_offset": 8}))
+        .checkpoint(RUN, 0, "formatted", &serde_json::json!({"seed_offset": 8}))
         .await
         .expect("re-checkpoint the shard");
     assert_eq!(
@@ -505,7 +507,7 @@ async fn one_tool_trajectory_survives_the_whole_chain_and_the_negatives_do_not()
             .expect("re-read the resume cursor")
             .expect("a cursor exists")
             .state,
-        "exported",
+        "formatted",
         "a relaunch would resume past the whole chain, not re-spend the teacher"
     );
 
@@ -590,7 +592,7 @@ async fn one_tool_trajectory_survives_the_whole_chain_and_the_negatives_do_not()
     assert_eq!(msgs[4]["tool_call_id"], "read-a");
 
     // --- stage 7: `gen export` parity ---------------------------------------------------------
-    // The handler is exactly `Store::open` → `scan` → `export_parquet`; this walks that sequence
+    // The handler is exactly `Store::open` → `publish_export`; this walks that sequence
     // over the same database and requires the artifact to be the same shard. The handler function
     // itself is invoked (over its own corpus) by `gw-cli`'s `export.rs`, which the workspace gate
     // runs: `gw-cli` is DOWNSTREAM of `gw-engine`, so a `gw-engine` test cannot call it.
@@ -599,25 +601,32 @@ async fn one_tool_trajectory_survives_the_whole_chain_and_the_negatives_do_not()
     let reopened = Store::open(&db)
         .await
         .expect("reopen the store as the handler does");
-    let handler_scan = reopened
-        .scan(&RecordFilter::new().run_id(RUN))
-        .await
-        .expect("the handler's scan");
     let out = temp_path("cli.parquet");
     cleanup(&out);
-    let handler_manifest =
-        export_parquet(&handler_scan, TrlFormat::Gemma4, CotPolicy::Masked, &out)
-            .await
-            .expect("the handler's export");
+    let handler_artifact = reopened
+        .publish_export(
+            gw_schema::ExportOptions {
+                target: TrlFormat::Gemma4,
+                cot_policy: CotPolicy::Masked,
+                dataset_version: None,
+                scope: gw_schema::ExportScope::Run { run_id: RUN.into() },
+            },
+            &out,
+            ExportPurpose::Standalone,
+        )
+        .await
+        .expect("the handler's export")
+        .artifact;
     assert_eq!(
-        handler_manifest, manifest,
+        handler_artifact.manifest, manifest,
         "the handler's manifest must agree with the in-memory export field for field"
     );
     let written = std::fs::read(&out).expect("read the handler's artifact");
     assert_eq!(&written[..4], b"PAR1", "the artifact is a Parquet file");
     assert_eq!(
-        written, bytes,
-        "the handler's file must be the same shard the in-memory exporter encodes"
+        verify_artifact(&out).unwrap(),
+        ArtifactVerification::Verified(handler_artifact),
+        "the handler's artifact is independently verified, including its run scope"
     );
     let (handler_ids, handler_turns) = decode_shard(&out);
     assert_eq!(handler_ids, shard_ids, "same row");

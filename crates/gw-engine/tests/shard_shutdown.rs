@@ -220,7 +220,8 @@ async fn failed_run_drains(slow_shard: usize, panic: bool) {
         .await
         .unwrap();
     assert!(report.completed);
-    assert_eq!(report.exported, 4);
+    assert_eq!(report.exported, 0);
+    assert_eq!(report.admitted, 4);
     assert_eq!(
         resumed_teacher.call_count(),
         3,

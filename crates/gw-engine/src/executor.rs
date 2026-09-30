@@ -21,7 +21,7 @@
 //! shards at once. The [`Store`](gw_storage::Store) is `Clone` (shared pool), the `Clients` bundle is
 //! `Clone`, so each shard task owns its own handle.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -29,8 +29,10 @@ use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
-use gw_schema::{BudgetBreach, CotPolicy, ExportManifest, LifecycleState, TrlFormat};
-use gw_storage::{RecordFilter, RunStatus, export_parquet};
+use gw_schema::{
+    BudgetBreach, CotPolicy, ExportManifest, ExportOptions, ExportScope, LifecycleState, TrlFormat,
+};
+use gw_storage::{ExportPurpose, RecordFilter, RunStatus};
 
 use crate::checkpoint::{commit_cursor, load_cursor};
 use crate::clients::{AreaConfig, Clients};
@@ -133,7 +135,7 @@ impl CircuitBreaker {
 pub struct RunReport {
     /// Records admitted (reached `Admitted` or beyond — `Admitted`/`Formatted`/`Exported`).
     pub admitted: usize,
-    /// Records exported (the terminal-good state).
+    /// Records acknowledged in a verified artifact (`Exported`).
     pub exported: usize,
     /// Records rejected.
     pub rejected: usize,
@@ -146,7 +148,7 @@ pub struct RunReport {
     pub revising: usize,
     /// Records that errored unrecoverably.
     pub errored: usize,
-    /// `true` if every shard drained without hitting the budget cap or a cancellation.
+    /// `true` after every shard drains and any configured artifact is acknowledged.
     pub completed: bool,
 }
 
@@ -159,7 +161,7 @@ pub struct ExportSpec {
     pub target: TrlFormat,
     /// Whether reasoning enters the supervised loss region for this export.
     pub cot: CotPolicy,
-    /// Optional dataset version recorded in the sidecar manifest.
+    /// Optional dataset version fixed in the artifact's footer manifest before encoding.
     pub dataset_version: Option<semver::Version>,
 }
 
@@ -305,35 +307,51 @@ impl Engine {
         }
 
         let halted = cancel.is_cancelled() || self.clients.budget.is_exhausted();
-        let status = if halted {
-            RunStatus::Halted
-        } else {
-            RunStatus::Completed
-        };
-        self.clients.store.set_run_status(run_id, status).await?;
-
-        let mut report = self.tally(run_id).await?;
-        report.completed = !halted;
-        // The gate and export filter both use lifecycle-admitted records, so an exported shard agrees
-        // with the run report and best-of-k retained siblings remain excluded.
-        if !halted
-            && report.admitted > 0
-            && let Some(spec) = &self.export
-        {
-            match self.export_shard(run_id, spec).await {
-                Ok(manifest) => self.clients.events.emit(EngineEvent::ShardExported {
+        // Keep ownership through publication, including a shutdown arriving during blocking I/O.
+        // Running remains authoritative until publication and its SQLite acknowledgment succeed.
+        let finalized = async {
+            let mut manifest = None;
+            if !halted && let Some(spec) = &self.export {
+                match self.export_shard(run_id, spec).await {
+                    Ok(exported) => manifest = Some(exported),
+                    Err(error) => {
+                        self.clients.events.emit(EngineEvent::ShardExportFailed {
+                            run_id: run_id.to_string(),
+                            error: error.to_string(),
+                        });
+                        return Err(error);
+                    }
+                }
+            }
+            let mut report = self.tally(run_id).await?;
+            report.completed = !halted;
+            self.clients
+                .store
+                .set_run_status(
+                    run_id,
+                    if halted {
+                        RunStatus::Halted
+                    } else {
+                        RunStatus::Completed
+                    },
+                )
+                .await?;
+            if let Some(manifest) = manifest {
+                self.clients.events.emit(EngineEvent::ShardExported {
                     run_id: run_id.to_string(),
                     manifest,
-                }),
-                Err(err) => {
-                    tracing::warn!(run_id, error = %err, "end-of-run shard export failed");
-                    self.clients.events.emit(EngineEvent::ShardExportFailed {
-                        run_id: run_id.to_string(),
-                        error: err.to_string(),
-                    })
-                }
-            };
+                });
+            }
+            Ok(report)
         }
+        .await;
+        let report = match finalized {
+            Ok(report) => report,
+            Err(error) => {
+                mark_run_failed(&self.clients.store, &self.clients.events, run_id).await;
+                return Err(error);
+            }
+        };
         self.clients.events.emit(EngineEvent::RunFinished {
             run_id: run_id.to_string(),
             completed: report.completed,
@@ -676,31 +694,40 @@ impl Engine {
         Ok(total)
     }
 
-    /// Export this run's records to the configured Parquet shard and write the adjacent manifest
-    /// sidecar.
+    /// Publish this run's records as one self-contained artifact, then acknowledge the exact rows.
     ///
     /// The shared Parquet exporter owns SFT eligibility: both an Admit verdict and a selected
     /// lifecycle state are required. Passing the whole run preserves the scanned population in
-    /// manifest `n_records`. The configured `dataset_version` is set only on the sidecar manifest,
-    /// not on record rows.
+    /// manifest `n_records`. Dataset version and all policies are fixed before encoding. A pending
+    /// receipt resumes the same selected population even if unrelated records were admitted later.
     ///
     /// # Errors
-    /// Returns an engine error if scanning records, writing the Parquet shard, serializing the manifest,
-    /// or writing the manifest sidecar fails.
+    /// Returns an engine error if planning, publication, verification or acknowledgment fails.
     pub async fn export_shard(&self, run_id: &str, spec: &ExportSpec) -> Result<ExportManifest> {
-        let records = self
+        let published = self
             .clients
             .store
-            .scan(&RecordFilter::new().run_id(run_id))
+            .publish_export(
+                ExportOptions {
+                    target: spec.target,
+                    cot_policy: spec.cot,
+                    dataset_version: spec.dataset_version.clone(),
+                    scope: ExportScope::Run {
+                        run_id: run_id.to_string(),
+                    },
+                },
+                &spec.dst,
+                ExportPurpose::Engine,
+            )
             .await?;
-        let mut manifest = export_parquet(&records, spec.target, spec.cot, &spec.dst).await?;
-        manifest.dataset_version = spec.dataset_version.clone();
-        let sidecar = manifest_sidecar_path(&spec.dst);
-        let body = serde_json::to_vec_pretty(&manifest)?;
-        tokio::fs::write(&sidecar, body)
-            .await
-            .map_err(gw_storage::StorageError::from)?;
-        Ok(manifest)
+        tracing::info!(run_id, disposition = ?published.disposition, artifact_id = %published.artifact.artifact_id, "artifact publication acknowledged");
+        for record_id in published.advanced_record_ids {
+            self.clients.events.emit(EngineEvent::StateAdvanced {
+                record_id,
+                to: LifecycleState::Exported,
+            });
+        }
+        Ok(published.artifact.manifest)
     }
 
     /// Tally the run's records by terminal lifecycle state for the [`RunReport`].
@@ -738,12 +765,6 @@ async fn mark_run_failed(store: &gw_storage::Store, events: &crate::EventSink, r
         run_id: run_id.to_string(),
         completed: false,
     });
-}
-
-fn manifest_sidecar_path(dst: &Path) -> PathBuf {
-    let mut path = dst.as_os_str().to_owned();
-    path.push(".manifest.json");
-    PathBuf::from(path)
 }
 
 /// `true` when a record at `state` is at a DECIDED outcome a fault must NEVER overwrite (NO-CLOBBER): a

@@ -85,6 +85,8 @@ pub use cost::Cost;
 pub use hashes::Hashes;
 
 // --- §3 / §4.3 export contracts ---
+mod artifact;
+pub use artifact::{ExportArtifact, ExportOptions, ExportScope};
 pub use export::{
     CorpusDiversityStats, CotPolicy, ExportManifest, ExportSchemaVersion, MultiTurnLoss, TrlFormat,
 };

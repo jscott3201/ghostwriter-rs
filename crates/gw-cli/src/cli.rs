@@ -111,24 +111,35 @@ pub struct RunArgs {
     pub max_in_flight: u32,
 }
 
-/// `gen export` flags (pure path: a store read + a Parquet write, no providers).
+/// `gen export` flags (provider-free publication or exact receipt recovery).
 #[derive(Debug, clap::Args, PartialEq)]
 pub struct ExportArgs {
+    /// Recover this receipt at its recorded destination (may replace that file). Uses its original
+    /// acknowledgment mode; engine receipts may finish record export, but run status is unchanged.
+    #[arg(long, value_name = "ID", conflicts_with_all = ["out", "run_id", "format", "cot", "dataset_version"])]
+    pub resume_publication: Option<String>,
+    /// Dataset version fixed in the artifact manifest before encoding.
+    #[arg(long, value_name = "VERSION")]
+    pub dataset_version: Option<semver::Version>,
     /// Path to the SQLite store to export from.
     #[arg(long, value_name = "PATH")]
     pub db: PathBuf,
     /// Destination Parquet file path.
-    #[arg(long, value_name = "FILE")]
-    pub out: PathBuf,
+    #[arg(
+        long,
+        value_name = "FILE",
+        required_unless_present = "resume_publication"
+    )]
+    pub out: Option<PathBuf>,
     /// Restrict the export to a single run id (else every admitted record in the store).
     #[arg(long, value_name = "ID")]
     pub run_id: Option<String>,
-    /// The TRL export target template.
-    #[arg(long, value_enum, default_value_t = ExportFormat::ChatMl)]
-    pub format: ExportFormat,
-    /// Whether reasoning enters the supervised loss region on export.
-    #[arg(long, value_enum, default_value_t = ExportCot::Supervised)]
-    pub cot: ExportCot,
+    /// The TRL export target template (default: chat-ml for a new export).
+    #[arg(long, value_enum)]
+    pub format: Option<ExportFormat>,
+    /// Reasoning loss policy (default: supervised for a new export).
+    #[arg(long, value_enum)]
+    pub cot: Option<ExportCot>,
 }
 
 /// `gen replay` flags (thin: re-enter `Engine::run` for an existing run id + store).

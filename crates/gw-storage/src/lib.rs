@@ -23,7 +23,7 @@
 //!   [`create_run`](Store::create_run), [`set_run_status`](Store::set_run_status),
 //!   [`checkpoint`](Store::checkpoint), and [`resume_cursor`](Store::resume_cursor) for crash
 //!   recovery.
-//! - **export** — [`export_parquet`] / [`export_parquet_bytes`]: a lossless columnar dump of
+//! - **export** — [`Store::publish_export`] / [`export_parquet_bytes`]: a lossless columnar dump of
 //!   admitted records to Parquet (one canonical `messages_json` column per row, versioned by
 //!   [`gw_schema::ExportSchemaVersion`]), returning a [`gw_schema::ExportManifest`].
 //!
@@ -38,7 +38,7 @@
 //!   queryable edges. A dedicated DAG + recursive-CTE lineage queries are a follow-up
 //!   (DATA-SCHEMA §4.5). selene-db and AionforgeMemory are derived/advisory only and are NOT on
 //!   the v1 write path.
-//! - **`push_to_hub` / the Hub exporter** — `export_parquet` writes a local shard; pushing to a
+//! - **`push_to_hub` / the Hub exporter** — `Store::publish_export` writes a local shard; pushing to a
 //!   versioned HF dataset revision is a follow-up.
 //! - **Dedup / MinHash / decontamination** and the embedding vector index — separate concerns.
 //!
@@ -61,16 +61,22 @@
 //! # }
 //! ```
 
+mod artifact;
 mod cache;
 mod error;
 mod export;
+mod publication;
+mod receipts;
 mod records;
 mod runledger;
 mod store;
 
+pub use artifact::{ARTIFACT_METADATA_KEY, ArtifactVerification, ExportPlan, verify_artifact};
 pub use cache::{completion_hash, prompt_hash, prompts_hash, record_hash};
 pub use error::{Result, StorageError};
-pub use export::{clean_messages_json, export_parquet, export_parquet_bytes};
+pub use export::{clean_messages_json, export_parquet_bytes};
+pub use publication::{ExportPublication, PublicationDisposition};
+pub use receipts::ExportPurpose;
 pub use records::RecordFilter;
 pub use runledger::{ResumePoint, RunStatus};
 pub use store::{Store, now_rfc3339};

@@ -90,7 +90,8 @@ async fn correct_numeric_answer_passes_and_admits() {
         .unwrap();
 
     assert_eq!(report.admitted, 1, "a correct numeric answer is admitted");
-    assert_eq!(report.exported, 1);
+    assert_eq!(report.exported, 0);
+    assert_eq!(report.admitted, 1);
     assert_eq!(report.rejected, 0);
 
     let all = store

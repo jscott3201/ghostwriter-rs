@@ -162,7 +162,7 @@ mod tests {
     #[tokio::test]
     async fn migrations_apply_in_memory() {
         let store = Store::open_in_memory().await.unwrap();
-        // All five tables exist after migration.
+        // The record plane and artifact receipt ledger exist after migration.
         let names: Vec<(String,)> =
             sqlx::query_as("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
                 .fetch_all(store.pool())
@@ -172,6 +172,7 @@ mod tests {
         for expected in [
             "cache",
             "checkpoints",
+            "export_receipts",
             "lifecycle_history",
             "records",
             "runs",

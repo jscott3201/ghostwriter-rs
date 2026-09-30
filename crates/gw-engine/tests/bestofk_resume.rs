@@ -1,6 +1,6 @@
 //! E1 — best-of-k crash-resume must NOT double-admit. HERMETIC: fakes + `Store::open_in_memory`.
 //!
-//! Simulates the crash window where the best sibling reached `Exported` but the shard cursor had not
+//! Simulates the crash window where the best sibling reached `Formatted` but the shard cursor had not
 //! committed and the runner-up was still at `Judged`. On resume `run_group` re-runs over the same
 //! group; the E1 guard must recognize the established winner and NEVER elect a second one.
 
@@ -118,7 +118,7 @@ impl Provider for SeedBarrierStatusTeacher {
     }
 }
 
-/// A k=2 group is driven once (sibling0 admitted→Exported, sibling1 retained→Rejected). We then force
+/// A k=2 group is driven once (sibling0 admitted→Formatted, sibling1 retained→Rejected). We then force
 /// the precise crash window — reset sibling1 back to `Judged` — and re-run the group. The E1 guard must
 /// keep sibling0 as the sole winner and drive sibling1 to Rejected, never admitting a SECOND sibling.
 #[tokio::test]
@@ -149,7 +149,7 @@ async fn best_of_k_resume_does_not_double_admit() {
     let source = InMemorySeedSource::new(vec![good_candidate("What is 12*8?")], 1);
     let item = source.items_for_shard(0).remove(0);
 
-    // First pass: drives the group. Exactly one admit (sibling0 → Exported), one retained (sibling1).
+    // First pass: drives the group. Exactly one admit (sibling0 → Formatted), one retained (sibling1).
     let cancel = no_cancel();
     let out1 = run_group("run-e1", 0, &item, &cl, &area, control(&cancel))
         .await
@@ -165,11 +165,11 @@ async fn best_of_k_resume_does_not_double_admit() {
     assert_eq!(all1.len(), 2);
     let exported1 = all1
         .iter()
-        .filter(|r| r.lifecycle.state == LifecycleState::Exported)
+        .filter(|r| r.lifecycle.state == LifecycleState::Formatted)
         .count();
     assert_eq!(
         exported1, 1,
-        "exactly one sibling exported on the first pass"
+        "exactly one sibling formatted on the first pass"
     );
 
     // Identify the runner-up (the non-winner sibling) and force it back to `Judged` — the exact state a
@@ -191,7 +191,7 @@ async fn best_of_k_resume_does_not_double_admit() {
 
     // RESUME: re-run the group. The teacher must NOT be called again (siblings already persisted;
     // ScriptedTeacher max_calls=2 would panic on a 3rd call). The E1 guard recognizes sibling0 is
-    // already Exported → it is the established winner; sibling1 is driven to Rejected, NOT admitted.
+    // already Formatted → it is the established winner; sibling1 is driven to Rejected, NOT admitted.
     let out2 = run_group("run-e1", 0, &item, &cl, &area, control(&cancel))
         .await
         .unwrap();
@@ -229,7 +229,7 @@ async fn best_of_k_resume_does_not_double_admit() {
 /// F1 (H-C regression): in a k>1 group, a record-level fault on a LATER sibling must NEVER clobber the
 /// healthy earlier sibling. With k=2: c0 generates + drives to `Judged`, then c1's generation faults
 /// (record-level). The faulting c1 is parked at `Error` (correctly attributed to ITS id); c0 is admitted
-/// and driven to `Exported` — never overwritten. (Pre-fix `park_item_errored` hardcoded `c0` and the
+/// and driven to `Formatted` — never overwritten. (Pre-fix `park_item_errored` hardcoded `c0` and the
 /// `is_terminal` guard did not cover `Judged`, so the healthy winner was clobbered to `Error`.)
 #[tokio::test]
 async fn later_sibling_fault_does_not_clobber_healthy_sibling() {
@@ -443,10 +443,10 @@ async fn systemic_fatal_waits_for_sibling_fanout_to_settle() {
 
 /// F3 (H-A): on resume the established-winner guard must DRIVE the winner forward, not strand it. We
 /// force the winner back to `Admitted` (the crash window between admission and export); on resume the
-/// guard must drive it to `Exported`, not return it undriven (which left `report.exported` short and the
+/// guard must drive it to `Formatted`, not return it undriven (which left `report.exported` short and the
 /// record stuck short of the dataset's terminal-good state).
 #[tokio::test]
-async fn resume_drives_established_winner_to_exported() {
+async fn resume_drives_established_winner_to_formatted() {
     let store = Store::open_in_memory().await.unwrap();
     store.create_run("run-f3", "{}", Some(25.0)).await.unwrap();
     let teacher = Arc::new(ScriptedTeacher::new(
@@ -484,7 +484,7 @@ async fn resume_drives_established_winner_to_exported() {
         LifecycleState::Admitted
     );
 
-    // RESUME: the F3 guard recognizes the established winner and DRIVES it forward to Exported (the
+    // RESUME: the F3 guard recognizes the established winner and DRIVES it forward to Formatted (the
     // teacher is NOT re-spent — ScriptedTeacher max_calls=2 would panic on a 3rd call).
     let out2 = run_group("run-f3", 0, &item, &cl, &area, control(&cancel))
         .await
@@ -496,7 +496,7 @@ async fn resume_drives_established_winner_to_exported() {
     );
     assert_eq!(
         store.get(&winner).await.unwrap().lifecycle.state,
-        LifecycleState::Exported,
-        "F3: the established winner is driven to Exported on resume, not stranded at Admitted"
+        LifecycleState::Formatted,
+        "F3: the established winner is driven to Formatted on resume, not stranded at Admitted"
     );
 }

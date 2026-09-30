@@ -60,7 +60,7 @@ pub enum LifecycleState {
     Rejected,
     /// projected to target template(s) per `CotPolicy`.
     Formatted,
-    /// written into a versioned shard; `dataset_version` + Hub SHA attached.
+    /// acknowledged in a verified local artifact; its identity is recorded in export history.
     Exported,
     /// terminal-until-requeue; carries last error + attempt count.
     Error,

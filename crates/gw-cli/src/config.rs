@@ -95,7 +95,7 @@ pub struct ExportSettings {
     /// Whether reasoning enters the supervised loss region on export.
     #[serde(default)]
     pub cot: CotPolicy,
-    /// Optional dataset version recorded in the sidecar manifest.
+    /// Optional dataset version fixed in the artifact footer before encoding.
     #[serde(default)]
     pub dataset_version: Option<semver::Version>,
 }

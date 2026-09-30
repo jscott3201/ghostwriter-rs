@@ -108,7 +108,8 @@ async fn attainable_decisive_subset_is_admitted_by_engine_reconciliation() {
         .run("subset", &one_item_source(), CancellationToken::new())
         .await
         .unwrap();
-    assert_eq!(report.exported, 1);
+    assert_eq!(report.exported, 0);
+    assert_eq!(report.admitted, 1);
     let rec = store
         .get(&gw_engine::record_id("subset", 0, 0, 0, 0))
         .await
@@ -146,7 +147,8 @@ async fn documented_assumed_prior_admits_one_of_three_candidates_with_two_judges
         .await
         .unwrap();
     assert_eq!(report.admitted, 1);
-    assert_eq!(report.exported, 1);
+    assert_eq!(report.exported, 0);
+    assert_eq!(report.admitted, 1);
     assert_eq!(report.rejected, 2);
     assert_eq!(teacher.call_count(), 3);
 }

@@ -75,11 +75,13 @@ async fn export_writes_a_valid_parquet_with_admitted_records() {
 
     // The handler writes the file.
     let args = ExportArgs {
+        resume_publication: None,
+        dataset_version: None,
         db: db.clone(),
-        out: out.clone(),
+        out: Some(out.clone()),
         run_id: Some("run-1".into()),
-        format: ExportFormat::ChatMl,
-        cot: ExportCot::Supervised,
+        format: Some(ExportFormat::ChatMl),
+        cot: Some(ExportCot::Supervised),
     };
     export(args).await.expect("export handler runs");
 
@@ -159,11 +161,13 @@ async fn export_without_run_filter_exports_every_admitted_record() {
 
     // No run_id filter → both runs' admitted records are exported.
     let args = ExportArgs {
+        resume_publication: None,
+        dataset_version: None,
         db: db.clone(),
-        out: out.clone(),
+        out: Some(out.clone()),
         run_id: None,
-        format: ExportFormat::ChatMl,
-        cot: ExportCot::Supervised,
+        format: Some(ExportFormat::ChatMl),
+        cot: Some(ExportCot::Supervised),
     };
     export(args).await.expect("export handler runs");
     assert!(out.exists());
@@ -230,11 +234,13 @@ async fn cli_export_file_matches_the_lossless_in_memory_shard() {
     drop(store);
 
     let args = ExportArgs {
+        resume_publication: None,
+        dataset_version: None,
         db: db.clone(),
-        out: out.clone(),
+        out: Some(out.clone()),
         run_id: Some("run-1".into()),
-        format: ExportFormat::Gemma4,
-        cot: ExportCot::Supervised,
+        format: Some(ExportFormat::Gemma4),
+        cot: Some(ExportCot::Supervised),
     };
     export(args).await.expect("export handler runs");
 
@@ -244,7 +250,7 @@ async fn cli_export_file_matches_the_lossless_in_memory_shard() {
         .scan(&RecordFilter::new().run_id("run-1"))
         .await
         .expect("scan");
-    let (expected_bytes, expected_manifest) = export_parquet_bytes(
+    let (_, expected_manifest) = export_parquet_bytes(
         &scanned,
         gw_schema::TrlFormat::Gemma4,
         gw_schema::CotPolicy::Supervised,
@@ -264,9 +270,17 @@ async fn cli_export_file_matches_the_lossless_in_memory_shard() {
         PARQUET_MAGIC,
         "the CLI artifact is a Parquet file"
     );
+    let gw_storage::ArtifactVerification::Verified(artifact) =
+        gw_storage::verify_artifact(&out).unwrap()
+    else {
+        panic!("missing metadata");
+    };
+    assert_eq!(artifact.manifest, expected_manifest);
     assert_eq!(
-        written, expected_bytes,
-        "the CLI artifact must be the same shard the storage exporter encodes"
+        artifact.scope,
+        gw_schema::ExportScope::Run {
+            run_id: "run-1".into()
+        }
     );
 
     let _ = std::fs::remove_file(&out);

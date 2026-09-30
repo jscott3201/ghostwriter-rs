@@ -85,11 +85,11 @@ async fn crash_resume_reenters_at_last_persisted_state() {
         "a mid-flight record re-enters at AssistantGenerated → Verified, not from Seeded"
     );
 
-    // Driving it the rest of the way reaches Exported with NO second teacher call.
+    // Driving it the rest of the way reaches Formatted with NO second teacher call.
     let done = drive(stepped, &cl, &area, &CancellationToken::new())
         .await
         .unwrap();
-    assert_eq!(done.lifecycle.state, LifecycleState::Exported);
+    assert_eq!(done.lifecycle.state, LifecycleState::Formatted);
     assert_eq!(
         teacher.call_count(),
         1,
@@ -122,12 +122,13 @@ async fn restart_does_not_respend_the_teacher() {
     let engine = Engine::new(cl, area, 4);
     let source = one_item_source();
 
-    // First run drives to Exported (1 teacher call).
+    // First run drives to Formatted (1 teacher call).
     let r1 = engine
         .run("run-1", &source, CancellationToken::new())
         .await
         .unwrap();
-    assert_eq!(r1.exported, 1);
+    assert_eq!(r1.exported, 0);
+    assert_eq!(r1.admitted, 1);
     assert_eq!(teacher.call_count(), 1);
 
     // Re-run the SAME run id over the SAME source: every record is already persisted past
@@ -136,10 +137,8 @@ async fn restart_does_not_respend_the_teacher() {
         .run("run-1", &source, CancellationToken::new())
         .await
         .unwrap();
-    assert_eq!(
-        r2.exported, 1,
-        "the re-run still reports the exported record"
-    );
+    assert_eq!(r2.exported, 0);
+    assert_eq!(r2.admitted, 1, "the re-run still reports the ready record");
     assert_eq!(
         teacher.call_count(),
         1,
@@ -256,8 +255,8 @@ async fn step_replay_is_deterministic() {
         a, b,
         "replaying step() over the same inputs yields the same transition"
     );
-    // And concretely: a clean 0.9 accept lands at Exported with aggregate 0.9.
-    assert_eq!(a.0, LifecycleState::Exported);
+    // And concretely: a clean 0.9 accept lands at Formatted with aggregate 0.9.
+    assert_eq!(a.0, LifecycleState::Formatted);
     assert_eq!(a.1, Some(0.9));
 }
 
@@ -354,19 +353,19 @@ async fn executor_resumes_from_shard_checkpoint() {
         .scan(
             &RecordFilter::new()
                 .run_id("run-c")
-                .lifecycle_state(LifecycleState::Exported),
+                .lifecycle_state(LifecycleState::Formatted),
         )
         .await
         .unwrap();
     assert_eq!(
         exported.len(),
         2,
-        "both items reached Exported across the two runs"
+        "both items reached Formatted across the two runs"
     );
 }
 
 /// Concurrency: a multi-shard run drives all shards concurrently over ONE shared SQLite store without
-/// deadlock or lost writes. Each of the 6 items (across 3 shards) reaches Exported exactly once.
+/// deadlock or lost writes. Each of the 6 items (across 3 shards) reaches Formatted exactly once.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn multi_shard_run_is_concurrent_and_consistent() {
     let store = Store::open_in_memory().await.unwrap();
@@ -399,9 +398,10 @@ async fn multi_shard_run_is_concurrent_and_consistent() {
         .run("run-multi", &source, CancellationToken::new())
         .await
         .unwrap();
+    assert_eq!(report.exported, 0);
     assert_eq!(
-        report.exported, 6,
-        "all six items exported across the concurrent shards"
+        report.admitted, 6,
+        "all six items formatted across the concurrent shards"
     );
     assert!(report.completed);
 
@@ -409,7 +409,7 @@ async fn multi_shard_run_is_concurrent_and_consistent() {
         .scan(
             &RecordFilter::new()
                 .run_id("run-multi")
-                .lifecycle_state(LifecycleState::Exported),
+                .lifecycle_state(LifecycleState::Formatted),
         )
         .await
         .unwrap();
@@ -514,7 +514,7 @@ async fn budget_gated_revise_is_not_lost_and_completes_on_relaunch() {
     );
 
     // Launch 2: fresh budget (cap 25.0). The item re-drives: the original is at Revising → the bounded
-    // retry now generates (2nd teacher call), is judged Accept → the retry completes to Exported.
+    // retry now generates (2nd teacher call), is judged Accept → the retry completes to Formatted.
     let cl2 = clients(
         store.clone(),
         teacher.clone(),
@@ -532,11 +532,12 @@ async fn budget_gated_revise_is_not_lost_and_completes_on_relaunch() {
         2,
         "the relaunch generates the bounded retry (never re-spent the original)"
     );
+    assert_eq!(report2.exported, 0);
     assert_eq!(
-        report2.exported, 1,
-        "the retry completes to Exported on the relaunch"
+        report2.admitted, 1,
+        "the retry completes to Formatted on the relaunch"
     );
-    // The original stays at Revising (the audit row); the retry (attempt 1) is the Exported record.
+    // The original stays at Revising (the audit row); the retry (attempt 1) is the Formatted record.
     let all = store
         .scan(&RecordFilter::new().run_id("run-bgr"))
         .await
@@ -545,7 +546,7 @@ async fn budget_gated_revise_is_not_lost_and_completes_on_relaunch() {
         .iter()
         .find(|r| r.record_id.contains("-a1-"))
         .expect("the attempt-1 retry exists");
-    assert_eq!(retry.lifecycle.state, LifecycleState::Exported);
+    assert_eq!(retry.lifecycle.state, LifecycleState::Formatted);
 }
 
 /// E3: the budget meter is REHYDRATED from persisted spend on a restart — a fresh process does not
@@ -655,8 +656,9 @@ async fn record_level_teacher_fault_is_isolated_run_continues() {
         report.errored, 1,
         "the faulting record is parked at Error and counted"
     );
+    assert_eq!(report.exported, 0);
     assert_eq!(
-        report.exported, 1,
+        report.admitted, 1,
         "the OTHER record still completed — the run continued"
     );
 

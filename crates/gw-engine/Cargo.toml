@@ -28,6 +28,7 @@ tracing.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+sqlx.workspace = true
 arrow.workspace = true
 parquet.workspace = true
 tokio = { workspace = true, features = ["full", "test-util"] }

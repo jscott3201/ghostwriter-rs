@@ -1,4 +1,4 @@
-//! End-of-run shard export tests: opt-in Parquet write, skip cases, and non-fatal export failure.
+//! End-of-run shard export tests: opt-in Parquet write, empty artifacts, and propagated publication failure.
 
 mod common;
 
@@ -69,6 +69,13 @@ fn exported_manifest(events: &[EngineEvent]) -> Option<&ExportManifest> {
         EngineEvent::ShardExported { manifest, .. } => Some(manifest),
         _ => None,
     })
+}
+
+fn embedded_manifest(dst: &Path) -> ExportManifest {
+    match gw_storage::verify_artifact(dst).unwrap() {
+        gw_storage::ArtifactVerification::Verified(artifact) => artifact.manifest,
+        _ => panic!("missing artifact metadata"),
+    }
 }
 
 fn exported_record_ids(dst: &Path) -> Vec<String> {
@@ -167,25 +174,24 @@ async fn completed_run_writes_parquet_manifest_and_export_event_before_finish() 
     assert_eq!(expected_record_ids.len(), 1);
     assert_eq!(exported_record_ids(&dst), expected_record_ids);
     let sidecar = sidecar_path(&dst);
-    assert!(sidecar.exists(), "manifest sidecar is written");
+    assert!(!sidecar.exists(), "the artifact is self-contained");
 
-    let sidecar_manifest: ExportManifest =
-        serde_json::from_slice(&std::fs::read(&sidecar).unwrap()).unwrap();
-    assert_eq!(sidecar_manifest.n_admitted, 1);
+    let footer_manifest: ExportManifest = embedded_manifest(&dst);
+    assert_eq!(footer_manifest.n_admitted, 1);
     assert_eq!(
-        sidecar_manifest.dataset_version,
+        footer_manifest.dataset_version,
         Some(semver::Version::new(1, 2, 3))
     );
-    assert_eq!(sidecar_manifest.target, TrlFormat::ChatML);
-    assert_eq!(sidecar_manifest.cot_policy, CotPolicy::Masked);
+    assert_eq!(footer_manifest.target, TrlFormat::ChatML);
+    assert_eq!(footer_manifest.cot_policy, CotPolicy::Masked);
     assert_eq!(
-        sidecar_manifest.column_schema_version,
+        footer_manifest.column_schema_version,
         gw_schema::ExportSchemaVersion::CURRENT,
-        "the sidecar names the column contract a reader needs"
+        "the footer names the column contract a reader needs"
     );
 
     // The file on disk must decode back into the same conversation the store holds, field for
-    // field — the sidecar claim is only worth something if the bytes agree with it.
+    // field — the footer claim is only worth something if the bytes agree with it.
     let stored = store
         .scan(&RecordFilter::new().run_id("run-export"))
         .await
@@ -198,7 +204,7 @@ async fn completed_run_writes_parquet_manifest_and_export_event_before_finish() 
 
     let events = drain_events(&mut rx);
     let event_manifest = exported_manifest(&events).expect("ShardExported emitted");
-    assert_eq!(event_manifest, &sidecar_manifest);
+    assert_eq!(event_manifest, &footer_manifest);
     let export_pos = event_position(&events, |event| {
         matches!(
             event,
@@ -278,13 +284,12 @@ async fn best_of_k_export_excludes_retained_admissible_runner_up() {
         .expect("one retained runner-up");
     assert_eq!(runner_up.judging.verdict, Some(Verdict::Admit));
 
-    let sidecar_manifest: ExportManifest =
-        serde_json::from_slice(&std::fs::read(sidecar_path(&dst)).unwrap()).unwrap();
+    let footer_manifest: ExportManifest = embedded_manifest(&dst);
     assert_eq!(
-        sidecar_manifest.n_records, 2,
+        footer_manifest.n_records, 2,
         "n_records = whole-run population (winner + retained runner-up)"
     );
-    assert_eq!(sidecar_manifest.n_admitted as usize, report.admitted);
+    assert_eq!(footer_manifest.n_admitted as usize, report.admitted);
     let row_ids = exported_record_ids(&dst);
     assert_eq!(row_ids.len(), report.admitted);
     assert_eq!(row_ids, vec![winner.record_id.clone()]);
@@ -295,7 +300,7 @@ async fn best_of_k_export_excludes_retained_admissible_runner_up() {
 
     let events = drain_events(&mut rx);
     let event_manifest = exported_manifest(&events).expect("ShardExported emitted");
-    assert_eq!(event_manifest, &sidecar_manifest);
+    assert_eq!(event_manifest, &footer_manifest);
 
     cleanup_export(&dst);
 }
@@ -333,7 +338,7 @@ async fn halted_run_skips_shard_export_even_with_admitted_records() {
 }
 
 #[tokio::test]
-async fn zero_admitted_run_skips_shard_export() {
+async fn zero_admitted_run_publishes_an_empty_artifact() {
     let dst = temp_path("zero-admitted.parquet");
     cleanup_export(&dst);
     let store = Store::open_in_memory().await.unwrap();
@@ -352,39 +357,39 @@ async fn zero_admitted_run_skips_shard_export() {
     assert!(report.completed);
     assert_eq!(report.admitted, 0);
     assert_eq!(report.rejected, 1);
-    assert!(!dst.exists());
+    assert!(dst.exists());
+    assert!(exported_record_ids(&dst).is_empty());
+    assert_eq!(embedded_manifest(&dst).n_admitted, 0);
     assert!(!sidecar_path(&dst).exists());
     let events = drain_events(&mut rx);
     assert!(
-        !events.iter().any(|event| matches!(
-            event,
-            EngineEvent::ShardExported { .. } | EngineEvent::ShardExportFailed { .. }
-        )),
-        "runs with no admitted records skip auto-export"
+        events
+            .iter()
+            .any(|event| matches!(event, EngineEvent::ShardExported { .. })),
+        "runs with no admitted records publish an empty artifact"
     );
 
     cleanup_export(&dst);
 }
 
 #[tokio::test]
-async fn export_failure_emits_event_and_keeps_run_successful() {
+async fn export_failure_emits_event_and_fails_the_run() {
     let missing_parent = temp_path("missing-parent");
     let dst = missing_parent.join("out.parquet");
     let store = Store::open_in_memory().await.unwrap();
     let (sink, mut rx) = EventSink::subscribe();
     let engine = accepting_engine(store, 25.0, sink, Some(export_spec(dst.clone())));
 
-    let report = engine
+    let error = engine
         .run(
             "run-export-fail",
             &one_item_source(),
             CancellationToken::new(),
         )
         .await
-        .unwrap();
+        .unwrap_err();
 
-    assert!(report.completed);
-    assert_eq!(report.admitted, 1);
+    assert!(error.to_string().contains("io error"));
     assert!(!dst.exists());
     let events = drain_events(&mut rx);
     let failure_pos = event_position(&events, |event| {
@@ -395,7 +400,7 @@ async fn export_failure_emits_event_and_keeps_run_successful() {
         matches!(
             event,
             EngineEvent::RunFinished {
-                completed: true,
+                completed: false,
                 ..
             }
         )
@@ -408,7 +413,7 @@ async fn export_failure_emits_event_and_keeps_run_successful() {
 }
 
 #[tokio::test]
-async fn sidecar_write_failure_emits_event_and_keeps_orphan_parquet() {
+async fn existing_sidecar_is_ignored_and_preserved() {
     let dst = temp_path("sidecar-failure.parquet");
     cleanup_export(&dst);
     let sidecar = sidecar_path(&dst);
@@ -428,19 +433,18 @@ async fn sidecar_write_failure_emits_event_and_keeps_orphan_parquet() {
 
     assert!(report.completed);
     assert_eq!(report.admitted, 1);
-    assert!(
-        dst.exists(),
-        "parquet write succeeds before sidecar failure"
-    );
+    assert!(dst.exists(), "self-contained parquet is published");
     assert!(
         std::fs::metadata(&dst).unwrap().len() > 0,
-        "orphan parquet intentionally remains for inspection"
+        "published artifact has a complete footer"
     );
     let events = drain_events(&mut rx);
-    let failure_pos = event_position(&events, |event| {
-        matches!(event, EngineEvent::ShardExportFailed { error, .. } if error.contains("io error"))
+    assert!(sidecar.is_dir(), "pre-existing sidecar is untouched");
+    assert_eq!(embedded_manifest(&dst).n_admitted, 1);
+    let export_pos = event_position(&events, |event| {
+        matches!(event, EngineEvent::ShardExported { .. })
     })
-    .expect("ShardExportFailed emitted");
+    .expect("ShardExported emitted");
     let finish_pos = event_position(&events, |event| {
         matches!(
             event,
@@ -452,8 +456,8 @@ async fn sidecar_write_failure_emits_event_and_keeps_orphan_parquet() {
     })
     .expect("RunFinished emitted");
     assert!(
-        failure_pos < finish_pos,
-        "ShardExportFailed must be emitted before RunFinished"
+        export_pos < finish_pos,
+        "ShardExported must be emitted before RunFinished"
     );
 
     cleanup_export(&dst);

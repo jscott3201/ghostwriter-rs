@@ -20,7 +20,9 @@ use gw_schema::{
     CotPolicy, ExportManifest, LifecycleState, Oracle, ReasoningDetail, TrlFormat, Verdict,
     VerificationContract, VerificationKind,
 };
-use gw_storage::{RecordFilter, Store, export_parquet_bytes};
+use gw_storage::{
+    ArtifactVerification, RecordFilter, Store, export_parquet_bytes, verify_artifact,
+};
 use tokio_util::sync::CancellationToken;
 
 use common::{cleanup_db, unique_temp_path};
@@ -92,7 +94,6 @@ async fn standalone_export_matches_automatic_best_of_k_and_replay() {
     let db = unique_temp_path("best-of-k.sqlite");
     let automatic = unique_temp_path("automatic.parquet");
     let standalone = unique_temp_path("standalone.parquet");
-    let sidecar = automatic.with_extension("parquet.manifest.json");
     let store = Store::open(&db).await.unwrap();
     let teacher = Arc::new(ScriptedProvider(Mutex::new(VecDeque::from([
         teacher_answer("96"),
@@ -182,21 +183,23 @@ async fn standalone_export_matches_automatic_best_of_k_and_replay() {
         .find(|r| r.lifecycle.state == LifecycleState::Rejected)
         .unwrap();
     assert_ne!(winner.hashes.record_hash, loser.hashes.record_hash);
-    let (winner_bytes, winner_manifest) = export_parquet_bytes(
+    let (_, winner_manifest) = export_parquet_bytes(
         std::slice::from_ref(winner),
         TrlFormat::ChatML,
         CotPolicy::Masked,
     )
     .await
     .unwrap();
-    let auto_manifest: ExportManifest =
-        serde_json::from_slice(&std::fs::read(&sidecar).unwrap()).unwrap();
+    let ArtifactVerification::Verified(auto_artifact) = verify_artifact(&automatic).unwrap() else {
+        panic!("missing automatic metadata");
+    };
+    let auto_manifest = auto_artifact.manifest.clone();
+    let automatic_bytes = std::fs::read(&automatic).unwrap();
     assert_eq!((auto_manifest.n_records, auto_manifest.n_admitted), (2, 1));
     assert_eq!(
         auto_manifest.build_inputs_hash,
         winner_manifest.build_inputs_hash
     );
-    assert_eq!(std::fs::read(&automatic).unwrap(), winner_bytes);
 
     for run_filter in [Some("k2"), None] {
         let cli_manifest = standalone_export(&db, &standalone, run_filter);
@@ -204,7 +207,18 @@ async fn standalone_export_matches_automatic_best_of_k_and_replay() {
             cli_manifest, auto_manifest,
             "standalone and automatic selection must agree"
         );
-        assert_eq!(std::fs::read(&standalone).unwrap(), winner_bytes);
+        let ArtifactVerification::Verified(actual) = verify_artifact(&standalone).unwrap() else {
+            panic!("missing standalone metadata");
+        };
+        assert_eq!(actual.manifest, auto_manifest);
+        if run_filter.is_some() {
+            assert_eq!(actual, auto_artifact);
+        } else {
+            assert_ne!(
+                actual.artifact_id, auto_artifact.artifact_id,
+                "scope participates in identity"
+            );
+        }
     }
 
     // Replaying the completed run cannot re-spend or change either shard or the retained audit row.
@@ -216,12 +230,12 @@ async fn standalone_export_matches_automatic_best_of_k_and_replay() {
         .unwrap();
     assert!(replay.completed);
     assert_eq!((replay.admitted, replay.rejected), (1, 1));
-    assert_eq!(std::fs::read(&automatic).unwrap(), winner_bytes);
+    assert_eq!(std::fs::read(&automatic).unwrap(), automatic_bytes);
     assert_eq!(
         standalone_export(&db, &standalone, Some("k2")),
         auto_manifest
     );
-    assert_eq!(std::fs::read(&standalone).unwrap(), winner_bytes);
+    assert_eq!(std::fs::read(&standalone).unwrap(), automatic_bytes);
     assert_eq!(
         store.scan(&RecordFilter::new().run_id("k2")).await.unwrap(),
         records
@@ -229,7 +243,7 @@ async fn standalone_export_matches_automatic_best_of_k_and_replay() {
 
     drop(engine);
     drop(store);
-    for path in [automatic, standalone, sidecar] {
+    for path in [automatic, standalone] {
         std::fs::remove_file(path).unwrap();
     }
     cleanup_db(&db);

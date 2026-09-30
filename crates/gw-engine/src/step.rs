@@ -35,7 +35,7 @@
 //!   correlation prior, persisting the `Judging` block.
 //! - `Judged → {Admitted | Rejected | Revising | NeedsReview}` — reconcile the `gw-judge::Decision`
 //!   to the lifecycle (the verdict→lifecycle mapping).
-//! - `Admitted → Formatted → Exported` — render + mark exported. `NeedsReview` / `Rejected` /
+//! - `Admitted → Formatted` — render and wait for engine artifact publication. `NeedsReview` / `Rejected` /
 //!   `Revising` / `Error` are terminal for the automated pipeline (Revising re-enters generation via
 //!   `crate::revise`; NeedsReview LEAVES the pipeline — not exported, not counted admitted).
 
@@ -78,7 +78,6 @@ pub async fn step(
         LifecycleState::Verified => judge(rec, clients, area).await,
         LifecycleState::Judged => reconcile(rec, clients, area).await,
         LifecycleState::Admitted => format_record(rec, clients).await,
-        LifecycleState::Formatted => export_record(rec, clients).await,
         // Terminal-for-step states: the executor handles Revising (re-enter generation) and the
         // genuinely-terminal states are returned unchanged.
         LifecycleState::Seeded
@@ -86,6 +85,7 @@ pub async fn step(
         | LifecycleState::Revising
         | LifecycleState::NeedsReview
         | LifecycleState::Rejected
+        | LifecycleState::Formatted
         | LifecycleState::Exported
         | LifecycleState::Error => Ok(rec),
     }
@@ -93,12 +93,13 @@ pub async fn step(
 
 /// `true` when a record needs no further automated `step` driving: a genuinely terminal state
 /// (`Exported` / `Rejected` / `NeedsReview` / `Error`) OR a handoff state the executor owns
-/// (`Revising`, re-entered via `crate::revise`). The driver loop stops calling `step` here.
+/// (`Revising`, re-entered via `crate::revise`, or `Formatted`, awaiting artifact publication). The driver loop stops calling `step` here.
 #[must_use]
 pub fn is_terminal(state: LifecycleState) -> bool {
     matches!(
         state,
         LifecycleState::Exported
+            | LifecycleState::Formatted
             | LifecycleState::Rejected
             | LifecycleState::NeedsReview
             | LifecycleState::Error
@@ -397,14 +398,6 @@ async fn format_record(rec: TrainingRecord, clients: &Clients) -> Result<Trainin
         CotPolicy::Supervised,
     )?;
     persist_envelope_and_advance(&rec, clients, LifecycleState::Formatted, None).await?;
-    reload(rec, clients).await
-}
-
-/// `Formatted → Exported`: mark the record exported. The actual columnar shard write is the
-/// executor's batch step (`Store::export_parquet` over all admitted records); here the per-record
-/// lifecycle reaches its terminal-good state.
-async fn export_record(rec: TrainingRecord, clients: &Clients) -> Result<TrainingRecord> {
-    persist_envelope_and_advance(&rec, clients, LifecycleState::Exported, None).await?;
     reload(rec, clients).await
 }
 

@@ -15,6 +15,19 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum StorageError {
+    /// An artifact, receipt, or selected source snapshot failed integrity validation.
+    #[error("export integrity error: {0}")]
+    Export(String),
+
+    /// A prepared publication failed; its durable ID supports exact provider-free recovery.
+    #[error("export publication {publication_id} failed: {source}")]
+    Publication {
+        /// Durable local receipt identity, distinct from content identity.
+        publication_id: String,
+        /// The original failure, retained without replacement by cleanup errors.
+        #[source]
+        source: Box<StorageError>,
+    },
     /// A SQL query, connection, or transaction failed.
     #[error("sqlx error: {0}")]
     Sqlx(#[from] sqlx::Error),

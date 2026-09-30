@@ -68,7 +68,7 @@ pub enum MultiTurnLoss {
 ///   `reasoning_details`, `tool_calls` incl. retained `raw_arguments`, `tool_call_id`, `name`).
 ///   `reasoning_json` is REMOVED: it duplicated `messages[i].reasoning` in a second column that
 ///   could only agree with the first by index, so a reorder or a partial rewrite silently forked
-///   the two. `gw_storage::export_parquet` writes this version; see that function's docs for a
+///   the two. `gw_storage::Store::publish_export` writes this version; see that function's docs for a
 ///   worked read-back example.
 ///
 /// v1 → v2 is an intentional BREAK for any consumer reading `reasoning_json` or parsing
@@ -104,10 +104,12 @@ impl Default for ExportSchemaVersion {
 // cluster counts, embedding-spread metrics). Kept as a forward-compatible placeholder so
 // `ExportManifest` compiles with a None-defaulted `diversity` field; NOT defined in Phase 0.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CorpusDiversityStats {}
 
 /// Records an export build so it is reproducible (B9, promoted prose → serde struct).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ExportManifest {
     /// The column/reader contract of the shard this manifest describes. A manifest written before
     /// the field existed omits the key and reads back as

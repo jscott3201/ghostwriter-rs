@@ -16,7 +16,7 @@
 //!          run_group (best-of-k):
 //!            ├─ generate k siblings (teacher spend, content-hash cached, budget-gated)
 //!            ├─ drive each: AssistantGenerated→Verified→Judged→{Admitted|Rejected|Revising|NeedsReview}
-//!            │             →Formatted→Exported            (persist after EVERY transition)
+//!            │             →Formatted→Exported            (verified artifact + receipt at export)
 //!            ├─ admit the best by judging.aggregate (verifier gate must pass); RETAIN the rest
 //!            └─ bounded single revise for any Revising member (no second revising)
 //!          commit shard cursor (checkpoint)
