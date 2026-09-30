@@ -26,7 +26,7 @@ fn rich_candidate() -> UserTurnCandidate {
           "reasoning":" thoughts ","reasoning_details":[{"type":"reasoning.text","text":"text","signature":"sig","id":"id","format":"native","index":0},{"type":"reasoning.summary","summary":"summary","id":"sum","format":"native","index":1},{"type":"reasoning.encrypted","data":"cipher","id":"enc","format":"native","index":2}],
           "tool_calls":[{"id":"call-a","function":{"name":"tool","arguments":{"x":1},"raw_arguments":"{ \"x\":1 }"}},{"id":"call-b","function":{"name":"tool","arguments":{"x":2}}}],"tool_call_id":"result-a","name":"tool-result"},
         "seed":{"persona":"persona","taxonomy_node":"node","prompt_template_id":"template","difficulty":"hard"},
-        "contract":{"kind":"numeric_match","oracle":{"oracle":"sandbox_execution","tool_or_sql":"SELECT 1","expected":"NaN"},"answer_marker":"ANSWER:"},
+        "contract":{"answer_policy":"absent","execution_policy":"absent","kind":"numeric_match","oracle":{"oracle":"sandbox_execution","tool_or_sql":"SELECT 1","expected":"NaN"},"answer_marker":"ANSWER:"},
         "answerable":true,"difficulty_targeted":true,"in_scope":true
     })).unwrap()
 }
@@ -348,7 +348,6 @@ async fn effective_requests_and_admission_fields_are_pinned_while_clamps_are_equ
         |a| a.teacher_reasoning_max_tokens = Some(4000),
         |a| a.k = 2,
         |a| a.cot_required = false,
-        |a| a.rule_only_authoritative = true,
         |a| a.rubric.push(' '),
         |a| a.correlation_rho = 0.5,
         |a| a.thresholds.accept_threshold = 0.9,
@@ -469,4 +468,27 @@ async fn invalid_plan_never_registers_a_launch_or_run() {
         assert!(store.run_status("invalid").await.unwrap().is_none());
         assert!(store.model_launches("invalid").await.unwrap().is_empty());
     }
+}
+
+#[test]
+fn task_policies_and_exact_required_test_ids_participate_in_input_identity() {
+    let base = numeric_candidate("compute", "42");
+    let hash = digest(base.clone());
+    for policy in [
+        gw_schema::VerificationPolicy::Absent,
+        gw_schema::VerificationPolicy::Authoritative,
+    ] {
+        let mut changed = base.clone();
+        changed.contract.answer_policy = Some(policy);
+        assert_ne!(hash, digest(changed));
+    }
+    let mut execution = base.clone();
+    execution.contract.execution_policy = Some(gw_schema::VerificationPolicy::Advisory);
+    assert_ne!(hash, digest(execution.clone()));
+    execution.contract.required_tests = vec!["test::node".into()];
+    let original = digest(execution.clone());
+    execution.contract.required_tests[0] = " test::node ".into();
+    assert_ne!(original, digest(execution.clone()));
+    execution.contract.execution_policy = Some(gw_schema::VerificationPolicy::Authoritative);
+    assert_ne!(original, digest(execution));
 }

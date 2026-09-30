@@ -223,43 +223,32 @@ fn resolve_execution_evidence(
         .or_else(|| rec.execution_evidence.clone())
 }
 
-/// `AssistantGenerated → Verified`: run the deterministic verifier rail (pure + injected sandbox +
-/// any injected execution-evidence source).
-///
-/// The per-record `VerificationContract` (kind + oracle) is threaded in from the record envelope
-/// (`rec.verification_contract`, carried from the user-turn candidate by `gw-generate::assemble`), so
-/// BOTH rails run: the always-authoritative reasoning-present hard gate AND the contract's
-/// answer-correctness check (NumericMatch / SetMatch / SqlResultMatch / SchemaShape / RefusalExpected).
-/// A wrong numeric answer or a complied-with adversarial prompt is therefore caught HERE on the
-/// deterministic rail — on the happy path AND on a crash-resume of this edge (the contract is persisted
-/// on the envelope, so the answer rail is not a function of in-memory state). A record with no contract
-/// (`None`) or an `Oracle::None` contract is judge-only for the answer axis; the reasoning gate still
-/// applies. `rule_only_authoritative` (off by default) governs whether a rule non-match hard-rejects
-/// or routes to judge rescue (`rescue_negatives`).
-///
-/// The PRECOMPUTED execution axis runs independently of the contract: a candidate whose correctness
-/// is only knowable by running it carries an external evaluator's report on the envelope, and the
-/// report is resolved (and then persisted) here so the verdict survives the crash-resume of this
-/// edge. The harness never executes anything itself.
+/// Run the task's independently declared answer/execution policies and persist typed facts.
 async fn verify(
     rec: TrainingRecord,
     clients: &Clients,
     area: &AreaConfig,
 ) -> Result<TrainingRecord> {
+    crate::grade::validate_record_verification(&rec, area)?;
     let key = evidence_key(&rec)?;
-    let execution_evidence = resolve_execution_evidence(&rec, clients, &key);
+    let execution_evidence = if rec.verification_contract.as_ref().is_some_and(|contract| {
+        contract.execution_policy == Some(gw_schema::VerificationPolicy::Absent)
+    }) {
+        rec.execution_evidence.clone()
+    } else {
+        resolve_execution_evidence(&rec, clients, &key)
+    };
     let input = VerifierInput {
         messages: &rec.messages,
         reasoning_tokens: rec.cost.reasoning_tokens,
         cot_required: area.cot_required,
-        // Thread the persisted contract so the answer-correctness rail runs (E4): a present-CoT but
-        // wrong-answer record is caught on the deterministic rail, not silently admitted on the panel.
+        // Forward the persisted task policies and oracle so facts and admission consequences
+        // remain explicit on both fresh verification and a resumed generation edge.
         contract: rec.verification_contract.as_ref(),
-        rule_only_authoritative: area.rule_only_authoritative,
         execution_evidence: execution_evidence.as_ref(),
         evidence_key: key,
     };
-    let grade = run_verifier(&input, clients.sandbox.as_ref());
+    let grade = run_verifier(&input, clients.sandbox.as_ref())?;
 
     // Persist the verification block AND the resolved execution report onto the envelope, then
     // advance the lifecycle. Persisting the report is what makes a crash-resume of THIS edge
@@ -279,10 +268,9 @@ async fn judge(
     clients: &Clients,
     area: &AreaConfig,
 ) -> Result<TrainingRecord> {
-    // The verifier rail already ran; re-derive its grade from the persisted verification block so the
-    // hard gate is honored without re-running (pure). The block carries BOTH signals: a proven
-    // failure (`all_passed == false`) and an undecidable deterministic axis (`needs_review`).
-    let verifier_grade = crate::grade::verifier_grade_from_verification(&rec, area);
+    // Reconstruct the gate from supported persisted facts and policy; no oracle or evidence lookup.
+    // Historical boolean projections never establish current observations.
+    let verifier_grade = crate::grade::verifier_grade_from_verification(&rec, area)?;
 
     // Short-circuit on a verifier hard reject — a proven failure sinks the record regardless of the
     // panel (no judge spend) — and on a record the deterministic rail could not decide: a panel
@@ -304,6 +292,7 @@ async fn judge(
     };
 
     let mut updated = rec;
+    updated.verification = outcome.verification;
     updated.judging = outcome.judging;
     persist_envelope_and_advance(&updated, clients, LifecycleState::Judged, None).await?;
     reload(updated, clients).await

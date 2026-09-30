@@ -45,9 +45,9 @@
 //!   checks the complete attempt ledger in the same transaction that commits each intent.
 //!   `ObservationOnly` preserves ordinary bounded concurrency and records available evidence.
 //!   Neither policy reconstructs run spend from per-record teacher cost projections.
-//! - **deterministic answer rail** — the per-record `VerificationContract` is carried on the envelope
-//!   and threaded into the Verify rail, so a wrong answer / complied-with adversarial prompt is caught
-//!   on the deterministic rail (not silently panel-admitted): `step::verify`.
+//! - **task verification policy** — the persisted `VerificationContract` declares independent answer
+//!   and execution policies. Authoritative failures and unknowns stop judge work; advisory facts stay
+//!   factual while the panel proceeds: `step::verify`.
 //! - **no lost work** — an admission-denied bounded revise does NOT commit the shard cursor past its item
 //!   (it can resume after a valid policy change) and `Revising` is a counted non-terminal bucket:
 //!   `executor::Engine::process_item` / `run_shard` / `tally`.
@@ -89,7 +89,10 @@ pub use control::RunControl;
 pub use error::{EngineError, Result};
 pub use event::{DEFAULT_EVENT_CAPACITY, EngineEvent, EventSink};
 pub use executor::{Engine, ExportSpec, RunReport};
-pub use grade::{correlation_prior, decision_from_judging, verifier_grade_from_verification};
+pub use grade::{
+    correlation_prior, decision_from_judging, validate_record_verification,
+    validate_run_verification, verifier_grade_from_verification,
+};
 pub use gw_schema::AccountingPolicy;
 pub use plan::{CapturedSeedPlan, PreparedRun};
 pub use seed::{InMemorySeedSource, SeedItem, SeedSource, record_id};

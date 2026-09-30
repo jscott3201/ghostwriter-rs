@@ -34,6 +34,10 @@ impl CapturedSeedPlan {
             let items = source.items_for_shard(shard as i64);
             let mut seeds = HashSet::new();
             for (ordinal, item) in items.iter().enumerate() {
+                item.candidate
+                    .contract
+                    .validate()
+                    .map_err(|reason| EngineError::Invariant(reason.into()))?;
                 if item.offset != ordinal as u64 || item.offset.checked_add(1).is_none() {
                     return Err(EngineError::Invariant(format!(
                         "seed plan shard {shard}: each offset must equal its vector ordinal and be advanceable"
@@ -48,7 +52,7 @@ impl CapturedSeedPlan {
             shards.push(items);
         }
         let content_hash = gw_storage::canonical_json_hash(
-            &serde_json::json!({"encoding": "seed-plan-v1", "shards": shards}),
+            &serde_json::json!({"encoding": "seed-plan-v2", "shards": shards}),
         )?;
         let identity = InputPlanIdentity {
             content_hash,
@@ -100,7 +104,7 @@ impl PreparedRun {
             input_plan: plan.identity.clone(),
             execution: SemanticDeclaration::new(
                 "gw-engine/generation-admission",
-                "1",
+                "2",
                 crate::behavior::contract(area)?,
             ),
             clients,

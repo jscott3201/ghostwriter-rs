@@ -365,13 +365,41 @@ exactly-once execution. The current SQLite durability settings and receipts do n
 power-loss qualification or provider-invoice reconciliation.
 
 
+### Task verification policy
+
+Each executable `VerificationContract` declares `answer_policy` and `execution_policy` independently:
+
+| Policy | Pass | Fail | Unknown or missing evidence |
+|---|---|---|---|
+| `absent` | Axis is inactive | Axis is inactive | Axis is inactive |
+| `advisory` | Quality panel proceeds | Failure is recorded; panel proceeds | Unknown is recorded; panel proceeds |
+| `authoritative` | Quality panel still required | Reject before judge calls | NeedsReview before judge calls |
+
+An authoritative failure takes precedence over an unknown result on another axis. Required plaintext
+reasoning remains an authoritative gate. Plain prompt files declare both task axes `absent`.
+
+Active answer policies require a supported comparator/oracle combination. Named-test authoritative
+execution requires nonempty task-owned `required_tests`, with unique nonblank IDs matched verbatim.
+The full captured plan is validated before teacher dispatch, including retry entry points. A valid
+but unavailable sandbox or evidence source produces Unknown. Execution reports must match the exact
+run, record, and completion hash; their own coverage list cannot reduce the task's requirements.
+
+Verification persists typed Pass/Fail/Unknown observations, bounded reasons, applied policy, and an
+interpretation version. Advisory failures are never stored as passing checks. `all_passed` now means
+that no authoritative hard failure exists; it does not mean every factual observation passed.
+Verified replay and reconciliation use supported persisted facts without rerunning an oracle.
+Records missing explicit policy or a supported interpretation remain available for inspection and
+standalone export, but executable replay/regrading rejects them before new model work. They are not
+automatically rewritten or inferred from historical booleans.
+
 ### Immutable run identity
 
 Every new run stores a versioned generation/admission manifest in SQLite. It binds the full captured
 seed plan, effective teacher and ordered judge requests, rubric, admission thresholds and intent,
 verification rules, embedding behavior, and declared client endpoints. Every source shard is captured
 once, including empty shards, and execution consumes those exact inputs. Message metadata, reasoning,
-tools, oracle strings, QC flags, and whitespace all participate in the input identity.
+tools, oracle strings, task policies, exact required test IDs, QC flags, and whitespace all participate
+in the input identity. The execution declaration also pins the verification interpretation revision.
 
 `run`, `replay`, and `tui` check compatibility before reading credentials. The engine repeats the
 check inside the launch transaction, so competing incompatible initializers cannot both succeed.

@@ -152,6 +152,9 @@ async fn standalone_export_matches_automatic_best_of_k_and_replay() {
             message: user_message("What is 12*8?"),
             seed: UserSeed::default(),
             contract: VerificationContract {
+                answer_policy: Some(gw_schema::VerificationPolicy::Absent),
+                execution_policy: Some(gw_schema::VerificationPolicy::Absent),
+                required_tests: vec![],
                 kind: VerificationKind::None,
                 oracle: Oracle::None,
                 answer_marker: None,

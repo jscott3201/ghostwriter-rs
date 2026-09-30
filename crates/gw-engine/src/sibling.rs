@@ -62,9 +62,25 @@ pub async fn run_group(
     area: &AreaConfig,
     control: RunControl<'_>,
 ) -> Result<GroupOutcome> {
+    seed.candidate
+        .contract
+        .validate()
+        .map_err(|reason| EngineError::Invariant(reason.into()))?;
     area.assess_admission()?;
     let plans = plan_group(SamplingPreset::official().with_seed(seed.seed), area.k);
     let plan_count = plans.len();
+    // Validate persisted siblings as one group before any missing sibling can dispatch a teacher.
+    for plan in &plans {
+        if control.is_cancelled() {
+            break;
+        }
+        let rid = record_id(run_id, shard, seed.seed, 0, plan.completion_index);
+        match clients.store.get(&rid).await {
+            Ok(rec) => crate::grade::validate_record_verification(&rec, area)?,
+            Err(gw_storage::StorageError::NotFound(_)) => (),
+            Err(error) => return Err(error.into()),
+        }
+    }
     let mut interrupted = false;
     let ctx = GroupDrive {
         run_id,
@@ -333,6 +349,12 @@ async fn generate_and_persist(
     rid: &str,
     sampling: SamplingPreset,
 ) -> Result<GenerationOutcome<TrainingRecord>> {
+    group
+        .seed
+        .candidate
+        .contract
+        .validate()
+        .map_err(|reason| EngineError::Invariant(reason.into()))?;
     group.seed.candidate.validate_framing()?;
     group.clients.prepare_generation_priors().await?;
     // Gate the candidate (no teacher spend if the four-bool QC gate fails).
@@ -549,9 +571,6 @@ async fn select_and_finalize(
     for (i, sib) in siblings.iter().enumerate() {
         if sib.lifecycle.state != LifecycleState::Judged {
             continue; // already finalized (escalated / rejected) — not a fresh candidate.
-        }
-        if !sib.verification.all_passed {
-            continue; // verifier hard-gate must pass to be admissible.
         }
         if is_admissible(sib, area)? {
             // Strict `>` so an aggregate TIE keeps the FIRST (lowest completion_index) candidate.

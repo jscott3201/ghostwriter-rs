@@ -1,41 +1,15 @@
-//! Rail 1 — the deterministic Verifier (RLVR-style HARD GATE), local + pure (JUDGE-DESIGN §1.1,
-//! DATA-SCHEMA §1.6).
+//! Deterministic verification: factual observations plus per-task admission policy.
 //!
-//! This rail is authoritative wherever ground truth exists: a `Reject` here short-circuits the
-//! whole grade (no judge tokens are ever spent on a trace that provably fails), and a high panel
-//! score can NEVER override it (`HybridGrader`, `grader.rs`). It populates
-//! [`Verification`] — a `Vec<Check>` plus the binary `all_passed` hard gate.
+//! The reasoning-present requirement remains authoritative when enabled. Answer correctness and
+//! execution evidence have independent Absent, Advisory, or Authoritative policies. An
+//! authoritative failure rejects before panel work; an authoritative unknown holds for review;
+//! all other outcomes leave the quality decision to the panel. Factual failures remain failures
+//! under advisory policy.
 //!
-//! Everything here is pure (no I/O, no model calls) EXCEPT the [`Oracle::SandboxExecution`] case
-//! (run a reference SQL/tool to obtain ground truth), which is reached through the injected
-//! [`SandboxOracle`] trait seam — so this crate pulls in NO sandbox dependency. A precomputed
-//! [`Oracle::Literal`] / `expected` value is compared directly with no seam at all.
-//!
-//! ## The Verify hard gate (DATA-SCHEMA INVARIANT b)
-//!
-//! [`reasoning_present_check`] hard-fails a required-CoT record whose reasoning is empty,
-//! summary-only, encrypted-only, or whose `reasoning_tokens == 0`. The assertion is the
-//! three-clause conjunction from the spec — `reasoning` non-empty AND a `reasoning.text` detail
-//! exists AND `reasoning_tokens > 0` — so a provider that silently downgraded the CoT to a summary
-//! or encrypted blob (the single most common silent failure) is caught as a hard, catchable
-//! reject. `tokens > 0` alone must NOT substitute for a plaintext block.
-//!
-//! ## RefusalExpected (the adversarial-by-construction case)
-//!
-//! When the area's [`VerificationKind::RefusalExpected`] holds (seed-020 adversarial prompts),
-//! the correct behavior IS a refusal: [`refusal_check`] PASSES a refusal and FAILS a compliance
-//! (non-refusal). This inverts the usual sense, so a complied-with adversarial prompt is a hard
-//! verifier reject.
-//!
-//! ## Precomputed execution evidence (the third input axis)
-//!
-//! Some trajectories are only decidable by RUNNING them. The harness never executes anything itself:
-//! an external evaluator produces an [`ExecutionEvidence`] report out of process and the record
-//! carries it, and [`evidence`] adapts that report into a check. A proven failure is authoritative
-//! (hard reject, before any panel spend); an undecidable report blocks admission so the record is
-//! held for review instead of being admitted — or outvoted — on a panel score. Report SHAPE validation
-//! (was the report parseable, does it even describe a test suite) belongs to the evaluator that owns
-//! the report; this rail sees the parsed result and stays conservative about what it cannot read.
+//! The harness obtains reference answers through the injected [`SandboxOracle`] and reads
+//! precomputed candidate execution evidence through [`ExecutionEvidenceSource`]. It never runs
+//! candidate tests itself. Supported typed observations and applied policies are persisted so
+//! `Verified` replay does not resolve either source again.
 
 use gw_schema::{
     Check, CheckKind, Content, EvidenceBinding, ExecutionEvidence, Message, Oracle, Role,
@@ -46,7 +20,8 @@ mod answer;
 pub mod evidence;
 
 use answer::{AnswerComparison, compare_answer};
-use evidence::execution_evidence_check;
+mod rail;
+pub use rail::run_verifier;
 
 use crate::decision::{Decision, DecisionReason, Verdict};
 
@@ -65,20 +40,11 @@ pub struct VerifierInput<'a> {
     /// Whether this area requires a chain-of-thought (a reasoning teacher + intended CoT-SFT). When
     /// `false` the reasoning-present gate is inert (a non-CoT area is not failed for lacking CoT).
     pub cot_required: bool,
-    /// The per-area verification contract (kind + oracle), or `None` for a pure judge-only area.
+    /// The per-task policies, comparator, oracle, and task-owned execution coverage.
+    /// `None` is supported for direct reasoning-only checks; executable engine records require a contract.
     pub contract: Option<&'a VerificationContract>,
-    /// Whether the answer-correctness check is **rule-only authoritative** for this area — i.e. the
-    /// rule-based comparator is trusted to HARD-REJECT a non-matching answer. DEFAULT `false`
-    /// (`rescue_negatives = true`, JUDGE-DESIGN §1.1): a rule-based answer non-match is too
-    /// error-prone to hard-reject correct-but-differently-formatted data (`42.0` vs `42`, reordered
-    /// sets), so a non-match routes to `Uncertain` → judge rescue. Set `true` ONLY for an area whose
-    /// oracle is exact and the rule comparator is known-complete. The reasoning-present Verify gate
-    /// and decontam are ALWAYS authoritative regardless of this flag.
-    pub rule_only_authoritative: bool,
-    /// PRECOMPUTED execution ground truth for this candidate, already produced out of process and
-    /// carried on the envelope. `None` ⇒ this record has no execution axis and the evidence check is
-    /// INERT (contributes no check and blocks nothing) — the same shape as a `None` contract being
-    /// judge-only. The harness never executes anything to produce one.
+    /// Precomputed candidate execution evidence. Missing evidence is Unknown for an active axis;
+    /// an Absent policy leaves this input unused. The harness never produces the report itself.
     pub execution_evidence: Option<&'a ExecutionEvidence>,
     /// The task/attempt/patch key of the candidate this run is verifying. The carried evidence is
     /// bound to the key it was computed against and a mismatch is never followed (see the
@@ -102,8 +68,8 @@ pub trait SandboxOracle {
 }
 
 /// A [`SandboxOracle`] that always refuses — the default when no sandbox is wired (Phase 0).
-/// `SandboxExecution` contracts WITHOUT a precomputed `expected` then produce an `Uncertain`
-/// verifier verdict (routed to the judge-rescue path), never a silent pass. Control tools are
+/// Active `SandboxExecution` contracts without a precomputed `expected` produce an Unknown
+/// observation, interpreted under the task's declared answer policy. Control tools are
 /// stubbed/refuse in v1 (`SandboxConfig.control_tools_live == false`).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NullSandboxOracle;
@@ -135,14 +101,13 @@ pub trait ExecutionEvidenceSource {
     fn semantic_declaration(&self) -> Option<gw_schema::SemanticDeclaration> {
         None
     }
-    /// The report for `key`, or `None` when this candidate has no execution axis (or no report was
-    /// produced for it) — which leaves the evidence check inert.
+    /// The report for `key`, or `None` when none is available. An active execution policy records
+    /// missing evidence as Unknown.
     fn evidence(&self, key: &EvidenceBinding) -> Option<ExecutionEvidence>;
 }
 
 /// An [`ExecutionEvidenceSource`] that has nothing — the default when no evaluator is wired. Every
-/// candidate is then evidence-free, so the execution check is inert and behaviour is exactly the
-/// pre-evidence pipeline.
+/// active execution check therefore observes Unknown. Absent axes do not call this source.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NullExecutionEvidenceSource;
 
@@ -163,8 +128,8 @@ impl ExecutionEvidenceSource for NullExecutionEvidenceSource {
 /// block to persist. A `Reject` here is the hard gate.
 #[derive(Debug, Clone, PartialEq)]
 pub struct VerifierGrade {
-    /// `Accept` (answer correct / CoT present), `Reject` (hard fail), or `Uncertain` (no oracle
-    /// could decide — routed to judge rescue).
+    /// Summary verdict; the persisted policy gate distinguishes advisory uncertainty from a
+    /// required review hold.
     pub verdict: Verdict,
     /// The persisted verification block: every check + the binary `all_passed` gate.
     pub verification: Verification,
@@ -268,24 +233,20 @@ pub fn reasoning_present_check(input: &VerifierInput<'_>) -> Check {
     }
 }
 
-/// The three-state classification of an assistant turn against a RefusalExpected contract (V7). The
-/// `Ambiguous` case is the load-bearing addition: a turn that is neither a clear refusal NOR a clear
-/// compliance is NOT hard-failed — it routes to `Uncertain` → judge rescue (consistent with V1; the
-/// judge reads the turn and decides whether it is a valid refusal).
+/// Factual refusal classification before applying the task's answer policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RefusalClass {
     /// A clear refusal (a canonical refusal lead-in). PASSES — the refusal IS the oracle.
     Refusal,
-    /// A clear compliance (an affirmative lead-in or a substantive non-refusing answer). HARD-fails.
+    /// A clear compliance, a factual failure of the requested refusal.
     Compliance,
-    /// Neither clearly a refusal nor clearly a compliance. Routes to judge rescue (Uncertain).
+    /// Neither clearly a refusal nor clearly a compliance: Unknown.
     Ambiguous,
 }
 
 /// Heuristic refusal classifier over the assistant's clean content. Dependency-free; the engine can
 /// supply a richer classifier. Broadened English refusal lead set (V7) plus affirmative-compliance
-/// markers, returning a three-state [`RefusalClass`] so an ambiguous turn rescues instead of
-/// hard-failing.
+/// markers, preserving ambiguous turns as Unknown.
 fn classify_refusal(text: &str) -> RefusalClass {
     let t = text.trim().to_ascii_lowercase();
     if t.is_empty() {
@@ -326,46 +287,8 @@ fn classify_refusal(text: &str) -> RefusalClass {
     if COMPLIANCE_MARKERS.iter().any(|m| t.contains(m)) {
         return RefusalClass::Compliance;
     }
-    // Neither marker matched — let the judge decide rather than guess.
+    // Neither marker matched: the declared policy decides how to handle Unknown.
     RefusalClass::Ambiguous
-}
-
-/// The RefusalExpected check (JUDGE-DESIGN §1.1): for an adversarial-by-construction area (seed-020)
-/// a correct REFUSAL passes; a clear compliance HARD-fails; an AMBIGUOUS turn routes to judge rescue
-/// (V7) rather than a hard fail. Returns `(check, is_uncertain)`; the `Regex`-kind check is named
-/// `"refusal_expected"`.
-#[must_use]
-fn refusal_check(input: &VerifierInput<'_>) -> (Check, bool) {
-    let class = last_assistant(input.messages)
-        .map(|m| classify_refusal(content_text(m)))
-        .unwrap_or(RefusalClass::Ambiguous);
-    let (passed, is_uncertain, detail) = match class {
-        RefusalClass::Refusal => (
-            true,
-            false,
-            "refusal observed (correct for an adversarial-by-construction prompt)",
-        ),
-        RefusalClass::Compliance => (
-            false,
-            false,
-            "clear compliance observed where a refusal was required (hard fail)",
-        ),
-        RefusalClass::Ambiguous => (
-            true,
-            true,
-            "refusal classification ambiguous — routed to judge rescue, not a hard fail",
-        ),
-    };
-    (
-        Check {
-            name: "refusal_expected".into(),
-            kind: CheckKind::Regex,
-            passed,
-            score: None,
-            detail: Some(detail.to_string()),
-        },
-        is_uncertain,
-    )
 }
 
 /// Resolve the oracle's expected value: a precomputed [`Oracle::Literal`] / `expected` is returned
@@ -392,154 +315,6 @@ fn resolve_expected<S: SandboxOracle + ?Sized>(
     }
 }
 
-/// Build the content-correctness [`Check`] from an [`AnswerComparison`]. Returns `(check,
-/// is_hard_fail, is_uncertain)`.
-///
-/// THE LOAD-BEARING RULE (JUDGE-DESIGN §1.1, `rescue_negatives = true`): a rule-based `NonMatch`
-/// HARD-rejects (`passed = false`) ONLY when `rule_only_authoritative` is set for the area;
-/// otherwise a `NonMatch` is recorded as an ADVISORY non-match (`passed = true`, `score = 0.0`) and
-/// flagged `uncertain` so the panel rescues a correct-but-differently-formatted answer rather than
-/// the verifier silently sinking it. `Undecided` (no oracle / parse failure) is always advisory +
-/// uncertain. `Match` always passes.
-fn answer_match_check(cmp: AnswerComparison, rule_only_authoritative: bool) -> (Check, bool, bool) {
-    let base = |passed: bool, score: Option<f64>, detail: &str| Check {
-        name: "answer_match".into(),
-        kind: CheckKind::MathCheck,
-        passed,
-        score,
-        detail: Some(detail.to_string()),
-    };
-    match cmp {
-        AnswerComparison::Match => (base(true, Some(1.0), "answer matches oracle"), false, false),
-        AnswerComparison::NonMatch if rule_only_authoritative => (
-            base(
-                false,
-                Some(0.0),
-                "answer does not match oracle (rule-only authoritative: hard reject)",
-            ),
-            true,
-            false,
-        ),
-        AnswerComparison::NonMatch => (
-            base(
-                true,
-                Some(0.0),
-                "advisory non-match — routed to judge rescue (rescue_negatives), not a hard reject",
-            ),
-            false,
-            true,
-        ),
-        AnswerComparison::Undecided => (
-            base(
-                true,
-                None,
-                "no decisive oracle comparison (Uncertain) — routed to judge rescue, not a hard pass",
-            ),
-            false,
-            true,
-        ),
-    }
-}
-
-/// Run the deterministic Verifier rail over `input`, using `sandbox` for any
-/// [`Oracle::SandboxExecution`] ground truth (default [`NullSandboxOracle`] when no sandbox is
-/// wired) and adapting any carried [`ExecutionEvidence`] into its check. Pure otherwise.
-///
-/// Order: the reasoning-present hard gate ALWAYS runs first (it is independent of the contract and
-/// is ALWAYS authoritative); then the contract's correctness check (answer-match / refusal-expected
-/// / schema) where one exists; then the precomputed execution check where evidence is carried. The
-/// execution axis is independent of the contract — a candidate's code can be run even when its
-/// answer is judge-only — and it is INERT when no evidence is carried. `all_passed` is the AND of
-/// every check's `passed`. The returned [`Verdict`] is `Reject` on any HARD fail (the reasoning gate,
-/// a proven execution failure, or an answer non-match ONLY when `rule_only_authoritative`), else
-/// `Uncertain` when an undecidable execution report blocked admission or an answer axis was
-/// undecided / routed to judge rescue (`rescue_negatives`, JUDGE-DESIGN §1.1), else `Accept`.
-#[must_use]
-pub fn run_verifier<S: SandboxOracle + ?Sized>(
-    input: &VerifierInput<'_>,
-    sandbox: &S,
-) -> VerifierGrade {
-    let mut checks = Vec::new();
-
-    // 1. The Verify hard gate (INVARIANT b) — independent of the contract, always first.
-    let reasoning_check = reasoning_present_check(input);
-    let reasoning_passed = reasoning_check.passed;
-    checks.push(reasoning_check);
-
-    // 2. The contract's correctness check, where a contract exists.
-    let mut uncertain = false;
-    if let Some(contract) = input.contract {
-        match contract.kind {
-            VerificationKind::RefusalExpected => {
-                let (check, is_uncertain) = refusal_check(input);
-                if is_uncertain {
-                    uncertain = true;
-                }
-                checks.push(check);
-            }
-            VerificationKind::NumericMatch
-            | VerificationKind::SetMatch
-            | VerificationKind::SqlResultMatch
-            | VerificationKind::SchemaShape => {
-                let (expected, _used_sandbox) = resolve_expected(&contract.oracle, sandbox);
-                let answer = last_assistant(input.messages)
-                    .map(content_text)
-                    .unwrap_or("");
-                let cmp = compare_answer(contract.kind, answer, expected.as_deref());
-                let (check, _hard_fail, is_uncertain) =
-                    answer_match_check(cmp, input.rule_only_authoritative);
-                if is_uncertain {
-                    uncertain = true;
-                }
-                checks.push(check);
-            }
-            // No deterministic oracle: judge-only admission. No correctness check added.
-            VerificationKind::None => {}
-        }
-    }
-
-    // 3. The PRECOMPUTED execution axis, where the record carries an external evaluator's report.
-    // Independent of the contract: a candidate's code can be run even when its answer is
-    // judge-only. A proven failure hard-fails (the same authoritative gate as the reasoning check);
-    // an undecidable report blocks admission instead of routing to judge rescue.
-    let mut admission_blocked = false;
-    if let Some((check, _verdict, blocked)) = execution_evidence_check(input) {
-        admission_blocked = blocked;
-        checks.push(check);
-    }
-
-    let all_passed = checks.iter().all(|c| c.passed);
-    let verdict = if !all_passed {
-        Verdict::Reject
-    } else if admission_blocked {
-        // Nothing proved the work. Deliberately NOT judge rescue: a panel score cannot stand in for
-        // ground truth the deterministic rail could not obtain, so the record is held for review.
-        Verdict::Uncertain
-    } else if uncertain {
-        // Reasoning gate held, but the answer axis had no oracle — defer to the judge rescue path.
-        Verdict::Uncertain
-    } else {
-        Verdict::Accept
-    };
-
-    // Defensive: the reasoning gate is the one that must hard-reject; assert the bookkeeping holds.
-    debug_assert!(reasoning_passed || verdict == Verdict::Reject);
-
-    VerifierGrade {
-        verdict,
-        verification: Verification {
-            checks,
-            all_passed,
-            needs_review: admission_blocked.then(|| {
-                format!(
-                    "{EXECUTION_EVIDENCE_CHECK}: the carried execution report did not decide the \
-                     candidate; admission is blocked until it does"
-                )
-            }),
-        },
-    }
-}
-
 /// Map a hard-rejecting [`VerifierGrade`] to the panel-level [`Decision::Reject`] — the
 /// authoritative gate. Only call when [`VerifierGrade::is_hard_reject`]; returns
 /// [`DecisionReason::VerifierReject`].
@@ -552,6 +327,12 @@ pub fn verifier_reject_decision() -> Decision {
 
 #[cfg(test)]
 mod tests {
+    fn run_verifier<S: super::SandboxOracle + ?Sized>(
+        input: &super::VerifierInput<'_>,
+        sandbox: &S,
+    ) -> super::VerifierGrade {
+        super::run_verifier(input, sandbox).unwrap()
+    }
     use super::*;
     use gw_schema::ReasoningDetail;
 
@@ -588,23 +369,8 @@ mod tests {
             reasoning_tokens: tokens,
             cot_required: cot,
             contract,
-            rule_only_authoritative: false,
             execution_evidence: None,
             evidence_key: EvidenceBinding::default(),
-        }
-    }
-
-    /// Like [`input`] but with the answer-correctness comparator marked rule-only authoritative
-    /// (a non-match HARD-rejects). Used to exercise the opt-in hard-reject path.
-    fn input_rule_only<'a>(
-        messages: &'a [Message],
-        tokens: u32,
-        cot: bool,
-        contract: Option<&'a VerificationContract>,
-    ) -> VerifierInput<'a> {
-        VerifierInput {
-            rule_only_authoritative: true,
-            ..input(messages, tokens, cot, contract)
         }
     }
 
@@ -654,6 +420,15 @@ mod tests {
 
     fn contract(kind: VerificationKind, oracle: Oracle) -> VerificationContract {
         VerificationContract {
+            answer_policy: Some(if kind == VerificationKind::None {
+                gw_schema::VerificationPolicy::Absent
+            } else if kind == VerificationKind::RefusalExpected {
+                gw_schema::VerificationPolicy::Authoritative
+            } else {
+                gw_schema::VerificationPolicy::Advisory
+            }),
+            execution_policy: Some(gw_schema::VerificationPolicy::Absent),
+            required_tests: vec![],
             kind,
             oracle,
             answer_marker: None,
@@ -769,19 +544,17 @@ mod tests {
     }
 
     #[test]
-    fn numeric_mismatch_hard_rejects_only_when_rule_only_authoritative() {
+    fn numeric_mismatch_hard_rejects_under_authoritative_task_policy() {
         // The opt-in: an area that trusts the rule comparator DOES hard-reject a clear non-match.
         let msgs = vec![assistant("41", Some("work"), true)];
-        let ct = contract(
+        let mut ct = contract(
             VerificationKind::NumericMatch,
             Oracle::Literal {
                 expected: "42".into(),
             },
         );
-        let g = run_verifier(
-            &input_rule_only(&msgs, 50, true, Some(&ct)),
-            &NullSandboxOracle,
-        );
+        ct.answer_policy = Some(gw_schema::VerificationPolicy::Authoritative);
+        let g = run_verifier(&input(&msgs, 50, true, Some(&ct)), &NullSandboxOracle);
         assert_eq!(g.verdict, Verdict::Reject);
         assert!(g.is_hard_reject());
     }
@@ -895,7 +668,7 @@ mod tests {
 
         // SqlResultMatch uses the conservative comparator: a string non-match is Undecided →
         // Uncertain (judge rescue), NOT a hard reject (string inequality over a SQL result is the
-        // classic false negative). It hard-rejects only under rule_only_authoritative.
+        // classic false negative). Authoritative policy holds this undecidable result for review.
         let g2 = run_verifier(&input(&msgs, 50, true, Some(&ct)), &FixedOracle("8"));
         assert_eq!(g2.verdict, Verdict::Uncertain);
     }

@@ -68,7 +68,10 @@ pub use provenance::{Provenance, TeacherRef};
 pub use generation::{Generation, ReasoningEffort};
 
 // --- §1.6 verification (deterministic rail) ---
-pub use verification::{Check, CheckKind, Verification};
+pub use verification::{
+    Check, CheckKind, VERIFICATION_INTERPRETATION_VERSION, Verification, VerificationAxis,
+    VerificationInterpretation, VerificationObservation, VerificationOutcome,
+};
 
 // --- §1.6 precomputed execution ground truth (the `execution_evidence` verifier check) ---
 pub use execution_evidence::{
@@ -105,7 +108,9 @@ pub use preference::{PreferenceRecord, PreferenceSide};
 pub use decontam::{CANONICAL_PROTECTED_BENCHMARKS, DecontamConfig};
 
 // --- USER-SYNTHESIS §8/§9 verification contract + user-turn QC verdict ---
-pub use verification_contract::{Oracle, UserTurnVerdict, VerificationContract, VerificationKind};
+pub use verification_contract::{
+    Oracle, UserTurnVerdict, VerificationContract, VerificationKind, VerificationPolicy,
+};
 
 // --- CONFIG global config + sub-configs ---
 pub use config::{Config, DataCollection, PromoteConfig, ProviderLimits, TeacherRouting};

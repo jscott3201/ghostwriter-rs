@@ -26,10 +26,12 @@ async fn wrong_numeric_answer_is_hard_rejected_not_admitted() {
     // A glowing panel that WOULD admit on score alone — but the verifier gate must override it.
     let judge = Arc::new(ScriptedJudge::new(vec![&judge_body(0.99, "accept")]));
     let cl = clients(store.clone(), teacher, judge, EventSink::disconnected());
-    let area = area_rule_authoritative(one_judge(), lenient_thresholds());
+    let area = area_k1(one_judge(), lenient_thresholds());
     let engine = Engine::new(cl, area, 4);
 
-    let source = InMemorySeedSource::new(vec![numeric_candidate("What is 6*7?", "42")], 1);
+    let mut candidate = numeric_candidate("What is 6*7?", "42");
+    candidate.contract.answer_policy = Some(gw_schema::VerificationPolicy::Authoritative);
+    let source = InMemorySeedSource::new(vec![candidate], 1);
     let report = engine
         .run("run-wrong", &source, CancellationToken::new())
         .await
@@ -68,10 +70,12 @@ async fn correct_numeric_answer_passes_and_admits() {
     let teacher = Arc::new(ScriptedTeacher::new(vec![answer_cot("42", 0.01)], 1));
     let judge = Arc::new(ScriptedJudge::new(vec![&judge_body(0.95, "accept")]));
     let cl = clients(store.clone(), teacher, judge, EventSink::disconnected());
-    let area = area_rule_authoritative(one_judge(), lenient_thresholds());
+    let area = area_k1(one_judge(), lenient_thresholds());
     let engine = Engine::new(cl, area, 4);
 
-    let source = InMemorySeedSource::new(vec![numeric_candidate("What is 6*7?", "42")], 1);
+    let mut candidate = numeric_candidate("What is 6*7?", "42");
+    candidate.contract.answer_policy = Some(gw_schema::VerificationPolicy::Authoritative);
+    let source = InMemorySeedSource::new(vec![candidate], 1);
     let report = engine
         .run("run-right", &source, CancellationToken::new())
         .await
@@ -102,7 +106,7 @@ async fn wrong_numeric_under_rescue_with_rejecting_judge_is_rejected() {
     // the panel makes the call and rejects — never a silent admit on a wrong answer.
     let judge = Arc::new(ScriptedJudge::new(vec![&judge_body(0.1, "reject")]));
     let cl = clients(store.clone(), teacher, judge, EventSink::disconnected());
-    // DEFAULT policy (rule_only_authoritative=false): a rule non-match is advisory + Uncertain.
+    // This task declares advisory answer evidence.
     let area = area_k1(one_judge(), lenient_thresholds());
     let engine = Engine::new(cl, area, 4);
 

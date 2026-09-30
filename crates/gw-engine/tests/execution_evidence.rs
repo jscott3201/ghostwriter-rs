@@ -27,6 +27,13 @@ use gw_schema::{
 use gw_storage::{RecordFilter, Store, now_rfc3339};
 use tokio_util::sync::CancellationToken;
 
+fn execution_candidate(text: &str) -> gw_generate::UserTurnCandidate {
+    let mut candidate = good_candidate(text);
+    candidate.contract.execution_policy = Some(gw_schema::VerificationPolicy::Authoritative);
+    candidate.contract.required_tests = vec![EVIDENCE_NODE.into()];
+    candidate
+}
+
 /// The terminal state + persisted verdict of the single record a run produced.
 async fn one_record(store: &Store, run_id: &str) -> TrainingRecord {
     let all = store
@@ -56,7 +63,7 @@ async fn run_with(
     .with_execution_evidence_source(Arc::new(source));
     let area = area_k1(one_judge(), lenient_thresholds());
     let engine = Engine::new(cl, area, 4);
-    let source_seeds = InMemorySeedSource::new(vec![good_candidate("Make it pass.")], 1);
+    let source_seeds = InMemorySeedSource::new(vec![execution_candidate("Make it pass.")], 1);
     let report = engine
         .run(run_id, &source_seeds, CancellationToken::new())
         .await
@@ -143,17 +150,14 @@ async fn a_corroborated_pass_hands_the_record_to_the_panel() {
 async fn an_undecidable_report_is_never_admitted() {
     let cases: Vec<(&str, Box<EvidenceBuilder>)> = vec![
         (
-            "no_required_contract",
+            "no_report_nodes",
             Box::new(|key: &EvidenceBinding| {
-                // A report with no required-test contract proves nothing, so it cannot admit — even
-                // though the nodes it carries are green and the exit was zero. (An ENTIRELY absent
-                // report is a different thing: it leaves the axis inert, which
-                // `an_area_with_no_evaluator_is_unaffected` covers.)
+                // A passing claim without reported nodes cannot establish task-required coverage.
                 Some(hand_report(
                     key,
                     ExecutionOutcome::Passed,
                     &[],
-                    &[(EVIDENCE_NODE, TestStatus::Passed)],
+                    &[],
                     Some(0),
                 ))
             }),
@@ -311,7 +315,7 @@ async fn the_report_round_trips_through_put_get_and_a_resumed_verify() {
     let judge = Arc::new(ScriptedJudge::new(vec![&judge_body(0.95, "accept")]));
 
     let gated = synthesize_user_turn(
-        good_candidate("Make it pass."),
+        execution_candidate("Make it pass."),
         &gw_generate::NullEmbedder,
         &[],
     )

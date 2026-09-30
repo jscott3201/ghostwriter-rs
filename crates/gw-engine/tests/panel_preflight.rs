@@ -357,12 +357,22 @@ async fn direct_judge_step_preflights_but_verifier_reject_remains_authoritative(
         .unwrap();
     let rid = gw_engine::record_id("direct", 0, 0, 0, 0);
     let mut rec = store.get(&rid).await.unwrap();
-    rec.lifecycle.state = LifecycleState::Verified;
-    rec.verification.all_passed = true;
+    rec = step(rec, &cl, &area_k1(one_judge(), lenient_thresholds()))
+        .await
+        .unwrap();
+    assert_eq!(rec.lifecycle.state, LifecycleState::Verified);
     let invalid = AreaConfig::new("math", "teacher", vec![], "grade");
     assert!(step(rec.clone(), &cl, &invalid).await.is_err());
     assert_eq!(judge.call_count(), 0);
-    rec.verification.all_passed = false;
+    rec.verification
+        .interpretation
+        .as_mut()
+        .unwrap()
+        .reasoning
+        .observation
+        .as_mut()
+        .unwrap()
+        .outcome = gw_schema::VerificationOutcome::Fail;
     let judged = step(rec, &cl, &invalid).await.unwrap();
     assert_eq!(judged.judging.verdict, Some(gw_schema::Verdict::Reject));
     let rejected = step(judged, &cl, &invalid).await.unwrap();
