@@ -25,7 +25,6 @@ async fn systemic_auth_fault_aborts_run_fail_fast() {
         store.clone(),
         teacher.clone(),
         judge,
-        25.0,
         EventSink::disconnected(),
     );
     let area = area_k1(one_judge(), lenient_thresholds());
@@ -83,7 +82,6 @@ async fn circuit_breaker_trips_on_persistent_record_level_fault() {
         store.clone(),
         teacher.clone(),
         judge,
-        25.0,
         EventSink::disconnected(),
     );
     let area = area_k1(one_judge(), lenient_thresholds());

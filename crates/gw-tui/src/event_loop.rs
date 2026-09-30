@@ -40,7 +40,7 @@ use crate::error::Result;
 use crate::model::App;
 use crate::view::view;
 
-/// The default UI tick rate (drives gauges/sparkline refresh and any animation): 4 ticks/second.
+/// The default UI tick rate (drives accounting refresh and any animation): 4 ticks/second.
 pub const DEFAULT_TICK_RATE: Duration = Duration::from_millis(250);
 
 /// The default render rate (frame cap): ~30 fps. Decoupled from ticks so input stays responsive.

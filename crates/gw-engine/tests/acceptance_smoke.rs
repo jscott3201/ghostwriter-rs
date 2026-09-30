@@ -353,9 +353,7 @@ async fn one_tool_trajectory_survives_the_whole_chain_and_the_negatives_do_not()
     let cl = clients(
         store.clone(),
         Arc::new(ExplodingTeacher),
-        // A clone, so this test keeps a handle to count the judge's spend below.
         judge.clone(),
-        25.0,
         EventSink::disconnected(),
     )
     .with_execution_evidence_source(Arc::new(evidence_source()));

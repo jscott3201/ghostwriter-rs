@@ -15,6 +15,9 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum StorageError {
+    /// Operational policy cannot authorize the requested launch or physical send.
+    #[error("request admission denied: {0}")]
+    Admission(gw_schema::AdmissionDenial),
     /// Invalid or contradictory physical model request evidence.
     #[error("model attempt evidence error: {0}")]
     Attempt(String),

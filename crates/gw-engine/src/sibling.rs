@@ -28,7 +28,7 @@ use gw_generate::{
     GatedUserTurn, GenerateError, ReasoningPolicy, RecordContext, SamplingPreset, TeacherCall,
     assemble, generate_assistant, plan_group, synthesize_user_turn,
 };
-use gw_schema::{BudgetBreach, LifecycleState, TeacherRef, TrainingRecord};
+use gw_schema::{LifecycleState, TeacherRef, TrainingRecord};
 use gw_storage::{Store, now_rfc3339, prompt_hash};
 
 use crate::clients::{AreaConfig, Clients};
@@ -46,9 +46,9 @@ const TRUNCATION_RETRY_MAX_TOKENS: u32 = 32_000;
 /// admissible sibling and retains the rest. Returns the group's siblings (all driven to terminal),
 /// the best record id (if any sibling was admitted), and persists the lifecycle of every member.
 ///
-/// The budget gate is consulted BEFORE each sibling's teacher call: once the cap is reached, no new
-/// teacher work is dispatched (the in-flight siblings already generated still finish). If the cap is
-/// reached before ANY sibling generates, the group is skipped (returns an empty result).
+/// Every model request is admitted at its physical send boundary. A denied send interrupts the
+/// group and preserves its unfinished records. Pure transitions and cache hits need no admission.
+/// Direct helper calls require registered context for model dispatch; request-free clients remain usable.
 ///
 /// # Errors
 /// A fatal generation, driving, or persistence error cancels the shared run token immediately.
@@ -98,14 +98,15 @@ pub async fn run_group(
                     interrupted |= control.is_cancelled();
                     settled.push((completion_index, driven));
                 }
-                // The budget gate tripped before this sibling could generate (Drain). Under fan-out,
-                // other siblings may already be in flight; those still settle before we finalize.
-                Err(SiblingOutcome::BudgetGated) => {}
                 Err(SiblingOutcome::Interrupted) => interrupted = true,
                 // This sibling faulted at the record level: it is parked at `Error`; keep its (now
                 // terminal) envelope in the group so the report counts it.
                 Err(SiblingOutcome::Parked(parked)) => settled.push((completion_index, *parked)),
                 // A systemic/infrastructure fault — record it and continue joining siblings.
+                Err(SiblingOutcome::Fatal(e)) if e.is_halt() => {
+                    interrupted = true;
+                    control.cancel();
+                }
                 Err(SiblingOutcome::Fatal(e)) => {
                     // Seal dispatch in every shard now, even while this group's started siblings
                     // are still settling their provider transitions.
@@ -154,13 +155,11 @@ pub struct GroupOutcome {
 
 /// The control-flow outcome of generating + driving ONE best-of-k sibling (the `Err` arms of
 /// [`drive_sibling`]), so [`run_group`] can ISOLATE a per-sibling fault without unwinding the group
-/// (F1). `BudgetGated` stops the fan-out (Drain); `Parked` carries the sibling already advanced to
+/// (F1). `Interrupted` stops the fan-out; `Parked` carries the sibling already advanced to
 /// `Error` (continue with the rest); `Fatal` is a systemic fault that aborts the run.
 enum SiblingOutcome {
     /// Cancellation prevented a new generation transition; there is no record fault to park.
     Interrupted,
-    /// The budget cap was reached before this sibling could generate — stop fanning out (Drain).
-    BudgetGated,
     /// A record-level fault struck this sibling; it has been parked at `Error` (correctly attributed).
     /// Its terminal envelope is carried (boxed — it is far larger than the other variants) so the
     /// group/report still counts it.
@@ -189,8 +188,8 @@ struct GeneratedTeacherAttempt {
 /// failure it classifies via [`EngineError::is_record_level`]: a RECORD-LEVEL fault parks THIS sibling
 /// at `Error` (attributed to its own id) and returns [`SiblingOutcome::Parked`] so the caller keeps
 /// finalizing the healthy survivors; a SYSTEMIC fault returns [`SiblingOutcome::Fatal`] (attributed,
-/// for the audit trail) to abort the run. A budget-gated pre-generation stop returns
-/// [`SiblingOutcome::BudgetGated`].
+/// for the audit trail) to abort the run. Cancellation before generation returns
+/// [`SiblingOutcome::Interrupted`].
 async fn drive_sibling(
     ctx: &GroupDrive<'_>,
     rid: &str,
@@ -205,13 +204,6 @@ async fn drive_sibling(
         Err(gw_storage::StorageError::NotFound(_)) => {
             if ctx.control.is_cancelled() {
                 return Err(SiblingOutcome::Interrupted);
-            }
-            // Budget gate: stop dispatching NEW teacher work once the cap is reached (Drain).
-            if !ctx.clients.budget.may_dispatch() {
-                if ctx.control.on_breach() == BudgetBreach::Abort {
-                    ctx.control.cancel();
-                }
-                return Err(SiblingOutcome::BudgetGated);
             }
             match generate_and_persist(ctx, rid, plan.sampling).await {
                 Ok(GenerationOutcome::Generated(rec)) => rec,
@@ -335,12 +327,14 @@ fn is_sibling_parkable(state: LifecycleState) -> bool {
 }
 
 /// Generate one sibling via the producer and persist it at `AssistantGenerated`. The single
-/// teacher-spend site; charges the budget meter post-spend with the call's authoritative cost.
+/// teacher-generation site; the provider owns physical admission and receipt settlement.
 async fn generate_and_persist(
     group: &GroupDrive<'_>,
     rid: &str,
     sampling: SamplingPreset,
 ) -> Result<GenerationOutcome<TrainingRecord>> {
+    group.seed.candidate.validate_framing()?;
+    group.clients.prepare_generation_priors().await?;
     // Gate the candidate (no teacher spend if the four-bool QC gate fails).
     // Best-effort under concurrency: simultaneous sibling groups may snapshot before either admits.
     // Dedup failures use the existing Error/circuit-breaker path by design.
@@ -387,7 +381,6 @@ async fn generate_and_persist(
     let generated =
         generate_assistant_with_truncation_retry(group.clients, rid, &gated, &call, group.control)
             .await?;
-    let cost_usd = generated.turn.cost.unwrap_or(0.0);
 
     let teacher_ref = TeacherRef {
         provider: "openrouter".to_string(),
@@ -429,9 +422,6 @@ async fn generate_and_persist(
         to: LifecycleState::AssistantGenerated,
     });
 
-    // Charge the budget AFTER the spend, with the call's authoritative cost.
-    charge_teacher_cost(group.clients, &rec.record_id, cost_usd);
-
     // Re-read so the returned envelope matches what was persisted.
     Ok(GenerationOutcome::Generated(
         group.clients.store.get(rid).await?,
@@ -460,14 +450,10 @@ async fn generate_assistant_with_truncation_retry(
         }
         Err(err) => err,
     };
-    let GenerateError::TruncatedReasoning { cost_usd, .. } = &err else {
+    let GenerateError::TruncatedReasoning { .. } = &err else {
         return Err(err.into());
     };
-    charge_truncated_attempt(clients, rid, *cost_usd);
-    if !clients.budget.may_dispatch() {
-        if control.on_breach() == BudgetBreach::Abort {
-            control.cancel();
-        }
+    if control.is_cancelled() {
         return Err(err.into());
     }
     let Some(retry_tokens) = retry_max_tokens(call.max_tokens) else {
@@ -484,27 +470,8 @@ async fn generate_assistant_with_truncation_retry(
     .await
     {
         Ok(turn) => Ok(GeneratedTeacherAttempt { turn, call: retry }),
-        Err(err @ GenerateError::TruncatedReasoning { cost_usd, .. }) => {
-            charge_truncated_attempt(clients, rid, cost_usd);
-            Err(err.into())
-        }
         Err(err) => Err(EngineError::from(err)),
     }
-}
-
-fn charge_truncated_attempt(clients: &Clients, rid: &str, cost_usd: Option<f64>) {
-    if let Some(cost_usd) = cost_usd {
-        charge_teacher_cost(clients, rid, cost_usd);
-    }
-}
-
-fn charge_teacher_cost(clients: &Clients, rid: &str, cost_usd: f64) {
-    let total = clients.budget.charge(cost_usd);
-    clients.events.emit(EngineEvent::CostCharged {
-        record_id: rid.to_string(),
-        usd: cost_usd,
-        run_total_usd: total,
-    });
 }
 
 fn retry_max_tokens(max_tokens: u32) -> Option<u32> {

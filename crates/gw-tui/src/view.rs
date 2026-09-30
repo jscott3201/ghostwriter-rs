@@ -6,16 +6,14 @@
 //! `Frame`; it calls `terminal.draw(|f| view(f, &mut app))`.
 //!
 //! Layout (top → bottom): a run/shard HEADER, then a body split horizontally into a per-record
-//! lifecycle TABLE (left) and a COUNTERS + cost-gauge + sparkline column (right), then an errors/log
-//! pane, and finally a one-line key-hints footer.
+//! lifecycle TABLE (left) and COUNTERS + accounting gauge (right), then full-width accounting
+//! evidence, an errors/log pane, and a one-line key-hints footer.
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{
-    Block, Borders, Cell, Gauge, List, ListItem, Paragraph, Row, Sparkline, Table, Wrap,
-};
+use ratatui::widgets::{Block, Borders, Cell, Gauge, List, ListItem, Paragraph, Row, Table, Wrap};
 
 use gw_schema::LifecycleState;
 
@@ -24,13 +22,18 @@ use crate::model::App;
 /// Render the whole dashboard from the model. `app` is `&mut` only because the stateful `Table` needs
 /// `&mut TableState`; no business state is mutated here.
 pub fn view(frame: &mut Frame, app: &mut App) {
+    // Critical accounting evidence has reserved space at ordinary terminal sizes. Optional token
+    // detail and older log lines expand only when the terminal has enough height.
+    let spacious = frame.area().height >= 32;
+    let evidence_height = if spacious { 11 } else { 6 };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3), // header
             Constraint::Min(6),    // body (table | metrics)
-            Constraint::Length(8), // error/log pane
-            Constraint::Length(1), // footer hints
+            Constraint::Length(evidence_height),
+            Constraint::Length(if spacious { 8 } else { 3 }), // error/log pane
+            Constraint::Length(1),                            // footer hints
         ])
         .split(frame.area());
 
@@ -43,8 +46,9 @@ pub fn view(frame: &mut Frame, app: &mut App) {
     render_table(frame, app, body[0]);
     render_metrics(frame, app, body[1]);
 
-    render_log(frame, app, chunks[2]);
-    render_footer(frame, chunks[3]);
+    render_accounting_evidence(frame, app, chunks[2]);
+    render_log(frame, app, chunks[3]);
+    render_footer(frame, chunks[4]);
 }
 
 /// The run/shard progress header, plus a completed/halted banner once the run finishes.
@@ -126,20 +130,18 @@ fn render_table(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_stateful_widget(table, area, &mut app.table_state);
 }
 
-/// The metrics column: terminal-state counters, admit-rate, cost gauge, and a cost sparkline.
+/// The metrics column: terminal-state counters, admit-rate, and known-cost gauge.
 fn render_metrics(frame: &mut Frame, app: &mut App, area: Rect) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(7),    // counters list
+            Constraint::Min(4),    // counters list
             Constraint::Length(3), // cost gauge
-            Constraint::Length(3), // cost sparkline
         ])
         .split(area);
 
     render_counters(frame, app, rows[0]);
     render_cost_gauge(frame, app, rows[1]);
-    render_cost_sparkline(frame, app, rows[2]);
 }
 
 /// Per-state counters (two per line so they fit a short terminal) + an admit-rate line.
@@ -181,36 +183,109 @@ fn render_counters(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(list, area);
 }
 
-/// The cost gauge: `run_total_usd` against the cap (once known). Turns red once the budget is reached.
+/// A monetary gauge exists only for an effective finite policy with known spend.
 fn render_cost_gauge(frame: &mut Frame, app: &App, area: Rect) {
-    let ratio = app.cost.fraction().unwrap_or(0.0);
-    let label = match app.cost.cap_usd {
-        Some(cap) => format!("${:.2} / ${:.2}", app.cost.spent_usd, cap),
-        None => format!("${:.2} (no cap seen)", app.cost.spent_usd),
+    let Some(snapshot) = &app.accounting else {
+        frame.render_widget(Paragraph::new("Accounting: loading / unknown"), area);
+        return;
     };
-    let color = if app.cost.budget_reached {
-        Color::Red
+    if let (
+        Some(gw_schema::PolicyState {
+            policy: gw_schema::AccountingPolicy::FiniteUsd { limit_usd },
+            ..
+        }),
+        Some(known),
+    ) = (&snapshot.effective, snapshot.known_usd)
+    {
+        let ratio = if *limit_usd == 0.0 {
+            1.0
+        } else {
+            (known / limit_usd).clamp(0.0, 1.0)
+        };
+        frame.render_widget(
+            Gauge::default()
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title("known USD dispatch threshold"),
+                )
+                .gauge_style(Style::default().fg(if ratio >= 1.0 {
+                    Color::Yellow
+                } else {
+                    Color::Green
+                }))
+                .ratio(ratio)
+                .label(format!("${known:.4} / ${limit_usd:.4}")),
+            area,
+        );
     } else {
-        Color::Green
+        let known = snapshot
+            .known_usd
+            .map_or_else(|| "overflow".into(), |cost| format!("${cost:.4}"));
+        let mode = match snapshot.effective.as_ref().map(|state| &state.policy) {
+            Some(gw_schema::AccountingPolicy::ObservationOnly) => "Observation only",
+            Some(gw_schema::AccountingPolicy::FiniteUsd { .. }) => "Finite USD",
+            None => "Policy unknown",
+        };
+        frame.render_widget(
+            Paragraph::new(format!("{mode}: known {known}"))
+                .block(Block::default().borders(Borders::ALL).title("accounting")),
+            area,
+        );
+    }
+}
+
+/// Critical uncertainty and policy authority precede optional measured tokens and client wall time.
+fn render_accounting_evidence(frame: &mut Frame, app: &App, area: Rect) {
+    let text = app.accounting.as_ref().map_or_else(|| "Waiting for durable evidence".into(), |s| {
+        let history = match s.history {
+            gw_schema::AccountingHistory::RecordedFromCreation => "from creation",
+            gw_schema::AccountingHistory::Unknown => "unknown",
+        };
+        format!("unknown cost {}; invalid cost {}; conflicts {}; unresolved {}\nhistory {}; unknown lanes {}\nconfigured {}\neffective {}\ninput {}\noutput {}\ntotal {}\nreasoning {}\nwall ms {}; attempts {}",
+            s.unknown_cost_attempts, s.invalid_cost_attempts, s.conflicting_attempts, s.unresolved_attempts,
+            history, s.unknown_coverage_lanes, policy_label(s.configured.as_ref()), policy_label(s.effective.as_ref()),
+            token_label(&s.prompt_tokens), token_label(&s.completion_tokens), token_label(&s.total_tokens), token_label(&s.reasoning_tokens),
+            s.elapsed_ms.map_or_else(|| "overflow".into(), |v| v.to_string()), s.attempts)
+    });
+    frame.render_widget(
+        Paragraph::new(text).wrap(Wrap { trim: true }).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(if area.height > 6 {
+                    "accounting evidence (token categories overlap)"
+                } else {
+                    "accounting evidence"
+                }),
+        ),
+        area,
+    );
+}
+fn token_label(value: &gw_schema::TokenEvidence) -> String {
+    format!(
+        "{}; missing {} / invalid {}",
+        value
+            .known
+            .map_or_else(|| "overflow".into(), |v| v.to_string()),
+        value.missing_attempts,
+        value.invalid_attempts
+    )
+}
+fn policy_label(value: Option<&gw_schema::PolicyState>) -> String {
+    let Some(value) = value else {
+        return "unknown".into();
     };
-    let gauge = Gauge::default()
-        .block(Block::default().borders(Borders::ALL).title("cost"))
-        .gauge_style(Style::default().fg(color))
-        .ratio(ratio)
-        .label(label);
-    frame.render_widget(gauge, area);
+    match value.policy {
+        gw_schema::AccountingPolicy::ObservationOnly => {
+            format!("observation only, epoch {}", value.epoch)
+        }
+        gw_schema::AccountingPolicy::FiniteUsd { limit_usd } => {
+            format!("finite ${limit_usd:.4}, epoch {}", value.epoch)
+        }
+    }
 }
 
-/// The cumulative-spend sparkline (one sample per cost charge).
-fn render_cost_sparkline(frame: &mut Frame, app: &App, area: Rect) {
-    let spark = Sparkline::default()
-        .block(Block::default().borders(Borders::ALL).title("spend"))
-        .data(&app.cost_history)
-        .style(Style::default().fg(Color::Cyan));
-    frame.render_widget(spark, area);
-}
-
-/// The errors/budget log pane: most-recent lines, newest at the bottom.
+/// The error log pane: most-recent lines, newest at the bottom.
 fn render_log(frame: &mut Frame, app: &App, area: Rect) {
     let inner_height = area.height.saturating_sub(2) as usize; // minus the border rows
     let start = app.error_log.len().saturating_sub(inner_height.max(1));
@@ -226,11 +301,7 @@ fn render_log(frame: &mut Frame, app: &App, area: Rect) {
         })
         .collect();
     let para = Paragraph::new(text)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title("errors / budget"),
-        )
+        .block(Block::default().borders(Borders::ALL).title("errors"))
         .wrap(Wrap { trim: true });
     frame.render_widget(para, area);
 }

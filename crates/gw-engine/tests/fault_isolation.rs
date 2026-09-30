@@ -26,7 +26,7 @@ async fn judge_rail_fault_terminalizes_record_at_error_not_stranded() {
     // The judge faults on its only call → the sibling, already at Verified, faults in the judge rail.
     let judge = Arc::new(FailingJudge::new(0, &judge_body(0.95, "accept")));
     let (sink, mut rx) = EventSink::subscribe();
-    let cl = clients(store.clone(), teacher, judge, 25.0, sink);
+    let cl = clients(store.clone(), teacher, judge, sink);
     let area = area_k1(one_judge(), lenient_thresholds());
     let engine = Engine::new(cl, area, 1);
 
@@ -80,7 +80,6 @@ async fn systemic_judge_outage_trips_circuit_breaker() {
         store.clone(),
         teacher.clone(),
         judge,
-        100.0,
         EventSink::disconnected(),
     );
     let area = area_k1(one_judge(), lenient_thresholds());
@@ -122,7 +121,6 @@ async fn revise_retry_fault_parks_the_retry_and_keeps_run_completing() {
         store.clone(),
         teacher.clone(),
         judge,
-        25.0,
         EventSink::disconnected(),
     );
     let area = area_k1(one_judge(), lenient_thresholds());

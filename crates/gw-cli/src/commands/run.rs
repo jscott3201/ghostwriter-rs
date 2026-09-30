@@ -17,7 +17,7 @@ use crate::seedsource::FileSeedSource;
 use crate::wire::{build_engine, new_cancel_token};
 
 /// Resolve the effective [`Config`] for a run: load the file + env layers, then apply the clap
-/// overrides (`--db`, `--budget-usd`, `--k`) as the highest-precedence layer.
+/// overrides (`--db`, `--accounting-policy`, `--k`) as the highest-precedence layer.
 ///
 /// # Errors
 /// Propagates a config-load (malformed TOML / bad value) failure.
@@ -26,19 +26,14 @@ pub fn effective_config(args: &RunArgs) -> anyhow::Result<Config> {
     if let Some(db) = &args.db {
         config.db = db.clone();
     }
-    if let Some(budget) = args.budget_usd {
-        config.budget_usd = budget;
-    }
-    if let Some(policy) = args.on_breach {
-        config.on_breach = policy.into();
-    }
+    args.accounting.apply(&mut config)?;
     if let Some(k) = args.k {
         config.area.k = k;
     }
     if let Some(intent) = args.admission_intent {
         config.area.admission_intent = intent.into();
     }
-    config.validate_run_control()?;
+    config.validate_accounting_policy()?;
     Ok(config)
 }
 
@@ -52,36 +47,21 @@ pub async fn run(args: RunArgs) -> anyhow::Result<()> {
     let config = effective_config(&args)?;
     let source = FileSeedSource::from_prompts_file(&args.prompts, args.shards)?;
 
-    let (engine, _store) = build_engine(&config, EventSink::disconnected(), args.max_in_flight)
+    let (engine, store) = build_engine(&config, EventSink::disconnected(), args.max_in_flight)
         .await
         .context("building the engine")?;
 
     let cancel = new_cancel_token();
-    let report = engine
-        .run(&args.run_id, &source, cancel)
-        .await
-        .context("running the engine")?;
-
-    print_report(&args.run_id, &report);
+    let result = engine.run(&args.run_id, &source, cancel).await;
+    super::accounting::terminal(
+        &store,
+        &args.run_id,
+        &config.effective_policy(),
+        result.as_ref().ok(),
+    )
+    .await;
+    result.context("running the engine")?;
     Ok(())
-}
-
-/// Print a one-block human summary of the run's terminal [`RunReport`](gw_engine::RunReport).
-fn print_report(run_id: &str, report: &gw_engine::RunReport) {
-    println!(
-        "run {run_id} {}",
-        if report.completed {
-            "completed"
-        } else {
-            "halted (budget/cancel)"
-        }
-    );
-    println!("  admitted    {}", report.admitted);
-    println!("  exported    {}", report.exported);
-    println!("  rejected    {}", report.rejected);
-    println!("  needs_review {}", report.needs_review);
-    println!("  revising    {}", report.revising);
-    println!("  errored     {}", report.errored);
 }
 
 #[cfg(test)]
@@ -97,8 +77,10 @@ mod tests {
             run_id: "r1".into(),
             prompts: PathBuf::from("/tmp/prompts.txt"),
             shards: 1,
-            budget_usd: Some(9.5),
-            on_breach: Some(crate::cli::OnBreach::Abort),
+            accounting: crate::cli::AccountingArgs {
+                accounting_policy: Some(crate::cli::AccountingMode::FiniteUsd),
+                limit_usd: Some(9.5),
+            },
             k: Some(4),
             max_in_flight: 4,
         }
@@ -109,8 +91,10 @@ mod tests {
         let cfg = effective_config(&run_args()).expect("config");
         // The clap flags layer over the defaults (no file, no env).
         assert_eq!(cfg.db, PathBuf::from("/tmp/override.sqlite"));
-        assert!((cfg.budget_usd - 9.5).abs() < 1e-12);
-        assert_eq!(cfg.on_breach, gw_schema::BudgetBreach::Abort);
+        assert_eq!(
+            cfg.effective_policy(),
+            gw_schema::AccountingPolicy::FiniteUsd { limit_usd: 9.5 }
+        );
         assert_eq!(cfg.area.k, 4);
     }
 
@@ -118,14 +102,12 @@ mod tests {
     fn absent_overrides_keep_config_values() {
         let mut args = run_args();
         args.db = None;
-        args.budget_usd = None;
-        args.on_breach = None;
+        args.accounting = Default::default();
         args.k = None;
         let cfg = effective_config(&args).expect("config");
         // Falls back to the built-in defaults when no override and no file.
         assert_eq!(cfg.db, Config::default().db);
-        assert!((cfg.budget_usd - Config::default().budget_usd).abs() < 1e-12);
-        assert_eq!(cfg.on_breach, Config::default().on_breach);
+        assert_eq!(cfg.effective_policy(), Config::default().effective_policy());
         assert_eq!(cfg.area.k, Config::default().area.k);
     }
 }

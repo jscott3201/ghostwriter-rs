@@ -78,6 +78,13 @@ fn grade_from_cache_value(value: &Value) -> Grade {
         Some("reject") => Verdict::Reject,
         _ => Verdict::Uncertain,
     };
+    let mut raw = value
+        .get("raw")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    if let Some(object) = raw.as_object_mut() {
+        object.entry("attempt_origin").or_insert(Value::Null);
+    }
     Grade {
         judge_model: value
             .get("judge_model")
@@ -98,7 +105,7 @@ fn grade_from_cache_value(value: &Value) -> Grade {
             .get("rationale")
             .and_then(Value::as_str)
             .map(str::to_string),
-        raw: value.get("raw").cloned().unwrap_or(Value::Null),
+        raw,
         temperature: value
             .get("temperature")
             .and_then(Value::as_f64)

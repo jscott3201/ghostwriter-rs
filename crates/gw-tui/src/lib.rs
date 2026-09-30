@@ -18,8 +18,8 @@
 //! - a per-record lifecycle **table** (`record_id` → current [`LifecycleState`](gw_schema::LifecycleState),
 //!   update count), with selection/scroll state held in the app model;
 //! - live **counters + gauges**: per-terminal-state counts, admit-rate, and a cost gauge + spend
-//!   sparkline (from `CostCharged`/`BudgetReached`);
-//! - an errors/**log pane** listing recent `RecordErrored` messages + a budget banner.
+//!   evidence panel (from absolute accounting snapshots);
+//! - an errors/**log pane** listing recent `RecordErrored` messages.
 //!
 //! The future per-token trace viewer (spec §2.3) is a documented EXTENSION POINT, not implemented in
 //! v1 — see [`Action::ReasoningDelta`]/[`Action::AnswerDelta`].
@@ -38,8 +38,9 @@
 //!
 //! The engine event channel is BOUNDED + drop-on-full (events are observability; the SQLite ledger is
 //! truth). The model is written for this: counters DERIVE from a last-writer-wins per-record state map
-//! (never running increments), and the cost meter is monotone, so a dropped event can leave a row
-//! momentarily stale but can never corrupt a count or rewind the gauge.
+//! (never running increments), while accounting applies absolute snapshots by durable revision. A
+//! later correction can lower known spend. Dropped events can leave the dashboard stale; the CLI
+//! reads authoritative terminal accounting after the dashboard and engine settle.
 //!
 //! ## Example
 //!
@@ -77,7 +78,7 @@ mod view;
 pub use action::Action;
 pub use error::{Result, TuiError};
 pub use event_loop::{DEFAULT_FRAME_RATE, DEFAULT_TICK_RATE, run};
-pub use model::{App, CostMeter, RecordRow, RunHeader};
+pub use model::{App, RecordRow, RunHeader};
 
 // Re-exported for callers that drive the model directly (tests, embedders) without the I/O loop.
 pub use view::view;

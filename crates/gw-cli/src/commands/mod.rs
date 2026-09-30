@@ -7,6 +7,7 @@
 //! providers ([`crate::wire`]) and are NOT exercised against the network in tests (key-gated); their
 //! non-network wiring is asserted in [`crate::wire`] + [`crate::config`].
 
+mod accounting;
 pub mod eval;
 pub mod export;
 pub mod replay;

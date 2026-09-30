@@ -102,7 +102,7 @@ impl AttemptObserver for StoreObserver {
             self.0
                 .begin_model_attempt(&intent)
                 .await
-                .map_err(|e| ObservationError(e.to_string()))
+                .map_err(|e| ObservationError::Persistence(e.to_string()))
         })
     }
     fn metadata(
@@ -115,7 +115,7 @@ impl AttemptObserver for StoreObserver {
             self.0
                 .observe_model_attempt(&id, sequence, &metadata)
                 .await
-                .map_err(|e| ObservationError(e.to_string()))
+                .map_err(|e| ObservationError::Persistence(e.to_string()))
         })
     }
     fn settle(&self, id: String, settlement: TransportSettlement) -> ObservationFuture<'_, ()> {
@@ -123,7 +123,7 @@ impl AttemptObserver for StoreObserver {
             self.0
                 .settle_model_attempt(&id, &settlement)
                 .await
-                .map_err(|e| ObservationError(e.to_string()))
+                .map_err(|e| ObservationError::Persistence(e.to_string()))
         })
     }
     fn interpret(&self, id: String, value: OutputInterpretation) -> ObservationFuture<'_, ()> {
@@ -131,7 +131,7 @@ impl AttemptObserver for StoreObserver {
             self.0
                 .interpret_model_attempt(&id, value)
                 .await
-                .map_err(|e| ObservationError(e.to_string()))
+                .map_err(|e| ObservationError::Persistence(e.to_string()))
         })
     }
 }

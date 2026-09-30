@@ -19,9 +19,9 @@ async fn unchanged_judge_request_reuses_its_grade_across_runs() {
     let judge = Arc::new(ScriptedJudge::new(vec![&judge_body(0.95, "accept")]));
     let mut panels = Vec::new();
 
-    for (run_id, budget, accept_threshold, family) in [
-        ("cache-run-a", 25.0, 0.80, "family-a"),
-        ("cache-run-b", 50.0, 0.90, "family-b"),
+    for (run_id, accept_threshold, family) in [
+        ("cache-run-a", 0.80, "family-a"),
+        ("cache-run-b", 0.90, "family-b"),
     ] {
         let mut judges = one_judge();
         judges[0].family = family.into();
@@ -32,7 +32,6 @@ async fn unchanged_judge_request_reuses_its_grade_across_runs() {
                 store.clone(),
                 teacher.clone(),
                 judge.clone(),
-                budget,
                 EventSink::disconnected(),
             ),
             area_k1(judges, thresholds),

@@ -55,23 +55,12 @@ pub enum EngineEvent {
         /// The state the record advanced TO.
         to: LifecycleState,
     },
-    /// A teacher/judge call's cost was charged against the budget meter (post-spend accounting).
-    CostCharged {
-        /// The record id the spend is attributed to.
-        record_id: String,
-        /// The marginal USD this call cost.
-        usd: f64,
-        /// The cumulative USD spent for the run after this charge.
-        run_total_usd: f64,
-    },
-    /// The budget cap was reached; no new teacher work will be dispatched.
-    BudgetReached {
-        /// The run id.
+    /// Absolute durable accounting state; apply by revision rather than monetary magnitude.
+    AccountingSnapshot {
+        /// Run whose ledger was read.
         run_id: String,
-        /// The cumulative USD spent.
-        spent: f64,
-        /// The configured cap.
-        cap: f64,
+        /// Consistent ledger evidence and configured/effective policy.
+        snapshot: gw_schema::AccountingSnapshot,
     },
     /// A record failed unrecoverably and was parked at [`LifecycleState::Error`].
     RecordErrored {
@@ -101,7 +90,7 @@ pub enum EngineEvent {
         /// A human-readable export failure message.
         error: String,
     },
-    /// The run finished (all shards drained, or the run halted on budget/cancellation).
+    /// The run finished (all shards drained, or the run halted on denied admission or cancellation).
     RunFinished {
         /// The run id.
         run_id: String,

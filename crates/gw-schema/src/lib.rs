@@ -28,6 +28,7 @@
 //! responses). `gw-schema` owns the *persisted* envelope `Verdict { Admit, Reject,
 //! NeedsReview }` and the config-side `JudgeSampling` policy folded into the contract.
 
+mod accounting;
 mod attempt;
 mod config;
 mod cost;
@@ -102,15 +103,16 @@ pub use decontam::{CANONICAL_PROTECTED_BENCHMARKS, DecontamConfig};
 pub use verification_contract::{Oracle, UserTurnVerdict, VerificationContract, VerificationKind};
 
 // --- CONFIG global config + sub-configs ---
-pub use config::{
-    BudgetBreach, BudgetConfig, BudgetGranularity, Config, DataCollection, PromoteConfig,
-    ProviderLimits, TeacherRouting,
-};
+pub use config::{Config, DataCollection, PromoteConfig, ProviderLimits, TeacherRouting};
 pub use embedding::{
     DEFAULT_EMBEDDING_DIM, DEFAULT_EMBEDDING_ENDPOINT, DEFAULT_EMBEDDING_MODEL, EmbeddingBackend,
     EmbeddingConfig, VectorIndex,
 };
 pub use sandbox::{CodeSandbox, SandboxConfig, SqlSandbox};
+
+pub use accounting::{
+    AccountingPolicy, AccountingSnapshot, AdmissionDenial, PolicyState, TokenEvidence,
+};
 
 // --- physical model request evidence ---
 pub use attempt::{
@@ -187,7 +189,7 @@ mod tests {
         assert_eq!(JudgeSampling::default().temperature, 0.0);
         assert_eq!(MultiTurnLoss::default(), MultiTurnLoss::AllAssistant);
         assert_eq!(CotPolicy::default(), CotPolicy::Supervised);
-        assert_eq!(Config::default().budget.cap_usd, 25.0);
+        assert_eq!(Config::default().accounting_policy, None);
         assert_eq!(DecontamConfig::default().decontam_ngram, [8, 13]);
         assert_eq!(EmbeddingConfig::default().dim, DEFAULT_EMBEDDING_DIM);
 

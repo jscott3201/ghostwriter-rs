@@ -18,6 +18,9 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum ProviderError {
+    /// A still-needed physical request was denied by the registered operational policy.
+    #[error("request admission denied: {0}")]
+    Admission(gw_schema::AdmissionDenial),
     /// Durable observation failed; this must never authorize an automatic resend.
     #[error("accounting failure during {stage}: {detail}; primary outcome: {primary:?}")]
     Accounting {
@@ -90,7 +93,10 @@ impl ProviderError {
     /// Whether this error must propagate through best-effort embedding/prior paths.
     #[must_use]
     pub fn is_accounting(&self) -> bool {
-        matches!(self, Self::Accounting { .. } | Self::Cancelled)
+        matches!(
+            self,
+            Self::Accounting { .. } | Self::Cancelled | Self::Admission(_)
+        )
     }
 
     /// `true` for the classes the retry helper should retry: transport faults, HTTP 429,
@@ -102,7 +108,8 @@ impl ProviderError {
             | ProviderError::RateLimited { .. }
             | ProviderError::StreamReset(_) => true,
             ProviderError::Status { retryable, .. } => *retryable,
-            ProviderError::Accounting { .. }
+            ProviderError::Admission(_)
+            | ProviderError::Accounting { .. }
             | ProviderError::Cancelled
             | ProviderError::MissingApiKey(_)
             | ProviderError::Config(_)

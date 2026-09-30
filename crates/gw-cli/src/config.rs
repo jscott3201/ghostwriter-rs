@@ -6,9 +6,9 @@
 //!
 //! 1. **the built-in [`Default`]** (so a missing file still yields a deserializable shape);
 //! 2. **a TOML file** (`--config`), if supplied;
-//! 3. **environment variables** prefixed `GW_` (e.g. `GW_BUDGET_USD=5.0`), via figment's `Env`.
+//! 3. **environment variables** prefixed `GW_` (e.g. `GW_ACCOUNTING_POLICY__MODE=observation_only`), via figment's `Env`.
 //!
-//! clap flags (`--db`, `--budget-usd`, `--k`) layer LAST, applied by the command handler AFTER load
+//! clap flags (`--db`, `--accounting-policy`, `--k`) layer LAST, applied by the command handler AFTER load
 //! (figment merges file+env; the flags are the final, highest-precedence override). Splitting it this
 //! way keeps figment's job purely "file + env" and makes the flag precedence explicit at the call.
 //!
@@ -35,7 +35,7 @@ use serde::{Deserialize, Serialize};
 use gw_engine::AreaConfig;
 use gw_judge::{AreaThresholds, PanelJudge};
 use gw_schema::{
-    AdmissionIntent, BudgetBreach, CotPolicy, EmbeddingConfig, ReasoningEffort, TrlFormat,
+    AccountingPolicy, AdmissionIntent, CotPolicy, EmbeddingConfig, ReasoningEffort, TrlFormat,
 };
 
 /// The default SQLite store path when none is configured.
@@ -43,18 +43,15 @@ pub const DEFAULT_DB_PATH: &str = "gw-run.sqlite";
 
 /// The effective run configuration (file + env layered). clap flags override fields AFTER load.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct Config {
     /// The SQLite store path.
     pub db: PathBuf,
-    /// The run-wide budget cap in USD (the primary spend guard).
-    pub budget_usd: f64,
-    /// What the engine does when the budget cap is reached.
-    #[serde(default)]
-    pub on_breach: BudgetBreach,
+    /// Explicit policy from file, environment, or flags. Absence defaults only after layering.
+    pub accounting_policy: Option<AccountingPolicy>,
     /// The OpenAI-compatible provider base URL (default OpenRouter). The API KEY is NOT here.
     pub provider_base_url: String,
-    /// The per-lane requests-per-minute budget for the provider rate limiter.
+    /// The shared teacher and judge chat requests-per-minute rate limit.
     pub provider_rpm: u32,
     /// The TUI tick interval in milliseconds (dashboard model updates).
     pub tick_ms: u64,
@@ -72,8 +69,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             db: PathBuf::from(DEFAULT_DB_PATH),
-            budget_usd: 5.0,
-            on_breach: BudgetBreach::Drain,
+            accounting_policy: None,
             provider_base_url: gw_providers::DEFAULT_BASE_URL.to_string(),
             provider_rpm: 60,
             tick_ms: 250,
@@ -266,30 +262,43 @@ impl Config {
     ///
     /// # Errors
     /// Returns an error if the TOML file is malformed or a value fails to deserialize into [`Config`]
-    /// (e.g. a non-numeric `budget_usd`).
+    /// (e.g. a malformed `accounting_policy`).
     pub fn load(file: Option<&std::path::Path>) -> anyhow::Result<Self> {
         let mut fig = Figment::from(Serialized::defaults(Config::default()));
         if let Some(path) = file {
             fig = fig.merge(Toml::file(path));
         }
         fig = fig.merge(Env::prefixed("GW_").split("__"));
-        let config: Self = fig.extract()?;
-        config.validate_run_control()?;
+        let mut value: serde_json::Value = fig.extract()?;
+        let environment: serde_json::Value =
+            Figment::from(Env::prefixed("GW_").split("__")).extract()?;
+        // A mode selected by a later layer replaces the complete tagged policy, so ObservationOnly
+        // cannot inherit a stale finite limit from the file. Contradictions within one layer error.
+        if let Some(policy) = environment.get("accounting_policy")
+            && policy.get("mode").is_some()
+        {
+            value["accounting_policy"] = policy.clone();
+        }
+        let config: Self = serde_json::from_value(value)?;
+        config.validate_accounting_policy()?;
         config.validate_generation_budgets()?;
         config.validate_judge_reasoning()?;
         Ok(config)
     }
 
-    /// Validate run-control settings that deserialize but are not implemented yet.
+    /// Resolve the historical $5 default only after every configuration layer has been applied.
+    #[must_use]
+    pub fn effective_policy(&self) -> AccountingPolicy {
+        self.accounting_policy.clone().unwrap_or_default()
+    }
+
+    /// Reject invalid monetary thresholds before constructing live clients.
     ///
     /// # Errors
-    /// Returns an error if `on_breach = "pause"` is configured. Pause remains a schema variant, but
-    /// the engine has not implemented parking semantics yet.
-    pub fn validate_run_control(&self) -> anyhow::Result<()> {
-        if self.on_breach == BudgetBreach::Pause {
-            anyhow::bail!(
-                "on_breach = \"pause\" is not yet supported (tracked as a follow-up); use \"drain\" or \"abort\""
-            );
+    /// Returns an error for a negative, NaN, or infinite finite threshold.
+    pub fn validate_accounting_policy(&self) -> anyhow::Result<()> {
+        if !self.effective_policy().is_valid() {
+            anyhow::bail!("accounting_policy finite_usd limit_usd must be finite and nonnegative");
         }
         Ok(())
     }
@@ -378,7 +387,7 @@ mod tests {
         let cfg = Config::load(None).expect("defaults load");
         assert_eq!(cfg.db, PathBuf::from(DEFAULT_DB_PATH));
         assert_eq!(cfg.provider_base_url, gw_providers::DEFAULT_BASE_URL);
-        assert_eq!(cfg.on_breach, BudgetBreach::Drain);
+        assert_eq!(cfg.effective_policy(), AccountingPolicy::default());
         assert_eq!(cfg.area.k, gw_engine::DEFAULT_K);
         assert!(cfg.export.is_none());
         assert!(cfg.area_config().assess_admission().is_err());

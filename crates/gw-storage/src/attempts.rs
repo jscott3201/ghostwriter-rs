@@ -16,20 +16,29 @@ impl Store {
         judge: AccountingCapability,
         embedding: AccountingCapability,
     ) -> Result<LaunchCoverage> {
+        let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
+        sqlx::query(
+            "UPDATE run_accounting SET history_complete=0, revision=revision+1 WHERE run_id = ?",
+        )
+        .bind(run_id)
+        .execute(&mut *tx)
+        .await?;
         let launch_id: String = sqlx::query_scalar("SELECT lower(hex(randomblob(16)))")
-            .fetch_one(self.pool())
+            .fetch_one(&mut *tx)
             .await?;
         let coverage = LaunchCoverage {
             version: 1,
             run_id: run_id.into(),
             launch_id,
             history: gw_schema::AccountingHistory::Unknown,
+            policy: None,
             teacher,
             judge,
             embedding,
         };
         sqlx::query("INSERT INTO model_launches (launch_id, run_id, coverage_json, created_at) VALUES (?, ?, ?, ?)")
-            .bind(&coverage.launch_id).bind(run_id).bind(serde_json::to_string(&coverage)?).bind(now_rfc3339()).execute(self.pool()).await?;
+            .bind(&coverage.launch_id).bind(run_id).bind(serde_json::to_string(&coverage)?).bind(now_rfc3339()).execute(&mut *tx).await?;
+        tx.commit().await?;
         Ok(coverage)
     }
 
@@ -44,6 +53,14 @@ impl Store {
     pub async fn begin_model_attempt(&self, intent: &AttemptIntent) -> Result<String> {
         validate_intent(intent)?;
         let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
+        if super::accounting::policy(&mut tx, &intent.context.run_id)
+            .await?
+            .is_some()
+        {
+            return Err(StorageError::Admission(
+                gw_schema::AdmissionDenial::UnregisteredContext,
+            ));
+        }
         let launch: String = sqlx::query_scalar(
             "SELECT coverage_json FROM model_launches WHERE launch_id = ? AND run_id = ?",
         )
@@ -57,6 +74,7 @@ impl Store {
             .await?;
         let receipt = AttemptReceipt {
             attempt_id: id.clone(),
+            policy_epoch: None,
             intent: intent.clone(),
             metadata: AttemptMetadata::default(),
             observations: Vec::new(),
@@ -93,9 +111,7 @@ impl Store {
         if matches!(metadata.cost_usd, ReportedCost::Known(value) if !value.is_finite() || value < 0.0)
         {
             metadata.cost_usd = ReportedCost::Invalid;
-            if !metadata.invalid_fields.iter().any(|field| field == "cost") {
-                metadata.invalid_fields.push("cost".into());
-            }
+            conflict(&mut metadata.invalid_fields, "cost");
         }
         if let Some(existing) = receipt.observations.iter().find(|observation| {
             observation.sequence == sequence && observation.metadata == metadata
@@ -172,7 +188,7 @@ impl Store {
     }
 }
 
-fn validate_intent(intent: &AttemptIntent) -> Result<()> {
+pub(crate) fn validate_intent(intent: &AttemptIntent) -> Result<()> {
     if intent.version != 1
         || intent.context.run_id.is_empty()
         || intent.context.launch_id.is_empty()
@@ -196,6 +212,7 @@ async fn load(tx: &mut Transaction<'_, Sqlite>, id: &str) -> Result<AttemptRecei
     decode_receipt(&json)
 }
 async fn save(tx: &mut Transaction<'_, Sqlite>, receipt: &AttemptReceipt) -> Result<()> {
+    super::accounting::bump(tx, &receipt.intent.context.run_id).await?;
     sqlx::query("UPDATE model_attempts SET receipt_json = ?, updated_at = ? WHERE attempt_id = ?")
         .bind(serde_json::to_string(receipt)?)
         .bind(now_rfc3339())
@@ -283,6 +300,9 @@ fn merge_metadata(receipt: &mut AttemptReceipt, patch: &AttemptMetadata) -> Vec<
         }
         _ => {
             current.cost_usd = ReportedCost::Invalid;
+            // Keep invalid evidence in the merged view even after a later known cost. The typed
+            // Invalid payload alone is meaningful; its operation payload remains unchanged.
+            conflict(&mut current.invalid_fields, "cost");
         }
     }
     for field in &patch.invalid_fields {
@@ -293,7 +313,7 @@ fn merge_metadata(receipt: &mut AttemptReceipt, patch: &AttemptMetadata) -> Vec<
     conflicts
 }
 
-fn decode_coverage(json: &str) -> Result<LaunchCoverage> {
+pub(crate) fn decode_coverage(json: &str) -> Result<LaunchCoverage> {
     let coverage: LaunchCoverage = serde_json::from_str(json)?;
     if coverage.version != 1 {
         return Err(StorageError::Attempt(
@@ -302,14 +322,24 @@ fn decode_coverage(json: &str) -> Result<LaunchCoverage> {
     }
     Ok(coverage)
 }
-fn decode_receipt(json: &str) -> Result<AttemptReceipt> {
-    let receipt: AttemptReceipt = serde_json::from_str(json)?;
+pub(crate) fn decode_receipt(json: &str) -> Result<AttemptReceipt> {
+    let mut receipt: AttemptReceipt = serde_json::from_str(json)?;
     validate_intent(&receipt.intent)?;
     if matches!(receipt.metadata.cost_usd, ReportedCost::Known(value) if !value.is_finite() || value < 0.0)
     {
         return Err(StorageError::Attempt(
             "invalid known cost in persisted receipt".into(),
         ));
+    }
+    // Retained operations are also authoritative for receipts written before typed Invalid was
+    // made sticky. Reconstruct only the merged view, preserving exact operation payloads/results.
+    if matches!(receipt.metadata.cost_usd, ReportedCost::Invalid)
+        || receipt
+            .observations
+            .iter()
+            .any(|observation| matches!(observation.metadata.cost_usd, ReportedCost::Invalid))
+    {
+        conflict(&mut receipt.metadata.invalid_fields, "cost");
     }
     Ok(receipt)
 }

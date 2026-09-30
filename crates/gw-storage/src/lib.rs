@@ -61,8 +61,11 @@
 //! # }
 //! ```
 
+mod accounting;
+mod admission;
 mod artifact;
 mod attempts;
+pub use admission::{AttemptAdmission, LaunchRequest};
 mod cache;
 mod error;
 mod export;

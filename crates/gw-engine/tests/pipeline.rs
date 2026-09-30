@@ -7,7 +7,7 @@ mod common;
 use std::sync::Arc;
 
 use common::*;
-use gw_engine::{Engine, EngineEvent, EventSink, InMemorySeedSource, correlation_prior};
+use gw_engine::{Engine, EngineEvent, EventSink, correlation_prior};
 use gw_providers::ReasoningParam;
 use gw_schema::{LifecycleState, Verdict};
 use gw_storage::{RecordFilter, Store};
@@ -20,7 +20,7 @@ async fn happy_path_drives_to_formatted() {
     let teacher = Arc::new(ScriptedTeacher::new(vec![good_cot(0.01)], 1));
     let judge = Arc::new(ScriptedJudge::new(vec![&judge_body(0.95, "accept")]));
     let (sink, mut rx) = EventSink::subscribe();
-    let cl = clients(store.clone(), teacher, judge, 25.0, sink);
+    let cl = clients(store.clone(), teacher, judge, sink);
     let area = area_k1(one_judge(), lenient_thresholds());
     let engine = Engine::new(cl, area, 4);
 
@@ -30,7 +30,6 @@ async fn happy_path_drives_to_formatted() {
         .unwrap();
 
     assert_eq!(report.exported, 0);
-    assert_eq!(report.admitted, 1, "the clean record exports");
     assert_eq!(report.admitted, 1);
     assert_eq!(report.rejected, 0);
     assert!(report.completed);
@@ -66,7 +65,6 @@ async fn teacher_reasoning_cap_reaches_request_and_provenance() {
         store.clone(),
         teacher.clone(),
         judge,
-        25.0,
         EventSink::disconnected(),
     );
     let area = area_k1(one_judge(), lenient_thresholds())
@@ -112,10 +110,8 @@ async fn truncated_teacher_reasoning_retries_once_and_persists_record() {
         store.clone(),
         teacher.clone(),
         judge,
-        25.0,
         EventSink::disconnected(),
     );
-    let budget = cl.budget.clone();
     let area = area_k1(one_judge(), lenient_thresholds()).with_max_tokens(10_000);
     let engine = Engine::new(cl, area, 4);
 
@@ -139,10 +135,6 @@ async fn truncated_teacher_reasoning_retries_once_and_persists_record() {
         "the retried record persists and becomes ready"
     );
     assert_eq!(report.errored, 0);
-    assert!(
-        (budget.spent() - 0.03).abs() < 1e-12,
-        "the truncated attempt and successful retry costs are charged"
-    );
 
     let all = store
         .scan(&RecordFilter::new().run_id("run-teacher-retry"))
@@ -165,13 +157,7 @@ async fn reject_maps_to_rejected_not_exported() {
     let teacher = Arc::new(ScriptedTeacher::new(vec![good_cot(0.01)], 1));
     // A low score → reject band (below reject_below=0.5).
     let judge = Arc::new(ScriptedJudge::new(vec![&judge_body(0.2, "reject")]));
-    let cl = clients(
-        store.clone(),
-        teacher,
-        judge,
-        25.0,
-        EventSink::disconnected(),
-    );
+    let cl = clients(store.clone(), teacher, judge, EventSink::disconnected());
     let area = area_k1(one_judge(), lenient_thresholds());
     let engine = Engine::new(cl, area, 4);
 
@@ -205,13 +191,7 @@ async fn escalate_maps_to_needs_review_and_leaves_pipeline() {
         &judge_body(0.95, "accept"),
         &judge_body(0.95, "accept"),
     ]));
-    let cl = clients(
-        store.clone(),
-        teacher,
-        judge,
-        25.0,
-        EventSink::disconnected(),
-    );
+    let cl = clients(store.clone(), teacher, judge, EventSink::disconnected());
     // DEFAULT thresholds (min_n_eff=1.5) — the escalation floor.
     let area = area_k1(three_judges(), Default::default())
         .with_admission_intent(gw_schema::AdmissionIntent::ReviewOnly);
@@ -263,7 +243,6 @@ async fn best_of_k_admits_best_and_retains_rejected_siblings() {
         store.clone(),
         teacher.clone(),
         judge,
-        25.0,
         EventSink::disconnected(),
     );
     let area = area_k(one_judge(), lenient_thresholds(), 3);
@@ -337,13 +316,7 @@ async fn best_of_k_admits_only_one_when_two_would_pass() {
         &judge_body(0.95, "accept"),
         &judge_body(0.90, "accept"),
     ]));
-    let cl = clients(
-        store.clone(),
-        teacher,
-        judge,
-        25.0,
-        EventSink::disconnected(),
-    );
+    let cl = clients(store.clone(), teacher, judge, EventSink::disconnected());
     let area = area_k(one_judge(), lenient_thresholds(), 2);
     let engine = Engine::new(cl, area, 4);
 
@@ -356,7 +329,6 @@ async fn best_of_k_admits_only_one_when_two_would_pass() {
     // threshold — is RETAINED as Rejected, NOT admitted/exported.
     assert_eq!(report.admitted, 1, "exactly ONE sibling admitted, not both");
     assert_eq!(report.exported, 0);
-    assert_eq!(report.admitted, 1);
     assert_eq!(
         report.rejected, 1,
         "the runner-up is retained, not admitted"
@@ -396,13 +368,7 @@ async fn best_of_k_aggregate_tie_admits_lowest_index_only() {
         &judge_body(0.90, "accept"),
         &judge_body(0.90, "accept"),
     ]));
-    let cl = clients(
-        store.clone(),
-        teacher,
-        judge,
-        25.0,
-        EventSink::disconnected(),
-    );
+    let cl = clients(store.clone(), teacher, judge, EventSink::disconnected());
     let area = area_k(one_judge(), lenient_thresholds(), 2);
     let engine = Engine::new(cl, area, 4);
 
@@ -439,55 +405,6 @@ async fn best_of_k_aggregate_tie_admits_lowest_index_only() {
     );
 }
 
-/// MANDATORY 6 (budget cutoff): once `cap_usd` is reached, no new teacher work is dispatched.
-#[tokio::test]
-async fn budget_cutoff_stops_new_teacher_work() {
-    let store = Store::open_in_memory().await.unwrap();
-    // The first teacher call costs 0.10 and the cap is 0.10, so AFTER the first record the meter is at
-    // 0.10 >= cap → the gate closes and the SECOND record's generation is never dispatched. The
-    // ScriptedTeacher's max_calls=1 asserts the second call would panic if the gate failed to close.
-    let teacher = Arc::new(ScriptedTeacher::new(
-        vec![good_cot(0.10), good_cot(0.10)],
-        1,
-    ));
-    let judge = Arc::new(ScriptedJudge::new(vec![
-        &judge_body(0.95, "accept"),
-        &judge_body(0.95, "accept"),
-    ]));
-    let cl = clients(
-        store.clone(),
-        teacher.clone(),
-        judge,
-        0.10,
-        EventSink::disconnected(),
-    );
-    let area = area_k1(one_judge(), lenient_thresholds());
-    let engine = Engine::new(cl, area, 1); // serial: deterministic budget ordering
-
-    // Two seed items in one shard.
-    let source = InMemorySeedSource::new(vec![good_candidate("q1"), good_candidate("q2")], 1);
-    let report = engine
-        .run("run-b", &source, CancellationToken::new())
-        .await
-        .unwrap();
-
-    // Only ONE teacher call was dispatched: the first record's 0.10 spend reached the 0.15 cap (>=),
-    // so the second record's generation was gated (ScriptedTeacher max_calls=1 would panic on a 2nd).
-    assert_eq!(
-        teacher.call_count(),
-        1,
-        "budget cap gates the second teacher call"
-    );
-    // The run is NOT marked completed (it halted on budget).
-    assert!(!report.completed, "a budget-halted run is not 'completed'");
-    // Exactly one record exists (the second was never generated).
-    let all = store
-        .scan(&RecordFilter::new().run_id("run-b"))
-        .await
-        .unwrap();
-    assert_eq!(all.len(), 1);
-}
-
 /// MANDATORY 4 (R-prior): the engine builds a NON-IDENTITY `uniform_offdiagonal(k, ~0.7)` for a k>1
 /// panel — asserted directly via the public `correlation_prior` the step machine uses.
 #[tokio::test]
@@ -515,13 +432,7 @@ async fn multi_judge_run_uses_correlation_discounted_n_eff() {
         &judge_body(0.9, "accept"),
         &judge_body(0.9, "accept"),
     ]));
-    let cl = clients(
-        store.clone(),
-        teacher,
-        judge,
-        25.0,
-        EventSink::disconnected(),
-    );
+    let cl = clients(store.clone(), teacher, judge, EventSink::disconnected());
     // Lenient floor so it admits, but the n_eff is still the CORRELATION-discounted value.
     let area = area_k1(three_judges(), lenient_thresholds());
     let engine = Engine::new(cl, area, 4);

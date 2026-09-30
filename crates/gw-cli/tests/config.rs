@@ -21,8 +21,7 @@ fn toml_file_overrides_defaults() {
         jail.create_file(
             "gw.toml",
             r#"
-                budget_usd = 42.0
-                on_breach = "abort"
+                accounting_policy = { mode = "finite_usd", limit_usd = 42.0 }
                 provider_rpm = 120
 
                 [area]
@@ -48,8 +47,10 @@ fn toml_file_overrides_defaults() {
             "#,
         )?;
         let cfg = Config::load(Some(Path::new("gw.toml"))).expect("loads the TOML fixture");
-        assert!((cfg.budget_usd - 42.0).abs() < 1e-12);
-        assert_eq!(cfg.on_breach, gw_schema::BudgetBreach::Abort);
+        assert_eq!(
+            cfg.effective_policy(),
+            gw_schema::AccountingPolicy::FiniteUsd { limit_usd: 42.0 }
+        );
         assert_eq!(cfg.provider_rpm, 120);
         assert_eq!(cfg.area.training_area, "rust-async");
         assert_eq!(cfg.area.k, 3);
@@ -103,44 +104,6 @@ fn teacher_max_tokens_zero_is_rejected() {
         let msg = err.to_string();
         assert!(
             msg.contains("teacher_max_tokens must be greater than zero"),
-            "got: {msg}"
-        );
-        Ok(())
-    });
-}
-
-#[test]
-fn on_breach_pause_is_rejected() {
-    Jail::expect_with(|jail| {
-        jail.create_file("gw.toml", "on_breach = \"pause\"\n")?;
-        let err = Config::load(Some(Path::new("gw.toml"))).expect_err("pause rejected");
-        let msg = err.to_string();
-        assert!(
-            msg.contains("on_breach = \"pause\" is not yet supported"),
-            "got: {msg}"
-        );
-        Ok(())
-    });
-}
-
-#[test]
-fn env_on_breach_abort_parses() {
-    Jail::expect_with(|jail| {
-        jail.set_env("GW_ON_BREACH", "abort");
-        let cfg = Config::load(None).expect("GW_ON_BREACH=abort parses");
-        assert_eq!(cfg.on_breach, gw_schema::BudgetBreach::Abort);
-        Ok(())
-    });
-}
-
-#[test]
-fn env_on_breach_pause_is_rejected() {
-    Jail::expect_with(|jail| {
-        jail.set_env("GW_ON_BREACH", "pause");
-        let err = Config::load(None).expect_err("GW_ON_BREACH=pause rejected");
-        let msg = err.to_string();
-        assert!(
-            msg.contains("on_breach = \"pause\" is not yet supported"),
             "got: {msg}"
         );
         Ok(())
@@ -205,58 +168,17 @@ fn partial_embedding_section_reports_missing_required_field() {
 }
 
 #[test]
-fn api_key_is_never_read_from_the_config_file() {
+fn unsupported_secret_fields_are_rejected_without_echoing_values() {
     Jail::expect_with(|jail| {
-        // Even if an operator MISTAKENLY puts a key-shaped field in the TOML, it must not be slurped
-        // into the Config (the struct has no such field; unknown keys are ignored, never surfaced).
-        // The key lives ONLY in OPENROUTER_API_KEY at provider-construction time.
         jail.create_file(
             "gw.toml",
-            r#"
-                budget_usd = 1.0
-                openrouter_api_key = "LEAKED-KEY-FROM-FILE-1"
-                api_key = "LEAKED-KEY-FROM-FILE-2"
-            "#,
+            "openrouter_api_key = \"fixture-not-secret-value\"\n",
         )?;
-        let cfg = Config::load(Some(Path::new("gw.toml"))).expect("loads despite the stray field");
-
-        // Round-trip the loaded config to JSON and assert NO key material is present anywhere.
-        let json = serde_json::to_string(&cfg).expect("serialize config");
-        assert!(
-            !json.contains("LEAKED-KEY-FROM-FILE-1") && !json.contains("LEAKED-KEY-FROM-FILE-2"),
-            "a config-file key field must never enter the Config: {json}"
-        );
-        assert!(
-            !json.to_lowercase().contains("api_key") && !json.to_lowercase().contains("apikey"),
-            "the Config must carry no api-key field at all: {json}"
-        );
-        assert!((cfg.budget_usd - 1.0).abs() < 1e-12);
-        Ok(())
-    });
-}
-
-#[test]
-fn env_layers_over_file_and_clap_overrides_env() {
-    Jail::expect_with(|jail| {
-        jail.create_file("gw.toml", "budget_usd = 5.0\n")?;
-        // Env (7.5) beats the file (5.0); an env-only key (rpm) is also applied.
-        jail.set_env("GW_BUDGET_USD", "7.5");
-        jail.set_env("GW_PROVIDER_RPM", "200");
-
-        let cfg = Config::load(Some(Path::new("gw.toml"))).expect("loads with env layer");
-        assert!(
-            (cfg.budget_usd - 7.5).abs() < 1e-12,
-            "env must override the file"
-        );
-        assert_eq!(cfg.provider_rpm, 200, "env-only key applied");
-
-        // A clap-style override (the command handler applies these AFTER Config::load) wins over env.
-        let mut overridden = cfg;
-        overridden.budget_usd = 99.0; // mirrors `--budget-usd 99.0`
-        assert!(
-            (overridden.budget_usd - 99.0).abs() < 1e-12,
-            "clap override is highest precedence"
-        );
+        let error = Config::load(Some(Path::new("gw.toml")))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("unknown field"));
+        assert!(!error.contains("fixture-not-secret-value"));
         Ok(())
     });
 }
@@ -264,7 +186,10 @@ fn env_layers_over_file_and_clap_overrides_env() {
 #[test]
 fn nested_env_key_sets_area_field() {
     Jail::expect_with(|jail| {
-        jail.create_file("gw.toml", "budget_usd = 5.0\n")?;
+        jail.create_file(
+            "gw.toml",
+            "accounting_policy = { mode = \"finite_usd\", limit_usd = 5.0 }\n",
+        )?;
         // `GW_AREA__K` (the `__` split) targets `area.k`.
         jail.set_env("GW_AREA__K", "6");
         let cfg = Config::load(Some(Path::new("gw.toml"))).expect("loads nested env");
@@ -279,7 +204,10 @@ fn openrouter_api_key_env_does_not_leak_into_config() {
         // The real key var is present in the environment but carries no `GW_` prefix, so the figment
         // Env layer (scoped to `GW_`) cannot reach it — it never enters the Config.
         jail.set_env("OPENROUTER_API_KEY", "LEAKED-KEY-FROM-ENV");
-        jail.create_file("gw.toml", "budget_usd = 2.0\n")?;
+        jail.create_file(
+            "gw.toml",
+            "accounting_policy = { mode = \"finite_usd\", limit_usd = 2.0 }\n",
+        )?;
         let cfg = Config::load(Some(Path::new("gw.toml"))).expect("loads");
         let json = serde_json::to_string(&cfg).expect("serialize");
         assert!(

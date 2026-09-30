@@ -9,8 +9,7 @@
 //! ## The unhappy path lives here
 //!
 //! `gw-engine` IS the unhappy path of the system. Every transition that could fail surfaces a
-//! variant here rather than swallowing the fault: a budget breach
-//! ([`BudgetExceeded`](EngineError::BudgetExceeded)) and a violated orchestration invariant
+//! variant here rather than swallowing the fault: a typed provider admission denial and a violated orchestration invariant
 //! ([`Invariant`](EngineError::Invariant), e.g. an identity correlation matrix handed to a `k > 1`
 //! panel grade, which is fail-loud by contract) are explicit, catchable errors. Cancellation is normal
 //! run-control and returns `Ok(RunReport { completed: false, .. })`.
@@ -56,16 +55,6 @@ pub enum EngineError {
     #[error("serde_json error: {0}")]
     Serde(#[from] serde_json::Error),
 
-    /// The run-wide budget cap (`cap_usd`) was reached, so no new teacher work may be dispatched
-    /// (ARCHITECTURE §3.5, the `Drain`/`Abort` breach). Carries the spent total for the run log.
-    #[error("budget cap reached: spent ${spent:.4} of ${cap:.4}")]
-    BudgetExceeded {
-        /// The total USD spent at the point the cap tripped.
-        spent: f64,
-        /// The configured cap.
-        cap: f64,
-    },
-
     /// An orchestration INVARIANT was violated — a programmer/config fault surfaced LOUD at the seam
     /// rather than silently corrupting a record. The load-bearing cases: an identity correlation
     /// matrix handed to a `k > 1` panel grade (which would degrade the correlation guard to
@@ -91,6 +80,15 @@ pub enum EngineError {
 }
 
 impl EngineError {
+    /// Admission denial and pre-send cancellation are orderly halts, never record content errors.
+    #[must_use]
+    pub fn is_halt(&self) -> bool {
+        matches!(
+            self.provider_source(),
+            Some(ProviderError::Admission(_) | ProviderError::Cancelled)
+        )
+    }
+
     /// `true` when this error is RECORD-LEVEL — a fault that pertains to ONE record's content and must
     /// NOT abort the whole run (E5). The shard parks the faulting record at
     /// [`LifecycleState::Error`](gw_schema::LifecycleState::Error), emits
@@ -101,7 +99,7 @@ impl EngineError {
     /// render/projection fault on this record's content). These are isolated to the one record.
     ///
     /// NOT record-level (INFRASTRUCTURE — fatal to the run): `Storage` (the data plane is down — every
-    /// record would fail the same way), `Serde` (an engine-owned envelope is corrupt), `BudgetExceeded`
+    /// record would fail the same way), `Serde` (an engine-owned envelope is corrupt), admission denial
     /// (run-level control flow, handled separately), and `Invariant` (a programmer/config
     /// bug — fail loud rather than silently park record after record).
     ///
@@ -125,10 +123,7 @@ impl EngineError {
             // provider fault, which would fail every record the same way → infrastructure-fatal (F2).
             EngineError::Generate(_) | EngineError::Judge(_) => !self.is_systemic_provider_fault(),
             EngineError::Format(_) => true,
-            EngineError::Storage(_)
-            | EngineError::Serde(_)
-            | EngineError::BudgetExceeded { .. }
-            | EngineError::Invariant(_) => false,
+            EngineError::Storage(_) | EngineError::Serde(_) | EngineError::Invariant(_) => false,
         }
     }
 
@@ -148,7 +143,8 @@ impl EngineError {
         match pe {
             // Construction-time misconfiguration (defense-in-depth — unreachable at the call site, but
             // unambiguously systemic if it ever surfaces).
-            ProviderError::MissingApiKey(_)
+            ProviderError::Admission(_)
+            | ProviderError::MissingApiKey(_)
             | ProviderError::Config(_)
             | ProviderError::Accounting { .. }
             | ProviderError::Cancelled => true,
@@ -213,17 +209,6 @@ pub type Result<T> = std::result::Result<T, EngineError>;
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn budget_exceeded_renders_amounts() {
-        let e = EngineError::BudgetExceeded {
-            spent: 25.5,
-            cap: 25.0,
-        };
-        let msg = e.to_string();
-        assert!(msg.contains("25.5"));
-        assert!(msg.contains("25.0"));
-    }
 
     #[test]
     fn generate_error_converts() {
@@ -321,13 +306,6 @@ mod tests {
     #[test]
     fn infrastructure_errors_are_not_record_level() {
         assert!(!EngineError::Invariant("x".into()).is_record_level());
-        assert!(
-            !EngineError::BudgetExceeded {
-                spent: 1.0,
-                cap: 0.5
-            }
-            .is_record_level()
-        );
     }
 
     #[test]

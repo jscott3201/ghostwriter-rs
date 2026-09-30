@@ -99,6 +99,17 @@ pub struct UserTurnCandidate {
 }
 
 impl UserTurnCandidate {
+    /// Reject leaked chat control tokens before any candidate or historical-prior embedding.
+    ///
+    /// # Errors
+    /// Returns [`GenerateError::LeakedUserTurn`] if raw framing appears in the user turn.
+    pub fn validate_framing(&self) -> Result<()> {
+        if let Some(token) = first_control_token(&self.text()) {
+            return Err(GenerateError::LeakedUserTurn(token));
+        }
+        Ok(())
+    }
+
     /// The candidate's user-turn text, for embedding-dedup AND the control-token guard. For a
     /// multimodal turn the `ContentPart::Text` parts are concatenated (matching the gw-format
     /// flatten convention); non-text parts contribute nothing.
@@ -200,9 +211,7 @@ pub async fn evaluate<E: Embedder + ?Sized>(
     threshold: f64,
 ) -> Result<UserTurnVerdict> {
     let text = candidate.text();
-    if let Some(token) = first_control_token(&text) {
-        return Err(GenerateError::LeakedUserTurn(token));
-    }
+    candidate.validate_framing()?;
 
     let embedding = embedder.embed(&text).await.map_err(GenerateError::Embed)?;
 

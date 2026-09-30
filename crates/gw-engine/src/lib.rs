@@ -3,7 +3,7 @@
 //! The convergence point of the pipeline: it drives every record through the per-record state machine
 //! (generate → verify → judge → admit/reject/revise/escalate → format → export), persisting after
 //! EVERY transition, with a concurrency-capped sharded executor, per-job cancellation, content-hash
-//! call caching (never re-spend), a run-wide budget cap, and crash-recovery. Runnable WITHOUT a
+//! completed-call caching, physical-request admission, and crash recovery. Runnable WITHOUT a
 //! terminal; the TUI and the CLI are interchangeable consumers of its [`EngineEvent`] stream. Depends
 //! on `gw-schema`, `gw-generate`, `gw-judge`, `gw-storage`, `gw-format`, and `gw-providers`.
 //!
@@ -14,7 +14,7 @@
 //!   └─ for each shard (concurrent, Semaphore-capped):
 //!        load resume cursor ─▶ for each un-committed seed item:
 //!          run_group (best-of-k):
-//!            ├─ generate k siblings (teacher spend, content-hash cached, budget-gated)
+//!            ├─ generate k siblings (teacher calls with durable physical admission)
 //!            ├─ drive each: AssistantGenerated→Verified→Judged→{Admitted|Rejected|Revising|NeedsReview}
 //!            │             →Formatted→Exported            (verified artifact + receipt at export)
 //!            ├─ admit the best by judging.aggregate (verifier gate must pass); RETAIN the rest
@@ -41,15 +41,15 @@
 //!   `step::reconcile`.
 //! - **needs_review leaves the pipeline** — `NeedsReview` is terminal-for-`step` and never formatted /
 //!   exported / counted admitted: `step::step` (terminal arm) + `executor::Engine::tally`.
-//! - **budget cutoff** — no new teacher work once the cap is reached: `budget::BudgetMeter` +
-//!   `executor::Engine::run_shard`. The in-memory meter is REHYDRATED from persisted `cost.usd` at run
-//!   start so a restart does not re-grant the cap: `executor::Engine::persisted_spend` +
-//!   `budget::BudgetMeter::reset_to`.
+//! - **physical request admission** — `AccountingPolicy::FiniteUsd` serializes physical sends and
+//!   checks the complete attempt ledger in the same transaction that commits each intent.
+//!   `ObservationOnly` preserves ordinary bounded concurrency and records available evidence.
+//!   Neither policy reconstructs run spend from per-record teacher cost projections.
 //! - **deterministic answer rail** — the per-record `VerificationContract` is carried on the envelope
 //!   and threaded into the Verify rail, so a wrong answer / complied-with adversarial prompt is caught
 //!   on the deterministic rail (not silently panel-admitted): `step::verify`.
-//! - **no lost work** — a budget-gated bounded revise does NOT commit the shard cursor past its item
-//!   (it re-drives under fresh budget) and `Revising` is a counted non-terminal bucket:
+//! - **no lost work** — an admission-denied bounded revise does NOT commit the shard cursor past its item
+//!   (it can resume after a valid policy change) and `Revising` is a counted non-terminal bucket:
 //!   `executor::Engine::process_item` / `run_shard` / `tally`.
 //! - **per-record fault isolation** — a record-level fault (bad teacher/judge/format) parks ONE record
 //!   at `Error` and the run CONTINUES; only infrastructure faults abort the run:
@@ -63,8 +63,8 @@
 //! so unit + integration tests run over fakes + `Store::open_in_memory` — NO network, deterministic. A
 //! live test is `#[ignore]` + key-gated.
 
+mod admission;
 mod attempts;
-mod budget;
 mod checkpoint;
 mod clients;
 mod control;
@@ -78,7 +78,9 @@ mod seed;
 mod sibling;
 mod step;
 
-pub use budget::BudgetMeter;
+#[cfg(test)]
+mod accounting_test_support;
+
 pub use checkpoint::{ShardCursor, commit_cursor, load_cursor};
 pub use clients::{AreaConfig, Clients, DEFAULT_CORRELATION_RHO, DEFAULT_K, DEFAULT_MAX_TOKENS};
 pub use control::RunControl;
@@ -86,6 +88,7 @@ pub use error::{EngineError, Result};
 pub use event::{DEFAULT_EVENT_CAPACITY, EngineEvent, EventSink};
 pub use executor::{Engine, ExportSpec, RunReport};
 pub use grade::{correlation_prior, decision_from_judging, verifier_grade_from_verification};
+pub use gw_schema::AccountingPolicy;
 pub use seed::{InMemorySeedSource, SeedItem, SeedSource, record_id};
 pub use sibling::{GroupOutcome, run_group};
 pub use step::{drive, drive_to_judged, evidence_key, is_terminal, step};

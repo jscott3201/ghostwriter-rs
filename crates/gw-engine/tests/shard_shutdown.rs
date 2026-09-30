@@ -111,7 +111,7 @@ async fn failed_run_drains(slow_shard: usize, panic: bool) {
     let judge = Arc::new(FailingJudge::new(usize::MAX, &judge_body(0.95, "accept")));
     let (sink, mut events) = EventSink::subscribe();
     let engine = Engine::new(
-        clients(store.clone(), teacher.clone(), judge.clone(), 25.0, sink),
+        clients(store.clone(), teacher.clone(), judge.clone(), sink),
         area_k1(one_judge(), lenient_thresholds()),
         2,
     );
@@ -209,7 +209,6 @@ async fn failed_run_drains(slow_shard: usize, panic: bool) {
             store.clone(),
             resumed_teacher.clone(),
             judge,
-            25.0,
             EventSink::disconnected(),
         ),
         area_k1(one_judge(), lenient_thresholds()),
@@ -263,7 +262,6 @@ async fn first_observed_fatal_survives_later_fatal_during_drain() {
             store,
             teacher,
             Arc::new(ScriptedJudge::new(vec![])),
-            25.0,
             EventSink::disconnected(),
         ),
         area_k1(one_judge(), lenient_thresholds()),
@@ -297,7 +295,6 @@ async fn failed_status_storage_error_preserves_primary_and_terminal_event() {
             store.clone(),
             teacher,
             Arc::new(ScriptedJudge::new(vec![])),
-            25.0,
             sink,
         ),
         area_k1(one_judge(), lenient_thresholds()),
@@ -347,7 +344,6 @@ async fn fatal_sibling_signals_before_its_own_group_finishes_draining() {
             store.clone(),
             teacher,
             judge.clone(),
-            25.0,
             EventSink::disconnected(),
         ),
         area_k(one_judge(), lenient_thresholds(), 2),
@@ -388,7 +384,6 @@ async fn permit_waiters_stop_before_the_active_item_releases_its_permit() {
             store.clone(),
             teacher.clone(),
             Arc::new(ScriptedJudge::new(vec![])),
-            25.0,
             sink,
         ),
         area_k1(one_judge(), lenient_thresholds()),

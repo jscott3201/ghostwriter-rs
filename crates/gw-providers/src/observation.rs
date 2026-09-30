@@ -12,8 +12,17 @@ use std::{
 
 /// Observer failure. Storage implementations retain their own typed error until this boundary.
 #[derive(Debug, thiserror::Error)]
-#[error("{0}")]
-pub struct ObservationError(pub String);
+pub enum ObservationError {
+    /// Durable persistence failed.
+    #[error("{0}")]
+    Persistence(String),
+    /// The current policy does not authorize another physical send.
+    #[error("{0}")]
+    Admission(gw_schema::AdmissionDenial),
+    /// A waiting caller was cancelled before transmission.
+    #[error("request cancelled")]
+    Cancelled,
+}
 
 /// Object-safe asynchronous persistence operation.
 pub type ObservationFuture<'a, T> =
@@ -34,6 +43,8 @@ pub trait AttemptObserver: Send + Sync {
     ) -> ObservationFuture<'_, ()>;
     /// Persist transport outcome; retrying this write must not duplicate spend.
     fn settle(&self, id: String, settlement: TransportSettlement) -> ObservationFuture<'_, ()>;
+    /// Release in-memory ownership on completion or drop. This callback must perform no I/O.
+    fn released(&self, _id: &str) {}
     /// Persist higher-layer output interpretation, separate from transport.
     fn interpret(
         &self,
@@ -68,6 +79,21 @@ pub struct CallObservation {
     latest: Arc<Mutex<Option<String>>>,
 }
 impl CallObservation {
+    /// Run that owns physical attempts made by this call.
+    #[must_use]
+    pub fn run_id(&self) -> &str {
+        &self.context.context.run_id
+    }
+
+    /// Latest physical attempt identity, when a call crossed durable pre-send admission.
+    #[must_use]
+    pub fn attempt_id(&self) -> Option<String> {
+        self.latest
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
     /// Record the final higher-layer interpretation of the latest physical attempt.
     /// A pre-send failure has no receipt to interpret.
     pub async fn interpret(
@@ -143,7 +169,7 @@ impl ActiveAttempt {
         let next_sequence = self.next_sequence.checked_add(1).ok_or_else(|| {
             accounting(
                 "metadata",
-                ObservationError("observation sequence exhausted".into()),
+                ObservationError::Persistence("observation sequence exhausted".into()),
                 None,
             )
         })?;
@@ -173,6 +199,12 @@ impl ActiveAttempt {
     }
 }
 
+impl Drop for ActiveAttempt {
+    fn drop(&mut self) {
+        self.observer.released(&self.id);
+    }
+}
+
 fn redacted_endpoint(endpoint: &str) -> Result<String, ProviderError> {
     let mut url = reqwest::Url::parse(endpoint)
         .map_err(|_| ProviderError::Config("invalid endpoint URL".into()))?;
@@ -183,10 +215,14 @@ fn redacted_endpoint(endpoint: &str) -> Result<String, ProviderError> {
     Ok(url.to_string())
 }
 fn accounting(stage: &str, error: ObservationError, primary: Option<String>) -> ProviderError {
-    ProviderError::Accounting {
-        stage: stage.into(),
-        detail: error.0,
-        primary,
+    match error {
+        ObservationError::Persistence(detail) => ProviderError::Accounting {
+            stage: stage.into(),
+            detail,
+            primary,
+        },
+        ObservationError::Admission(reason) => ProviderError::Admission(reason),
+        ObservationError::Cancelled => ProviderError::Cancelled,
     }
 }
 

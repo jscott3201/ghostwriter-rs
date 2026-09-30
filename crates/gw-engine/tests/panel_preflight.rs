@@ -11,7 +11,7 @@ use gw_engine::{
 };
 use gw_judge::{AreaThresholds, PanelJudge};
 use gw_providers::{ChatRequest, DeltaStream, Provider, StreamChatFuture, StreamDelta};
-use gw_schema::{AdmissionIntent, BudgetBreach, LifecycleState};
+use gw_schema::{AdmissionIntent, LifecycleState};
 use gw_storage::Store;
 use tokio_util::sync::CancellationToken;
 
@@ -24,7 +24,6 @@ async fn rejects_without_spending(area: AreaConfig) {
             store,
             teacher.clone(),
             judge.clone(),
-            25.0,
             EventSink::disconnected(),
         ),
         area,
@@ -98,7 +97,6 @@ async fn attainable_decisive_subset_is_admitted_by_engine_reconciliation() {
             store.clone(),
             teacher,
             Arc::new(SubsetJudge),
-            25.0,
             EventSink::disconnected(),
         ),
         area,
@@ -136,7 +134,6 @@ async fn documented_assumed_prior_admits_one_of_three_candidates_with_two_judges
             store,
             teacher.clone(),
             Arc::new(SubsetJudge),
-            25.0,
             EventSink::disconnected(),
         ),
         area,
@@ -171,7 +168,6 @@ async fn bounded_revision_inherits_review_only_intent() {
             store.clone(),
             teacher.clone(),
             judge,
-            25.0,
             EventSink::disconnected(),
         ),
         area,
@@ -201,13 +197,7 @@ async fn review_only_allows_unattainable_defaults_without_admission() {
     let area = AreaConfig::new("math", "teacher", one_judge(), "grade")
         .with_admission_intent(AdmissionIntent::ReviewOnly);
     let engine = Engine::new(
-        clients(
-            store.clone(),
-            teacher,
-            judge,
-            25.0,
-            EventSink::disconnected(),
-        ),
+        clients(store.clone(), teacher, judge, EventSink::disconnected()),
         area,
         1,
     );
@@ -243,7 +233,6 @@ async fn review_only_best_of_k_stays_held_on_replay_with_automatic_live_settings
         store.clone(),
         teacher.clone(),
         judge.clone(),
-        25.0,
         EventSink::disconnected(),
     );
     let automatic = area_k(one_judge(), lenient_thresholds(), 3);
@@ -252,16 +241,9 @@ async fn review_only_best_of_k_stays_held_on_replay_with_automatic_live_settings
         .with_admission_intent(AdmissionIntent::ReviewOnly);
     let item = source.items_for_shard(0).remove(0);
     let cancel = CancellationToken::new();
-    let outcome = run_group(
-        "sticky",
-        0,
-        &item,
-        &cl,
-        &review,
-        RunControl::new(&cancel, BudgetBreach::Drain),
-    )
-    .await
-    .unwrap();
+    let outcome = run_group("sticky", 0, &item, &cl, &review, RunControl::new(&cancel))
+        .await
+        .unwrap();
     assert_eq!(outcome.siblings.len(), 3);
     assert!(outcome.best.is_none());
     for rec in outcome.siblings {
@@ -320,7 +302,6 @@ async fn review_only_intent_is_persisted_before_the_first_grade() {
         store.clone(),
         teacher.clone(),
         judge.clone(),
-        25.0,
         EventSink::disconnected(),
     );
     let automatic = area_k1(one_judge(), lenient_thresholds());
@@ -361,7 +342,6 @@ async fn direct_judge_step_preflights_but_verifier_reject_remains_authoritative(
         store.clone(),
         teacher,
         judge.clone(),
-        25.0,
         EventSink::disconnected(),
     );
     Engine::new(cl.clone(), area_k1(one_judge(), lenient_thresholds()), 1)

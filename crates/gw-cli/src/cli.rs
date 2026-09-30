@@ -76,7 +76,7 @@ impl From<AdmissionMode> for gw_schema::AdmissionIntent {
 }
 
 /// Shared knobs for `gen run` / `gen tui` (the engine-spending paths). The config FILE supplies the
-/// area/provider/budget defaults; these flags LAYER over it (highest precedence after env).
+/// area/provider/accounting defaults; these flags LAYER over it (highest precedence after env).
 #[derive(Debug, clap::Args, PartialEq)]
 pub struct RunArgs {
     /// Override automatic admission or explicitly collect for human review.
@@ -97,12 +97,9 @@ pub struct RunArgs {
     /// Number of shards to partition the seed space into.
     #[arg(long, value_name = "N", default_value_t = 1)]
     pub shards: usize,
-    /// Override the run-wide budget cap in USD (else the config's `budget_usd`).
-    #[arg(long, value_name = "USD")]
-    pub budget_usd: Option<f64>,
-    /// Budget-breach behavior: drain lets in-flight work finish; abort stops at transition boundaries.
-    #[arg(long, value_enum, value_name = "MODE")]
-    pub on_breach: Option<OnBreach>,
+    /// Physical-request accounting and admission policy overrides.
+    #[command(flatten)]
+    pub accounting: AccountingArgs,
     /// Override the per-area best-of-k fan-out (else the config's `area.k`).
     #[arg(long, value_name = "K")]
     pub k: Option<u32>,
@@ -146,10 +143,12 @@ pub struct ExportArgs {
 ///
 /// Resume is sound only when the SAME seed plan is re-derived, so the SAME `--prompts` file (and
 /// `--shards`) the original run used MUST be supplied — the engine then skips already-committed
-/// offsets and re-drives any mid-flight record from its last persisted state (the teacher is never
-/// re-spent).
+/// offsets and re-drives any mid-flight record from its last persisted state, reusing stored output.
 #[derive(Debug, clap::Args, PartialEq)]
 pub struct ReplayArgs {
+    /// Physical-request accounting and admission policy overrides.
+    #[command(flatten)]
+    pub accounting: AccountingArgs,
     /// Override admission intent; persisted review-only records always remain review-only.
     #[arg(long, value_enum, value_name = "INTENT")]
     pub admission_intent: Option<AdmissionMode>,
@@ -275,21 +274,45 @@ impl From<ExportCot> for gw_schema::CotPolicy {
     }
 }
 
-/// The supported run-control budget breach modes, mapped to [`gw_schema::BudgetBreach`].
+/// Operational accounting mode for all live run commands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
-pub enum OnBreach {
-    /// Stop dispatching new work and let already-started items finish.
-    Drain,
-    /// Stop dispatching new work and halt in-flight items at transition boundaries.
-    Abort,
+pub enum AccountingMode {
+    /// Record tokens, timing, and reported costs without monetary gating.
+    ObservationOnly,
+    /// Serialize physical sends below a known-spend USD threshold.
+    FiniteUsd,
 }
 
-impl From<OnBreach> for gw_schema::BudgetBreach {
-    fn from(policy: OnBreach) -> Self {
-        match policy {
-            OnBreach::Drain => Self::Drain,
-            OnBreach::Abort => Self::Abort,
+/// Shared highest-precedence overrides for run, replay, and TUI.
+#[derive(Debug, Default, clap::Args, PartialEq)]
+pub struct AccountingArgs {
+    /// Select observation-only or finite-usd; finite-usd requires --limit-usd.
+    #[arg(long, value_enum)]
+    pub accounting_policy: Option<AccountingMode>,
+    /// Finite, nonnegative reported-dollar dispatch threshold; requires finite-usd mode.
+    #[arg(long, requires = "accounting_policy")]
+    pub limit_usd: Option<f64>,
+}
+impl AccountingArgs {
+    /// Apply an explicit mode as a complete policy, preserving file/env policy when absent.
+    ///
+    /// # Errors
+    /// Rejects contradictory, incomplete, negative, or nonfinite monetary overrides.
+    pub fn apply(&self, config: &mut crate::config::Config) -> anyhow::Result<()> {
+        use gw_schema::AccountingPolicy;
+        match (self.accounting_policy, self.limit_usd) {
+            (None, None) => {}
+            (Some(AccountingMode::ObservationOnly), None) => {
+                config.accounting_policy = Some(AccountingPolicy::ObservationOnly);
+            }
+            (Some(AccountingMode::FiniteUsd), Some(limit_usd)) => {
+                config.accounting_policy = Some(AccountingPolicy::FiniteUsd { limit_usd });
+            }
+            _ => anyhow::bail!(
+                "--accounting-policy finite-usd requires --limit-usd; observation-only accepts no limit"
+            ),
         }
+        config.validate_accounting_policy()
     }
 }
 
