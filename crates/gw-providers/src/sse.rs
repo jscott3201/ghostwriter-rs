@@ -192,10 +192,8 @@ where
         if line.is_empty() || line.starts_with(':') || line.starts_with("event:") {
             return None; // keep-alive comment / blank / event-type line
         }
-        let payload = match line.strip_prefix("data:") {
-            Some(rest) => rest.trim_start(),
-            None => return None, // unknown field line (id:, retry:, …) — ignore
-        };
+        // Unknown field lines (id:, retry:, …) are ignored.
+        let payload = line.strip_prefix("data:")?.trim_start();
         // An empty `data:` / `data: ` payload is a heartbeat, not JSON — ignore it BEFORE the
         // DONE/parse path so it can never become a terminal Decode error.
         if payload.is_empty() {

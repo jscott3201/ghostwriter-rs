@@ -93,7 +93,8 @@ re-run picks it back up.
 
 ## Install
 
-Requires a **Rust 1.95+** toolchain (edition 2024).
+Requires **Rust 1.95+** (edition 2024). The repository pins **Rust 1.98.1**
+for development and release builds, including a macOS optimized-build fix.
 
 ```sh
 git clone https://github.com/jscott3201/ghostwriter-rs
