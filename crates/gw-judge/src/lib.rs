@@ -42,7 +42,8 @@
 //! - **Verifier authoritative** over the panel: `grader::HybridGrader::grade` short-circuits to
 //!   `Decision::Reject` when `VerifierGrade::is_hard_reject`, regardless of any panel score.
 //! - **Never re-spend**: `cache::grade_one_cached` checks `Store::cache_get` before spending and
-//!   `cache_put` after, with `temperature_bits` folded into the key via `cache::folded_rubric_key`.
+//!   `cache_put` after, keyed by the built request, rubric identity, sampling bits, and JSON scoring
+//!   interpretation version. Legacy folded rubric keys are left untouched and never read.
 //! - **Re-derivable admission**: `Judging.threshold_at_decision` is stored and
 //!   `grader::rederive_verdict` re-derives Admit/Reject/Revise/Escalate from a stored panel WITHOUT
 //!   re-judging.
@@ -63,9 +64,10 @@ mod decision;
 mod error;
 mod grader;
 mod panel;
+mod request_identity;
 mod verifier;
 
-pub use cache::{JUDGE_CACHE_KIND, folded_rubric_key, grade_one_cached, grade_panel_cached};
+pub use cache::{JUDGE_CACHE_KIND, grade_one_cached, grade_panel_cached};
 pub use calibration::{
     CalibrationParams, DEFAULT_BETA, DEFAULT_GAMMA, calibration_weights, uniform_weights,
 };

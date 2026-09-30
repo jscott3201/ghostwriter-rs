@@ -89,6 +89,21 @@ run is fully resumable and every admission decision is auditable after the fact.
 `Error` is terminal-until-requeue: a faulted record carries its last error and attempt count, and a
 re-run picks it back up.
 
+### Judge scoring and cache reuse
+
+Judges return a JSON score and verdict. The implemented method is `json_score`; the audit records
+that method and its interpretation version. There is no logprob scoring algorithm or automatic
+scoring fallback. The former `GEvalLogprob` / `IntegerLikert` pins and scoring selector have been
+removed from the pre-1.0 API; numeric score normalization is unchanged.
+
+Judge cache entries use `judge-request-v2` fingerprints of the built request, optional rubric ID,
+sampling bits, scoring method, and interpretation version. Changes to rubric text, candidate text,
+prompt framing, or interpretation invalidate the grade. Raw token caps that produce the same
+effective request can share a grade, as can identical requests from different runs. The old folded
+key helper is removed; legacy cache entries and historical audit records remain untouched but are
+not reused by the new cache. This identity does not cover provider-internal routing defaults,
+endpoint changes, or resolved model revisions.
+
 ---
 
 ## Install
