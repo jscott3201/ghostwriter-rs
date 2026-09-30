@@ -313,6 +313,7 @@ async fn the_report_round_trips_through_put_get_and_a_resumed_verify() {
         &gw_generate::NullEmbedder,
         &[],
     )
+    .await
     .unwrap();
     let call = TeacherCall::new("z-ai/glm-5.2", vec![gated.candidate.message.clone()], 16384)
         .with_sampling(SamplingPreset::official().with_seed(0));

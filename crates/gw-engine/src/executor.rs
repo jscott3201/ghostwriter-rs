@@ -29,6 +29,7 @@ use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
+use gw_generate::Embedder;
 use gw_schema::{
     BudgetBreach, CotPolicy, ExportManifest, ExportOptions, ExportScope, LifecycleState, TrlFormat,
 };
@@ -230,6 +231,15 @@ impl Engine {
         source: &S,
         cancel: CancellationToken,
     ) -> Result<RunReport> {
+        self.clone().run_launch(run_id, source, cancel).await
+    }
+
+    async fn run_launch<S: SeedSource + ?Sized>(
+        mut self,
+        run_id: &str,
+        source: &S,
+        cancel: CancellationToken,
+    ) -> Result<RunReport> {
         self.area.assess_admission()?;
         let shard_count = source.shard_count().max(1);
         let prompts_hash = source.prompts_hash()?;
@@ -249,6 +259,29 @@ impl Engine {
             .store
             .create_run(run_id, &config_json, Some(self.clients.budget.cap()))
             .await?;
+
+        // Assess the actual clients on every launch; public client fields may have been replaced.
+        let coverage = match self
+            .clients
+            .store
+            .begin_model_launch(
+                run_id,
+                self.clients.teacher.accounting_capability(),
+                self.clients.judge.accounting_capability(),
+                self.clients.embedder.accounting_capability(),
+            )
+            .await
+        {
+            Ok(coverage) => coverage,
+            Err(error) => {
+                mark_run_failed(&self.clients.store, &self.clients.events, run_id).await;
+                return Err(error.into());
+            }
+        };
+        self.clients.observation = Some(crate::attempts::LaunchObservation::new(
+            coverage,
+            self.clients.store.clone(),
+        ));
 
         // E3: rehydrate the budget meter from spend already persisted for this run (a prior, possibly
         // crashed, launch). The in-memory meter resets to 0 each process, so without this a restart
@@ -392,8 +425,16 @@ impl Engine {
                 continue;
             };
             // Embed without holding the shared lock; gate snapshots remain short-lived.
-            match self.clients.embedder.embed(&text) {
+            match self
+                .clients
+                .embedder_for(&record.record_id, gw_schema::AttemptPurpose::ResumePrior)
+                .embed(&text)
+                .await
+            {
                 Ok(vector) => vectors.push((item_id, vector)),
+                Err(error) if error.is_accounting() => {
+                    return Err(gw_generate::GenerateError::Embed(error).into());
+                }
                 Err(error) => tracing::warn!(
                     record_id = %record.record_id,
                     %error,

@@ -8,7 +8,8 @@ use reqwest::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::ProviderError;
+use crate::{CallObservation, ProviderError};
+use gw_schema::{OutputInterpretation, TransportOutcome};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -20,9 +21,17 @@ pub struct EmbeddingsClientBuilder {
     dim: usize,
     api_key_env: Option<String>,
     timeout: Duration,
+    #[cfg(test)]
+    http2_prior_knowledge: bool,
 }
 
 impl EmbeddingsClientBuilder {
+    #[cfg(test)]
+    pub(crate) fn http2_for_test(mut self) -> Self {
+        self.http2_prior_knowledge = true;
+        self
+    }
+
     /// Configure an OpenAI-compatible `/v1` base URL.
     #[must_use]
     pub fn base_url(mut self, base_url: impl Into<String>) -> Self {
@@ -79,7 +88,16 @@ impl EmbeddingsClientBuilder {
         let headers = embedding_headers(key)?;
         let http = Client::builder()
             .default_headers(headers)
-            .timeout(self.timeout)
+            .redirect(reqwest::redirect::Policy::none())
+            .retry(reqwest::retry::never())
+            .timeout(self.timeout);
+        #[cfg(test)]
+        let http = if self.http2_prior_knowledge {
+            http.http2_prior_knowledge()
+        } else {
+            http
+        };
+        let http = http
             .build()
             .map_err(|e| ProviderError::Config(format!("http client build failed: {e}")))?;
         Ok(EmbeddingsClient {
@@ -133,6 +151,8 @@ impl EmbeddingsClient {
             dim: gw_schema::DEFAULT_EMBEDDING_DIM as usize,
             api_key_env: None,
             timeout: DEFAULT_TIMEOUT,
+            #[cfg(test)]
+            http2_prior_knowledge: false,
         }
     }
 
@@ -143,24 +163,103 @@ impl EmbeddingsClient {
     /// # Errors
     /// Returns transport, HTTP, decode, duplicate/missing-index, or dimension errors.
     pub async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, ProviderError> {
-        let response = self
-            .http
-            .post(format!("{}/embeddings", self.base_url))
-            .json(&EmbeddingRequest {
-                model: &self.model,
-                input: texts,
-            })
-            .send()
-            .await
-            .map_err(ProviderError::from)?;
-        let status = response.status();
-        let bytes = response.bytes().await.map_err(ProviderError::from)?;
-        if !status.is_success() {
-            return Err(status_error(status, &bytes));
+        self.embed_batch_impl(texts, None).await
+    }
+
+    /// Embed with durable per-transmission observation and required engine context.
+    pub async fn embed_batch_observed(
+        &self,
+        texts: &[&str],
+        observation: CallObservation,
+    ) -> Result<Vec<Vec<f32>>, ProviderError> {
+        self.embed_batch_impl(texts, Some(observation)).await
+    }
+
+    async fn embed_batch_impl(
+        &self,
+        texts: &[&str],
+        observation: Option<CallObservation>,
+    ) -> Result<Vec<Vec<f32>>, ProviderError> {
+        let endpoint = format!("{}/embeddings", self.base_url);
+        let body = serde_json::to_vec(&EmbeddingRequest {
+            model: &self.model,
+            input: texts,
+        })
+        .map_err(|e| ProviderError::Config(e.to_string()))?;
+        let mut attempt = match &observation {
+            Some(call) => Some(call.begin(&body, &self.model, &endpoint, 0).await?),
+            None => None,
+        };
+        let result = async {
+            let response = match self.http.post(&endpoint).body(body).send().await {
+                Ok(response) => response,
+                Err(error) => {
+                    let error = ProviderError::from(error);
+                    if let Some(attempt) = &attempt {
+                        attempt
+                            .settle(TransportOutcome::Failed, None, Some(error.to_string()))
+                            .await?;
+                    }
+                    return Err(error);
+                }
+            };
+            let status = response.status();
+            let bytes = match response.bytes().await {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    let error = ProviderError::from(error);
+                    if let Some(attempt) = &attempt {
+                        attempt
+                            .settle(
+                                TransportOutcome::Failed,
+                                Some(status.as_u16()),
+                                Some(error.to_string()),
+                            )
+                            .await?;
+                    }
+                    return Err(error);
+                }
+            };
+            if let Some(attempt) = &mut attempt {
+                if let Some(metadata) = crate::metadata::extract_json(&bytes) {
+                    attempt.metadata(metadata).await.map_err(|error| {
+                        error.with_primary(format!("http status {}", status.as_u16()))
+                    })?;
+                }
+                let outcome = if status.is_success() {
+                    TransportOutcome::Complete
+                } else {
+                    TransportOutcome::HttpError
+                };
+                let primary =
+                    (!status.is_success()).then(|| status_error(status, &bytes).to_string());
+                attempt
+                    .settle(outcome, Some(status.as_u16()), primary)
+                    .await?;
+            }
+            if !status.is_success() {
+                return Err(status_error(status, &bytes));
+            }
+            let decoded =
+                serde_json::from_slice(&bytes).map_err(|e| ProviderError::Decode(e.to_string()))?;
+            order_and_validate(decoded, texts.len(), self.dim)
         }
-        let decoded: EmbeddingResponse =
-            serde_json::from_slice(&bytes).map_err(|e| ProviderError::Decode(e.to_string()))?;
-        order_and_validate(decoded, texts.len(), self.dim)
+        .await;
+        if let Some(call) = observation
+            && !result.as_ref().is_err_and(|e| e.is_accounting())
+        {
+            let interpretation = match &result {
+                Ok(_) => OutputInterpretation::Accepted,
+                Err(ProviderError::Decode(_)) => OutputInterpretation::Invalid,
+                Err(_) => OutputInterpretation::Failed,
+            };
+            call.interpret(
+                interpretation,
+                result.as_ref().err().map(ToString::to_string),
+            )
+            .await?;
+        }
+        result
     }
 }
 

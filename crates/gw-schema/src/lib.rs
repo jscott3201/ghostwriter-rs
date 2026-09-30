@@ -28,6 +28,7 @@
 //! responses). `gw-schema` owns the *persisted* envelope `Verdict { Admit, Reject,
 //! NeedsReview }` and the config-side `JudgeSampling` policy folded into the contract.
 
+mod attempt;
 mod config;
 mod cost;
 mod decontam;
@@ -110,6 +111,13 @@ pub use embedding::{
     EmbeddingConfig, VectorIndex,
 };
 pub use sandbox::{CodeSandbox, SandboxConfig, SqlSandbox};
+
+// --- physical model request evidence ---
+pub use attempt::{
+    AccountingCapability, AccountingHistory, AttemptContext, AttemptIntent, AttemptMetadata,
+    AttemptObservation, AttemptPurpose, AttemptReceipt, AttemptRole, LaunchCoverage,
+    OutputInterpretation, ReportedCost, TransportOutcome, TransportSettlement,
+};
 
 #[cfg(test)]
 mod tests {

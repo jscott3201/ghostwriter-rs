@@ -70,6 +70,9 @@ impl ScriptedTeacher {
 }
 
 impl Provider for ScriptedTeacher {
+    fn accounting_capability(&self) -> gw_schema::AccountingCapability {
+        gw_schema::AccountingCapability::NoModelRequests
+    }
     fn stream_chat(&self, req: ChatRequest) -> StreamChatFuture<'_> {
         let n = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
         assert!(
@@ -117,6 +120,9 @@ impl ScriptedJudge {
 }
 
 impl Provider for ScriptedJudge {
+    fn accounting_capability(&self) -> gw_schema::AccountingCapability {
+        gw_schema::AccountingCapability::NoModelRequests
+    }
     fn stream_chat(&self, _req: ChatRequest) -> StreamChatFuture<'_> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         let body = {
@@ -170,6 +176,9 @@ impl FailingJudge {
 }
 
 impl Provider for FailingJudge {
+    fn accounting_capability(&self) -> gw_schema::AccountingCapability {
+        gw_schema::AccountingCapability::NoModelRequests
+    }
     fn stream_chat(&self, _req: ChatRequest) -> StreamChatFuture<'_> {
         let n = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
         let fail = self.fail_on == 0 || n == self.fail_on;
@@ -196,6 +205,9 @@ impl Provider for FailingJudge {
 /// A provider that PANICS if ever called — proves a path never touches the teacher.
 pub struct ExplodingTeacher;
 impl Provider for ExplodingTeacher {
+    fn accounting_capability(&self) -> gw_schema::AccountingCapability {
+        gw_schema::AccountingCapability::NoModelRequests
+    }
     fn stream_chat(&self, _req: ChatRequest) -> StreamChatFuture<'_> {
         panic!("teacher was called when it must not have been (never-re-spend / budget guard)");
     }
@@ -227,6 +239,9 @@ impl FailingTeacher {
 }
 
 impl Provider for FailingTeacher {
+    fn accounting_capability(&self) -> gw_schema::AccountingCapability {
+        gw_schema::AccountingCapability::NoModelRequests
+    }
     fn stream_chat(&self, _req: ChatRequest) -> StreamChatFuture<'_> {
         let n = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
         let fail = n == self.fail_on;
@@ -276,6 +291,9 @@ impl AlwaysFailingTeacher {
 }
 
 impl Provider for AlwaysFailingTeacher {
+    fn accounting_capability(&self) -> gw_schema::AccountingCapability {
+        gw_schema::AccountingCapability::NoModelRequests
+    }
     fn stream_chat(&self, _req: ChatRequest) -> StreamChatFuture<'_> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         let status = self.status;
@@ -311,6 +329,9 @@ impl BarrierTeacher {
 }
 
 impl Provider for BarrierTeacher {
+    fn accounting_capability(&self) -> gw_schema::AccountingCapability {
+        gw_schema::AccountingCapability::NoModelRequests
+    }
     fn stream_chat(&self, _req: ChatRequest) -> StreamChatFuture<'_> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         let barrier = Arc::clone(&self.barrier);

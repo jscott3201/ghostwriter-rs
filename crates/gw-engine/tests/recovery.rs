@@ -23,8 +23,9 @@ async fn seed_assistant_generated(
     record_id: &str,
 ) -> TrainingRecord {
     store.create_run("run-1", "{}", Some(25.0)).await.unwrap();
-    let gated =
-        synthesize_user_turn(good_candidate("12*8?"), &gw_generate::NullEmbedder, &[]).unwrap();
+    let gated = synthesize_user_turn(good_candidate("12*8?"), &gw_generate::NullEmbedder, &[])
+        .await
+        .unwrap();
     let call = TeacherCall::new("z-ai/glm-5.2", vec![gated.candidate.message.clone()], 16384)
         .with_sampling(SamplingPreset::official().with_seed(0));
     let turn = generate_assistant(teacher.as_ref(), &gated, &call)
@@ -268,8 +269,9 @@ async fn seed_assistant_generated_named(
     record_id: &str,
 ) -> TrainingRecord {
     store.create_run(run_id, "{}", Some(25.0)).await.unwrap();
-    let gated =
-        synthesize_user_turn(good_candidate("12*8?"), &gw_generate::NullEmbedder, &[]).unwrap();
+    let gated = synthesize_user_turn(good_candidate("12*8?"), &gw_generate::NullEmbedder, &[])
+        .await
+        .unwrap();
     let call = TeacherCall::new("z-ai/glm-5.2", vec![gated.candidate.message.clone()], 16384)
         .with_sampling(SamplingPreset::official().with_seed(0));
     let turn = generate_assistant(teacher.as_ref(), &gated, &call)

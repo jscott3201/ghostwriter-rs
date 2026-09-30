@@ -130,8 +130,9 @@ async fn seed_sibling_assistant_generated(
     completion_index: u32,
     n_completions: u32,
 ) -> TrainingRecord {
-    let gated =
-        synthesize_user_turn(good_candidate("12*8?"), &gw_generate::NullEmbedder, &[]).unwrap();
+    let gated = synthesize_user_turn(good_candidate("12*8?"), &gw_generate::NullEmbedder, &[])
+        .await
+        .unwrap();
     let call = TeacherCall::new("z-ai/glm-5.2", vec![gated.candidate.message.clone()], 16384)
         .with_sampling(SamplingPreset::official().with_seed(0));
     let turn = generate_assistant(teacher.as_ref(), &gated, &call)

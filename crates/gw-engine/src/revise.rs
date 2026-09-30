@@ -143,9 +143,10 @@ async fn generate_retry(
     let priors = crate::priors::snapshot(&clients.priors, &item_id);
     let gated: GatedUserTurn = synthesize_user_turn(
         seed.candidate.clone(),
-        clients.embedder.as_ref(),
+        &clients.embedder_for(retry_id, gw_schema::AttemptPurpose::CandidateQc),
         priors.as_ref(),
-    )?;
+    )
+    .await?;
     drop(priors);
     if !gated.passed() {
         return Err(EngineError::Generate(
@@ -171,7 +172,12 @@ async fn generate_retry(
     if control.is_cancelled() {
         return Ok(GenerationOutcome::Interrupted);
     }
-    let turn = generate_assistant(clients.teacher.as_ref(), &gated, &call).await?;
+    let turn = generate_assistant(
+        &clients.teacher_for(retry_id, gw_schema::AttemptPurpose::Revision),
+        &gated,
+        &call,
+    )
+    .await?;
     let cost_usd = turn.cost.unwrap_or(0.0);
 
     let teacher_ref = TeacherRef {

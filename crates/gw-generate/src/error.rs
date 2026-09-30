@@ -63,9 +63,9 @@ pub enum GenerateError {
     },
 
     /// The injected [`Embedder`](crate::Embedder) used by the `diverse` dedup check failed. Carries
-    /// a human-readable message from the embedder backend.
+    /// the typed provider error, including fatal accounting and cancellation failures.
     #[error("embedder error: {0}")]
-    Embed(String),
+    Embed(ProviderError),
 
     /// A synthesized USER turn carried a raw chat control token (`<|turn>`, `<think>`, …) — an
     /// upstream elicitation/template stage leaked channel markup. The QC gate fails loud rather than

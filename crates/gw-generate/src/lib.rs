@@ -56,6 +56,7 @@
 
 mod assemble;
 mod assistant;
+mod embedder;
 mod error;
 mod request;
 mod sibling;
@@ -64,6 +65,7 @@ mod user_synth;
 
 pub use assemble::{RecordContext, assemble};
 pub use assistant::{AccumulatedStream, AssistantTurn, accumulate, generate_turn};
+pub use embedder::{Embedder, EmbeddingFuture, NullEmbedder};
 pub use error::{GenerateError, Result};
 pub use request::{ReasoningPolicy, SamplingPreset, TeacherCall};
 pub use sibling::{DEFAULT_K, SiblingPlan, plan_group, seeds_are_distinct};
@@ -72,8 +74,8 @@ pub use teacher::{
     routing_to_sampling,
 };
 pub use user_synth::{
-    DEFAULT_COSINE_THRESHOLD, Embedder, GatedUserTurn, NullEmbedder, UserSeed, UserTurnCandidate,
-    cosine, gate, user_message,
+    DEFAULT_COSINE_THRESHOLD, GatedUserTurn, UserSeed, UserTurnCandidate, cosine, gate,
+    user_message,
 };
 
 use gw_providers::Provider;
@@ -87,12 +89,12 @@ use gw_providers::Provider;
 ///
 /// # Errors
 /// Returns [`GenerateError::Embed`] if the injected embedder fails on the candidate.
-pub fn synthesize_user_turn<E: Embedder + ?Sized>(
+pub async fn synthesize_user_turn<E: Embedder + ?Sized>(
     candidate: UserTurnCandidate,
     embedder: &E,
     prior_embeddings: &[Vec<f32>],
 ) -> Result<GatedUserTurn> {
-    gate(candidate, embedder, prior_embeddings)
+    gate(candidate, embedder, prior_embeddings).await
 }
 
 /// Generate the ASSISTANT turn for a GATED user turn by calling the teacher — the single function

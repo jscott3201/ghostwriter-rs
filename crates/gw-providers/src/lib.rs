@@ -22,8 +22,8 @@
 //! ## The [`Provider`] trait
 //!
 //! [`Provider::stream_chat`] returns a `Pin<Box<dyn Stream<…> + Send>>` of decoded deltas. The
-//! crate uses **no `async-trait`** dependency: the trait method is `async fn` returning a boxed
-//! stream, which keeps the trait usable as `&dyn Provider` from the engine without adding a
+//! crate uses **no `async-trait`** dependency: the trait method returns a boxed future resolving
+//! to a boxed stream, which keeps the trait usable as `&dyn Provider` without adding a
 //! macro crate. Each yielded item is a [`StreamDelta`] or a [`ProviderError`]; a mid-stream
 //! reset arrives as a terminal [`ProviderError::StreamReset`].
 //!
@@ -66,6 +66,9 @@ mod delta_wire;
 mod embeddings;
 mod error;
 mod limiter;
+mod metadata;
+mod observation;
+mod observed_sse;
 mod request;
 mod retry;
 mod sse;
@@ -81,6 +84,10 @@ pub use delta::{ChunkProvenance, CompletionTokensDetails, StreamDelta, Usage};
 pub use embeddings::{EmbeddingsClient, EmbeddingsClientBuilder, embedding_headers};
 pub use error::ProviderError;
 pub use limiter::RateLimiter;
+pub use observation::{
+    AttemptObserver, CallObservation, ObservationContext, ObservationError, ObservationFuture,
+    observed_chat,
+};
 pub use request::{ChatRequest, ProviderRouting, ReasoningParam, SortStrategy, UsageRequest};
 pub use retry::{RetryPolicy, retry, retry_with};
 pub use sse::decode_sse;
@@ -116,6 +123,25 @@ pub trait Provider: Send + Sync {
     /// retries exhausted on a transient fault). Errors encountered *while streaming* are
     /// yielded as `Err` items on the returned [`DeltaStream`].
     fn stream_chat(&self, req: ChatRequest) -> StreamChatFuture<'_>;
+
+    /// Cooperative physical-request capability; custom implementations default to unknown.
+    fn accounting_capability(&self) -> gw_schema::AccountingCapability {
+        gw_schema::AccountingCapability::Unknown
+    }
+
+    /// Optional engine-owned context, independent of request serialization and cache keys.
+    fn observation_context(&self) -> Option<ObservationContext> {
+        None
+    }
+
+    /// Stream with per-transmission observation. Unknown extensions must not claim coverage.
+    fn stream_chat_observed(
+        &self,
+        req: ChatRequest,
+        _observation: CallObservation,
+    ) -> StreamChatFuture<'_> {
+        self.stream_chat(req)
+    }
 }
 
 /// Compile-time assertion that [`Provider`] is dyn-compatible (object-safe). If a future change
@@ -132,3 +158,6 @@ fn _assert_provider_send_sync() {
     fn req<T: Send + Sync>() {}
     req::<Box<dyn Provider>>();
 }
+
+#[cfg(test)]
+mod http2_tests;

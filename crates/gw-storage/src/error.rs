@@ -15,6 +15,10 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum StorageError {
+    /// Invalid or contradictory physical model request evidence.
+    #[error("model attempt evidence error: {0}")]
+    Attempt(String),
+
     /// An artifact, receipt, or selected source snapshot failed integrity validation.
     #[error("export integrity error: {0}")]
     Export(String),

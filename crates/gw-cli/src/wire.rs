@@ -42,7 +42,6 @@ use gw_schema::EmbeddingBackend;
 use gw_storage::Store;
 
 use crate::config::Config;
-use crate::embedder::HttpEmbedder;
 
 /// The harness version stamped into provenance (the crate version).
 pub const HARNESS_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -112,7 +111,7 @@ pub fn build_clients(
                     .api_key_env(config.api_key_env.clone())
                     .build()
                     .context("constructing the embeddings client")?;
-                Arc::new(HttpEmbedder::new(client))
+                Arc::new(client)
             }
             EmbeddingBackend::CandleLocal => {
                 anyhow::bail!("embedding backend candle_local is not constructible in v1")

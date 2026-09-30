@@ -201,6 +201,8 @@ impl AreaConfig {
 pub struct Clients {
     /// The authoritative data plane.
     pub store: Store,
+    /// Launch-owned receipt context, installed after live capability assessment.
+    pub(crate) observation: Option<crate::attempts::LaunchObservation>,
     /// The teacher (assistant-generation) provider.
     pub teacher: Arc<dyn Provider>,
     /// The judge-panel provider (may be the same as `teacher`).
@@ -255,6 +257,7 @@ impl Clients {
     ) -> Self {
         Self {
             store,
+            observation: None,
             teacher,
             judge,
             embedder,

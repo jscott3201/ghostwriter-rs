@@ -15,16 +15,16 @@ use tokio_util::sync::CancellationToken;
 struct SameVectorEmbedder;
 
 impl Embedder for SameVectorEmbedder {
-    fn embed(&self, _text: &str) -> Result<Vec<f32>, String> {
-        Ok(vec![1.0, 0.0])
+    fn embed<'a>(&'a self, _text: &'a str) -> gw_generate::EmbeddingFuture<'a> {
+        Box::pin(async move { Ok(vec![1.0, 0.0]) })
     }
 }
 
 struct PanicEmbedder;
 
 impl Embedder for PanicEmbedder {
-    fn embed(&self, _text: &str) -> Result<Vec<f32>, String> {
-        panic!("cancelled seeding must not call the embedder")
+    fn embed<'a>(&'a self, _text: &'a str) -> gw_generate::EmbeddingFuture<'a> {
+        Box::pin(async move { panic!("cancelled seeding must not call the embedder") })
     }
 }
 
@@ -41,8 +41,14 @@ impl ScriptedEmbedder {
 }
 
 impl Embedder for ScriptedEmbedder {
-    fn embed(&self, _text: &str) -> Result<Vec<f32>, String> {
-        self.results.lock().unwrap().remove(0)
+    fn embed<'a>(&'a self, _text: &'a str) -> gw_generate::EmbeddingFuture<'a> {
+        Box::pin(async move {
+            self.results
+                .lock()
+                .unwrap()
+                .remove(0)
+                .map_err(gw_providers::ProviderError::Transport)
+        })
     }
 }
 

@@ -512,20 +512,43 @@ pub(crate) async fn grade_request<P: Provider + ?Sized>(
 ) -> Result<Grade> {
     let max_tokens = req.max_tokens;
     let reasoning = req.reasoning;
-    let stream = provider.stream_chat(req).await?;
-    let drained = drain_content(stream).await?;
-    if drained.content.trim().is_empty() {
-        return Err(empty_completion_error(
-            judge, &drained, max_tokens, reasoning,
-        ));
+    let (stream, observation) = gw_providers::observed_chat(provider, req).await?;
+    let mut truncated = false;
+    let result = async {
+        let drained = drain_content(stream).await?;
+        truncated = drained.hit_length_cap();
+        if drained.content.trim().is_empty() {
+            return Err(empty_completion_error(
+                judge, &drained, max_tokens, reasoning,
+            ));
+        }
+        match parse_grade(judge, &drained.content) {
+            Ok(grade) => Ok(grade),
+            Err(_) if drained.hit_length_cap() => Err(empty_completion_error(
+                judge, &drained, max_tokens, reasoning,
+            )),
+            Err(err) => Err(err),
+        }
     }
-    match parse_grade(judge, &drained.content) {
-        Ok(grade) => Ok(grade),
-        Err(_) if drained.hit_length_cap() => Err(empty_completion_error(
-            judge, &drained, max_tokens, reasoning,
-        )),
-        Err(err) => Err(err),
+    .await;
+    if let Some(call) = observation {
+        let interpretation = match &result {
+            Ok(_) => gw_schema::OutputInterpretation::Accepted,
+            Err(JudgeError::Provider(error)) if error.is_accounting() => return result,
+            Err(JudgeError::Provider(gw_providers::ProviderError::Decode(_))) => {
+                gw_schema::OutputInterpretation::Invalid
+            }
+            Err(JudgeError::Provider(_)) => gw_schema::OutputInterpretation::Failed,
+            Err(_) if truncated => gw_schema::OutputInterpretation::Truncated,
+            Err(_) => gw_schema::OutputInterpretation::Invalid,
+        };
+        call.interpret(
+            interpretation,
+            result.as_ref().err().map(ToString::to_string),
+        )
+        .await?;
     }
+    result
 }
 
 /// Grade the whole panel in a BLIND, INDEPENDENT, SEALED first pass (§5.7): every judge is a

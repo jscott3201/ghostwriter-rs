@@ -328,7 +328,7 @@ async fn grade_and_consense(
 
     let panel = grade_panel_cached(
         &clients.store,
-        clients.judge.as_ref(),
+        &clients.judge_for(&rec.record_id),
         &area.judges,
         &area.rubric,
         &candidate_render,
@@ -417,13 +417,19 @@ async fn persist_envelope_and_advance(
         .store
         .advance_lifecycle(&rec.record_id, to, detail)
         .await?;
-    if to == LifecycleState::Admitted {
-        crate::priors::append_record(&clients.priors, clients.embedder.as_ref(), rec);
-    }
     clients.events.emit(EngineEvent::StateAdvanced {
         record_id: rec.record_id.clone(),
         to,
     });
+    // The admission transition is already durable and observable even if its later prior fails.
+    if to == LifecycleState::Admitted {
+        crate::priors::append_record(
+            &clients.priors,
+            &clients.embedder_for(&rec.record_id, gw_schema::AttemptPurpose::AdmittedPrior),
+            rec,
+        )
+        .await?;
+    }
     Ok(())
 }
 

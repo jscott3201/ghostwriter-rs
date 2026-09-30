@@ -12,9 +12,10 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+blake3.workspace = true
 gw-schema.workspace = true
 serde.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
 reqwest.workspace = true
 tokio.workspace = true
 futures.workspace = true
@@ -29,4 +30,10 @@ thiserror.workspace = true
 gw-schema.workspace = true
 tokio.workspace = true
 futures.workspace = true
-reqwest.workspace = true
+reqwest = { workspace = true, features = ["http2"] }
+# HTTP/2 is test-only: exercise a real REFUSED_STREAM under the production retry policy.
+h2 = "0.4"
+http = "1"
+bytes = "1"
+gw-storage.workspace = true
+sqlx.workspace = true

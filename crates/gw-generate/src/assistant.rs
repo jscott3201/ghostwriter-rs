@@ -302,9 +302,28 @@ pub async fn generate_turn<P: Provider + ?Sized>(
     provider: &P,
     request: ChatRequest,
 ) -> Result<AssistantTurn> {
-    let stream = provider.stream_chat(request).await?;
-    let acc = accumulate(stream).await?;
-    acc.into_turn()
+    let (stream, observation) = gw_providers::observed_chat(provider, request).await?;
+    let result = async { accumulate(stream).await?.into_turn() }.await;
+    if let Some(call) = observation {
+        let interpretation = match &result {
+            Ok(_) => gw_schema::OutputInterpretation::Accepted,
+            Err(GenerateError::TruncatedReasoning { .. }) => {
+                gw_schema::OutputInterpretation::Truncated
+            }
+            Err(GenerateError::Provider(error)) if error.is_accounting() => return result,
+            Err(GenerateError::Provider(gw_providers::ProviderError::Decode(_))) => {
+                gw_schema::OutputInterpretation::Invalid
+            }
+            Err(GenerateError::Provider(_)) => gw_schema::OutputInterpretation::Failed,
+            Err(_) => gw_schema::OutputInterpretation::Invalid,
+        };
+        call.interpret(
+            interpretation,
+            result.as_ref().err().map(ToString::to_string),
+        )
+        .await?;
+    }
+    result
 }
 
 #[cfg(test)]

@@ -35,13 +35,37 @@ where
     S: Stream<Item = reqwest::Result<B>> + Unpin,
     B: AsRef<[u8]>,
 {
-    // `Option<Decoder>` so we can fuse: once None, the stream is done.
+    let events = Box::pin(decode_events(byte_stream));
+    futures::stream::unfold(Some(events), |state| async move {
+        let mut events = state?;
+        let item = match events.next().await? {
+            Ok(SseEvent::Done) => return None,
+            Ok(SseEvent::Data(payload)) => {
+                parse_chunk(&payload).map_err(|e| ProviderError::Decode(e.to_string()))
+            }
+            Err(error) => Err(error),
+        };
+        let next = item.is_ok().then_some(events);
+        Some((item, next))
+    })
+}
+
+pub(crate) enum SseEvent {
+    Data(String),
+    Done,
+}
+
+pub(crate) fn decode_events<S, B>(
+    byte_stream: S,
+) -> impl Stream<Item = Result<SseEvent, ProviderError>>
+where
+    S: Stream<Item = reqwest::Result<B>> + Unpin,
+    B: AsRef<[u8]>,
+{
     futures::stream::unfold(Some(Decoder::new(byte_stream)), |state| async move {
         let mut dec = state?;
         match dec.next_item().await {
             Some(item) => {
-                // On a terminal item (DONE or error) `next_item` returns the item but the
-                // decoder marks itself done; reflect that by dropping it from the state.
                 let next_state = if dec.finished { None } else { Some(dec) };
                 Some((item, next_state))
             }
@@ -56,7 +80,7 @@ struct Decoder<S> {
     /// Bytes received but not yet terminated by a `\n`.
     line_buf: Vec<u8>,
     /// Parsed deltas ready to yield (a single chunk can contain several complete lines).
-    ready: VecDeque<Result<StreamDelta, ProviderError>>,
+    ready: VecDeque<Result<SseEvent, ProviderError>>,
     /// Set once the upstream byte stream has ended.
     stream_ended: bool,
     /// Set once `[DONE]` was seen — a clean, expected end-of-stream.
@@ -86,7 +110,7 @@ where
 
     /// Produce the next item (delta or error), pulling more bytes as needed. Returns `None`
     /// only once the stream is fully drained and no terminal error is owed.
-    async fn next_item(&mut self) -> Option<Result<StreamDelta, ProviderError>> {
+    async fn next_item(&mut self) -> Option<Result<SseEvent, ProviderError>> {
         loop {
             if self.finished {
                 return None;
@@ -184,7 +208,7 @@ where
     ///
     /// Returns `Some(item)` for a `data:` JSON payload (or the DONE sentinel, which sets
     /// `saw_done` and returns `None`), and `None` for comment / blank / `event:` lines.
-    fn process_line(&mut self, raw: &[u8]) -> Option<Result<StreamDelta, ProviderError>> {
+    fn process_line(&mut self, raw: &[u8]) -> Option<Result<SseEvent, ProviderError>> {
         // Lines are UTF-8 JSON; lossily decode for classification (parse still uses &str).
         let line = String::from_utf8_lossy(raw);
         let line = line.trim_end();
@@ -201,9 +225,9 @@ where
         }
         if payload == DONE_SENTINEL {
             self.saw_done = true;
-            return None;
+            return Some(Ok(SseEvent::Done));
         }
-        Some(parse_chunk(payload).map_err(|e| ProviderError::Decode(e.to_string())))
+        Some(Ok(SseEvent::Data(payload.to_string())))
     }
 }
 
