@@ -9,10 +9,9 @@
 //!
 //! This module owns:
 //! - [`Grade`] — one judge's sealed outcome (score + verdict + meta-prediction + rationale + raw).
-//! - [`PanelJudge`] — the per-judge config (slug, rubric, scoring, sampling) consumed to build the
+//! - [`PanelJudge`] — the per-judge config (slug, rubric, sampling) consumed to build the
 //!   request and the cache key.
-//! - [`JudgeScoring`] — `GEvalLogprob | IntegerLikert` (the §4.2 routing pin; the actual scoring
-//!   path used is recorded on the grade for audit).
+//! - [`JudgeScoring`] — the implemented JSON score interpretation, recorded on the grade for audit.
 //! - the judge-prompt builder, the response parser, and [`grade_one`] / [`grade_panel`] — the
 //!   sealed parallel pass over the injected provider, each call wrapped by the never-re-spend cache
 //!   (`cache.rs`).
@@ -30,18 +29,18 @@ use serde::Deserialize;
 use crate::decision::Verdict;
 use crate::error::{JudgeError, Result};
 
-/// How a judge's pointwise score is produced (JUDGE-DESIGN §4.2). The pin is per-judge; the actual
-/// path used is recorded on the grade (`scoring_used` in [`Grade::raw`]) for audit, since a
-/// `GEvalLogprob` judge whose route lacks logprobs/structured-outputs auto-falls-back to
-/// `IntegerLikert`.
+/// The implemented pointwise scoring method, recorded as `scoring_used` in [`Grade::raw`].
+/// Judges report a numeric score in JSON; this harness does not request or interpret logprobs.
+/// There is no scoring selector or automatic fallback to another algorithm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum JudgeScoring {
-    /// G-Eval logprob-weighted continuous scoring — requires a route advertising BOTH `logprobs`
-    /// AND `structured_outputs`.
-    GEvalLogprob,
-    /// Discrete integer Likert (1–5 / 1–10), no logprob de-quantization. The fallback path.
-    IntegerLikert,
+    /// A self-reported JSON score, with the existing numeric normalization and verdict parser.
+    JsonScore,
 }
+
+/// Version of the response extraction, score normalization, verdict parsing, and grade audit
+/// interpretation. Bump whenever those semantics change so prior cached grades cannot survive it.
+pub(crate) const JUDGE_INTERPRETATION_VERSION: u32 = 1;
 
 /// Default explicit judge reasoning budget. Judges need enough reasoning to inspect a trace, but
 /// unlike teachers they must preserve content headroom for the verdict JSON.
@@ -58,8 +57,7 @@ impl JudgeScoring {
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
-            JudgeScoring::GEvalLogprob => "g_eval_logprob",
-            JudgeScoring::IntegerLikert => "integer_likert",
+            JudgeScoring::JsonScore => "json_score",
         }
     }
 }
@@ -115,7 +113,7 @@ impl Default for JudgeSampling {
 }
 
 /// One judge's configuration in the panel: its model slug, optional rubric id (part of the cache
-/// key), scoring pin, and sampling. The `family` token drives same-family exclusion upstream
+/// key), and sampling. The `family` token drives same-family exclusion upstream
 /// (`grader.rs`); it is the coarse model family, e.g. `"gemma"`, not the full slug.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PanelJudge {
@@ -125,8 +123,6 @@ pub struct PanelJudge {
     pub family: String,
     /// Rubric id (`rubric_id` in the cache key + `JudgeVote.rubric_id`), or `None`.
     pub rubric_id: Option<String>,
-    /// Scoring pin (`GEvalLogprob | IntegerLikert`).
-    pub scoring: JudgeScoring,
     /// Judge-call sampling.
     pub sampling: JudgeSampling,
     /// Combined hidden-reasoning plus visible-content cap for the judge completion.
@@ -136,15 +132,14 @@ pub struct PanelJudge {
 }
 
 impl PanelJudge {
-    /// A minimal judge: a slug + family, integer-Likert scoring, default (temp-0) sampling, no
-    /// rubric. The builder-style setters layer the rest.
+    /// A minimal judge: a slug + family, default (temp-0) sampling, and no rubric. All judges use
+    /// [`JudgeScoring::JsonScore`]. The builder-style setters layer the request settings.
     #[must_use]
     pub fn new(slug: impl Into<String>, family: impl Into<String>) -> Self {
         Self {
             slug: slug.into(),
             family: family.into(),
             rubric_id: None,
-            scoring: JudgeScoring::IntegerLikert,
             sampling: JudgeSampling::default(),
             max_tokens: DEFAULT_JUDGE_MAX_TOKENS,
             reasoning: Some(JudgeReasoning::MaxTokens(
@@ -157,13 +152,6 @@ impl PanelJudge {
     #[must_use]
     pub fn with_rubric(mut self, rubric_id: impl Into<String>) -> Self {
         self.rubric_id = Some(rubric_id.into());
-        self
-    }
-
-    /// Set the scoring pin. Chainable.
-    #[must_use]
-    pub fn with_scoring(mut self, scoring: JudgeScoring) -> Self {
-        self.scoring = scoring;
         self
     }
 
@@ -222,7 +210,7 @@ impl PanelJudge {
 /// `meta_prediction` is the judge's prediction of the panel-mean verdict score (the SP/BTS "how
 /// will the others vote" elicitation, §5.1) — recorded for the SP tie-break. `confidence` is the
 /// judge's STATED confidence — RECORDED, never used as an aggregation weight (§4.4). `raw` carries
-/// the provider response + `scoring_used` for audit.
+/// the provider response, `scoring_used`, and `interpretation_version` for audit.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Grade {
     /// The judge model slug.
@@ -245,7 +233,7 @@ pub struct Grade {
     pub dimensions: Option<BTreeMap<String, f64>>,
     /// The judge's free-text rationale (required on a reject; feeds the revise loop + Dung nodes).
     pub rationale: Option<String>,
-    /// Raw provider response + `scoring_used`, for the immutable audit record.
+    /// Raw provider response + `scoring_used` + `interpretation_version`, for the audit record.
     pub raw: serde_json::Value,
     /// The sampling temperature actually used (folded into the cache key).
     pub temperature: f64,
@@ -277,8 +265,7 @@ impl Grade {
 }
 
 /// The minimal JSON contract a judge is asked to emit (so the panel can parse it deterministically).
-/// A judge that cannot emit this (or emits garbage) yields a [`Verdict::Uncertain`] grade rather
-/// than crashing the panel — one bad judge must not sink the consensus.
+/// A structurally invalid response returns [`JudgeError::JudgeParse`] and is not cached.
 #[derive(Debug, Deserialize)]
 struct JudgeResponse {
     /// `0..1` (or `1..10` — normalized by [`normalize_score`]).
@@ -296,9 +283,9 @@ struct JudgeResponse {
     rationale: Option<String>,
 }
 
-/// Normalize a raw judge score onto `[0, 1]`: a value already in `[0, 1]` passes through; a `1..10`
-/// Likert is divided by 10. Anything outside `[0, 10]` is clamped. This keeps the threshold
-/// comparison and the weighted aggregate on one scale regardless of a judge's rubric granularity.
+/// Normalize a raw JSON score onto `[0, 1]`: values above 1 are divided by 10, then the result is
+/// clamped to `[0, 1]`. Non-finite values become zero. This is the existing normalization policy,
+/// shared by scores and meta-predictions; it does not derive scores from token probabilities.
 fn normalize_score(raw: f64) -> f64 {
     if !raw.is_finite() {
         return 0.0;
@@ -352,14 +339,11 @@ fn extract_json(text: &str) -> Option<&str> {
 /// # Errors
 /// Returns [`JudgeError::JudgeParse`] if neither the raw text nor the extracted `{...}` body
 /// deserializes into a `JudgeResponse`.
-fn parse_grade(
-    judge: &PanelJudge,
-    response_text: &str,
-    scoring_used: JudgeScoring,
-) -> Result<Grade> {
+fn parse_grade(judge: &PanelJudge, response_text: &str) -> Result<Grade> {
     let raw = serde_json::json!({
         "response": response_text,
-        "scoring_used": scoring_used.as_str(),
+        "scoring_used": JudgeScoring::JsonScore.as_str(),
+        "interpretation_version": JUDGE_INTERPRETATION_VERSION,
     });
     // Try the trimmed body first, then the fence/prose-stripped {...} extraction.
     let parsed = serde_json::from_str::<JudgeResponse>(response_text.trim()).or_else(|first_err| {
@@ -502,9 +486,8 @@ fn empty_completion_error(
 }
 
 /// Call ONE judge over the injected provider and parse its sealed [`Grade`]. This spends a judge
-/// token; the caller (`cache.rs`) wraps it so a cache hit skips this entirely. The scoring path
-/// used is recorded for audit (here always the judge's pin; the route-capability fallback is the
-/// engine's to resolve and pass in).
+/// token; the caller (`cache.rs`) wraps it so a cache hit skips this entirely. The JSON scoring
+/// method and interpretation version are recorded for audit.
 ///
 /// # Errors
 /// Returns [`JudgeError::Provider`] if the judge call cannot be established or the stream resets, or
@@ -518,6 +501,15 @@ pub async fn grade_one<P: Provider + ?Sized>(
     candidate_render: &str,
 ) -> Result<Grade> {
     let req = build_judge_request(judge, rubric, candidate_render);
+    grade_request(provider, judge, req).await
+}
+
+/// Execute the already-built request so the cache fingerprints exactly what this layer dispatches.
+pub(crate) async fn grade_request<P: Provider + ?Sized>(
+    provider: &P,
+    judge: &PanelJudge,
+    req: ChatRequest,
+) -> Result<Grade> {
     let max_tokens = req.max_tokens;
     let reasoning = req.reasoning;
     let stream = provider.stream_chat(req).await?;
@@ -527,7 +519,7 @@ pub async fn grade_one<P: Provider + ?Sized>(
             judge, &drained, max_tokens, reasoning,
         ));
     }
-    match parse_grade(judge, &drained.content, judge.scoring) {
+    match parse_grade(judge, &drained.content) {
         Ok(grade) => Ok(grade),
         Err(_) if drained.hit_length_cap() => Err(empty_completion_error(
             judge, &drained, max_tokens, reasoning,
@@ -546,8 +538,8 @@ pub async fn grade_one<P: Provider + ?Sized>(
 ///
 /// # Errors
 /// Returns the FIRST judge call that fails to establish/stream (a transport failure is real — a
-/// silently-dropped judge would corrupt the design effect). Unparseable-but-streamed responses
-/// become `Uncertain` grades and do not error.
+/// silently-dropped judge would corrupt the design effect). Structurally unparseable responses
+/// return [`JudgeError::JudgeParse`].
 pub async fn grade_panel<P: Provider + ?Sized>(
     provider: &P,
     judges: &[PanelJudge],
@@ -616,7 +608,7 @@ mod tests {
     }
 
     #[test]
-    fn normalize_handles_likert_and_unit() {
+    fn normalize_handles_tenth_and_unit_scales() {
         assert!((normalize_score(0.8) - 0.8).abs() < 1e-12);
         assert!((normalize_score(8.0) - 0.8).abs() < 1e-12);
         assert!((normalize_score(11.0) - 1.0).abs() < 1e-12);
@@ -639,14 +631,17 @@ mod tests {
         let g = parse_grade(
             &judge,
             "{\"score\":0.9,\"verdict\":\"accept\",\"confidence\":0.8,\"meta_prediction\":0.7,\"rationale\":\"clean\"}",
-            JudgeScoring::IntegerLikert,
         )
         .unwrap();
         assert_eq!(g.verdict, Verdict::Accept);
         assert!((g.score - 0.9).abs() < 1e-12);
         assert!((g.confidence - 0.8).abs() < 1e-12);
         assert_eq!(g.meta_prediction, Some(0.7));
-        assert_eq!(g.raw["scoring_used"], "integer_likert");
+        assert_eq!(g.raw["scoring_used"], "json_score");
+        assert_eq!(
+            g.raw["interpretation_version"],
+            JUDGE_INTERPRETATION_VERSION
+        );
     }
 
     #[test]
@@ -654,7 +649,7 @@ mod tests {
         // V2: an unparseable body returns Err (mirroring the empty-completion path) so it is NOT
         // cached as a degenerate Uncertain/0.0 — the engine can retry.
         let judge = PanelJudge::new("m", "fam");
-        let err = parse_grade(&judge, "not json at all", JudgeScoring::GEvalLogprob).unwrap_err();
+        let err = parse_grade(&judge, "not json at all").unwrap_err();
         assert!(matches!(err, JudgeError::JudgeParse(_)));
     }
 
@@ -663,7 +658,7 @@ mod tests {
         // V2: the most common LLM output shape — a ```json fenced block — must parse.
         let judge = PanelJudge::new("m", "fam");
         let fenced = "```json\n{\"score\":0.85,\"verdict\":\"accept\"}\n```";
-        let g = parse_grade(&judge, fenced, JudgeScoring::IntegerLikert).unwrap();
+        let g = parse_grade(&judge, fenced).unwrap();
         assert_eq!(g.verdict, Verdict::Accept);
         assert!((g.score - 0.85).abs() < 1e-12);
     }
@@ -673,7 +668,7 @@ mod tests {
         // V2: a prose preamble/suffix around the object still parses (outermost {...} extraction).
         let judge = PanelJudge::new("m", "fam");
         let prose = "Here is my grade:\n{\"score\":0.4,\"verdict\":\"reject\"}\nHope that helps!";
-        let g = parse_grade(&judge, prose, JudgeScoring::IntegerLikert).unwrap();
+        let g = parse_grade(&judge, prose).unwrap();
         assert_eq!(g.verdict, Verdict::Reject);
     }
 
@@ -681,12 +676,7 @@ mod tests {
     fn legitimate_uncertain_vote_parses_and_is_not_an_error() {
         // A judge that genuinely voted "uncertain" parses fine — only a STRUCTURAL failure errors.
         let judge = PanelJudge::new("m", "fam");
-        let g = parse_grade(
-            &judge,
-            "{\"score\":0.5,\"verdict\":\"uncertain\"}",
-            JudgeScoring::IntegerLikert,
-        )
-        .unwrap();
+        let g = parse_grade(&judge, "{\"score\":0.5,\"verdict\":\"uncertain\"}").unwrap();
         assert_eq!(g.verdict, Verdict::Uncertain);
     }
 
@@ -699,6 +689,19 @@ mod tests {
             .unwrap();
         assert_eq!(g.verdict, Verdict::Accept);
         assert!((g.score - 0.85).abs() < 1e-12);
+    }
+
+    #[tokio::test]
+    async fn json_response_is_audited_as_json_scoring() {
+        let provider = FakeJudgeProvider::new(vec![r#"{"score":0.85,"verdict":"accept"}"#]);
+        let judge = PanelJudge::new("m", "fam");
+        let grade = grade_one(&provider, &judge, "rubric", "trace")
+            .await
+            .unwrap();
+        assert_eq!(
+            grade.raw["scoring_used"], "json_score",
+            "no logprobs were requested or supplied"
+        );
     }
 
     #[tokio::test]

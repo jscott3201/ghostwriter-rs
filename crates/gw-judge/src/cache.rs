@@ -1,20 +1,25 @@
 //! The never-re-spend cache wrapper for judge/verify model calls (A2; ARCHITECTURE §5, DATA-SCHEMA
 //! §5.2/§6.2).
 //!
-//! Every judge call is content-hash-cached so re-runs and crash-restarts never re-spend tokens.
+//! Repeated judge requests under the same interpretation contract reuse their cached grade.
 //! The cache is checked BEFORE spending and written AFTER. The key is the storage cache key
 //! `(content_hash, kind, model, rubric_id)` (`gw_storage::Store::cache_get` / `cache_put`), with the
-//! judge request knobs folded into the `rubric_id` slot:
+//! a versioned request fingerprint in the `rubric_id` slot:
 //!
 //! - **`content_hash`** — the candidate's `record_hash` (`gw_storage::record_hash`).
 //! - **`kind`** — [`JUDGE_CACHE_KIND`] (`"judge"`), distinguishing judge calls from teacher/verify.
 //! - **`model`** — the judge slug.
-//! - **`rubric_id`** — the folded key: rubric id plus sampling and budget knobs. The storage
-//!   layer's cache key is a fixed 4-tuple, so request-affecting parameters ride inside the
-//!   `rubric_id` component rather than widening the schema. This extends the A2 temperature fold:
-//!   a re-run at a DIFFERENT judge temperature, top-p, seed, max-token cap, or reasoning budget gets
-//!   a DIFFERENT key and so cannot silently reuse a stale verdict — the CACHE, not temp=0, is what
-//!   guarantees exact replay (OpenRouter MoE routing is non-deterministic even at temp 0).
+//! - **`rubric_id`** — `judge-request-v2:<BLAKE3>` of the built request and interpretation contract.
+//!   This includes the actual prompt/rubric/candidate bytes, model, effective sampling/reasoning
+//!   budgets, optional rubric identity, float sampling bits, JSON scoring method, and interpretation
+//!   version. The same built request is dispatched on a miss. Changed prompts or interpretation
+//!   cannot reuse a grade even if the caller supplies a stale content hash. Different raw token
+//!   caps that clamp to the same effective request still reuse the grade.
+//!
+//! Legacy folded rubric entries lack this evidence and are neither read nor rewritten/deleted.
+//! Run ids, total spending budgets, downstream admission thresholds, calibration, and judge family
+//! do not affect an individual judge request. Endpoint/routing defaults applied inside the provider
+//! and resolved model revisions are not captured here; this key does not establish their identity.
 //!
 //! [`grade_panel_cached`] is the production panel entry: for each judge it checks the cache, calls
 //! the provider only on a miss, and writes the result back. A fake provider that asserts on a
@@ -25,61 +30,12 @@ use gw_storage::Store;
 use serde_json::Value;
 
 use crate::error::Result;
-use crate::panel::{Grade, JudgeReasoning, PanelJudge, grade_one};
+use crate::panel::{Grade, PanelJudge, build_judge_request, grade_request};
+use crate::request_identity::request_fingerprint;
 
 /// The `kind` discriminant for judge calls in the storage cache (distinct from teacher generation
 /// and the deterministic verify rail). The verifier rail is pure/local and is not cached here.
 pub const JUDGE_CACHE_KIND: &str = "judge";
-
-/// Fold the judge `temperature` into the `rubric_id` cache-key component as
-/// `"<rubric>#t<temperature_bits>"`, where `temperature_bits = f64::to_bits(temperature)` (A2).
-///
-/// A `None` rubric becomes `"#t<bits>"` (empty rubric + the temperature tag), so two calls that
-/// differ ONLY in temperature land on distinct keys. Using the raw `u64` bit pattern (not the
-/// printed float) makes `-0.0` vs `0.0` and any rounding-equal temperatures hash distinctly and
-/// reproducibly.
-#[must_use]
-pub fn folded_rubric_key(rubric_id: Option<&str>, temperature: f64) -> String {
-    let bits = temperature.to_bits();
-    match rubric_id {
-        Some(r) => format!("{r}#t{bits}"),
-        None => format!("#t{bits}"),
-    }
-}
-
-fn folded_request_key(judge: &PanelJudge) -> String {
-    let mut key = folded_rubric_key(judge.rubric_id.as_deref(), judge.sampling.temperature);
-    if let Some(top_p) = judge.sampling.top_p {
-        key.push_str(&format!("#p{}", top_p.to_bits()));
-    } else {
-        key.push_str("#pnone");
-    }
-    if let Some(seed) = judge.sampling.seed {
-        key.push_str(&format!("#s{seed}"));
-    } else {
-        key.push_str("#snone");
-    }
-    key.push_str(&format!("#mt{}", judge.effective_max_tokens()));
-    match judge.reasoning {
-        Some(JudgeReasoning::MaxTokens(tokens)) => key.push_str(&format!("#rmt{tokens}")),
-        Some(JudgeReasoning::Effort(effort)) => {
-            key.push_str(&format!("#reffort{}", reasoning_effort_token(effort)));
-        }
-        None => key.push_str("#rnone"),
-    }
-    key
-}
-
-fn reasoning_effort_token(effort: gw_schema::ReasoningEffort) -> &'static str {
-    match effort {
-        gw_schema::ReasoningEffort::None => "none",
-        gw_schema::ReasoningEffort::Minimal => "minimal",
-        gw_schema::ReasoningEffort::Low => "low",
-        gw_schema::ReasoningEffort::Medium => "medium",
-        gw_schema::ReasoningEffort::High => "high",
-        gw_schema::ReasoningEffort::Xhigh => "xhigh",
-    }
-}
 
 /// Serialize a [`Grade`] to the JSON value stored in the cache (and re-hydrated on a hit). The grade
 /// is round-tripped through its audit-bearing fields; the cached value is the source of truth on a
@@ -113,8 +69,7 @@ fn verdict_token(v: crate::decision::Verdict) -> &'static str {
 }
 
 /// Re-hydrate a [`Grade`] from a cached JSON value. Missing/garbled fields degrade gracefully (an
-/// unreadable verdict becomes `Uncertain`), so a partially-written legacy cache row never crashes a
-/// re-run.
+/// unreadable verdict becomes `Uncertain`), so malformed cache values do not crash a re-run.
 fn grade_from_cache_value(value: &Value) -> Grade {
     use crate::decision::Verdict;
     let verdict = match value.get("verdict").and_then(Value::as_str) {
@@ -158,13 +113,14 @@ fn grade_from_cache_value(value: &Value) -> Grade {
 }
 
 /// Grade ONE judge with the never-re-spend cache: check the cache for `(content_hash, "judge",
-/// slug, folded_request_key(judge))`; on a HIT re-hydrate the grade WITHOUT calling the provider;
-/// on a MISS call the judge once, write the result, and return it.
+/// slug, request_fingerprint)`; on a HIT re-hydrate the grade WITHOUT calling the provider;
+/// on a MISS dispatch the fingerprinted request once, write the result, and return it.
 ///
 /// # Errors
 /// - [`JudgeError::Storage`](crate::JudgeError::Storage) on a cache read/write fault.
 /// - [`JudgeError::Provider`](crate::JudgeError::Provider) / `JudgeParse` from the underlying
-///   [`grade_one`] on a miss.
+///   judge call on a miss.
+/// - [`JudgeError::Invariant`](crate::JudgeError::Invariant) if request identity cannot serialize.
 pub async fn grade_one_cached<P: Provider + ?Sized>(
     store: &Store,
     provider: &P,
@@ -173,20 +129,26 @@ pub async fn grade_one_cached<P: Provider + ?Sized>(
     candidate_render: &str,
     content_hash: &str,
 ) -> Result<Grade> {
-    let folded = folded_request_key(judge);
+    let request = build_judge_request(judge, rubric, candidate_render);
+    let fingerprint = request_fingerprint(&request, judge.rubric_id.as_deref())?;
     if let Some(cached) = store
-        .cache_get(content_hash, JUDGE_CACHE_KIND, &judge.slug, Some(&folded))
+        .cache_get(
+            content_hash,
+            JUDGE_CACHE_KIND,
+            &judge.slug,
+            Some(&fingerprint),
+        )
         .await?
     {
         return Ok(grade_from_cache_value(&cached));
     }
-    let grade = grade_one(provider, judge, rubric, candidate_render).await?;
+    let grade = grade_request(provider, judge, request).await?;
     store
         .cache_put(
             content_hash,
             JUDGE_CACHE_KIND,
             &judge.slug,
-            Some(&folded),
+            Some(&fingerprint),
             &grade_to_cache_value(&grade),
         )
         .await?;
@@ -237,7 +199,7 @@ pub async fn grade_panel_cached<P: Provider + ?Sized>(
 mod tests {
     use super::*;
     use crate::decision::Verdict;
-    use crate::panel::{JudgeSampling, JudgeScoring};
+    use crate::panel::JudgeSampling;
     use gw_providers::{ChatRequest, DeltaStream, ProviderError, StreamChatFuture, StreamDelta};
     use gw_schema::ReasoningEffort;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -283,18 +245,6 @@ mod tests {
     }
 
     #[test]
-    fn temperature_folds_into_the_rubric_key() {
-        let a = folded_rubric_key(Some("math"), 0.0);
-        let b = folded_rubric_key(Some("math"), 0.7);
-        assert_ne!(a, b, "different temperatures must produce different keys");
-        assert!(a.starts_with("math#t"));
-        // None rubric still carries the temperature tag.
-        assert!(folded_rubric_key(None, 0.0).starts_with("#t"));
-        // The bit pattern, not the printed float, is used.
-        assert!(a.contains(&0.0f64.to_bits().to_string()));
-    }
-
-    #[test]
     fn grade_round_trips_through_cache_value() {
         let g = Grade {
             judge_model: "m".into(),
@@ -323,9 +273,7 @@ mod tests {
         let store = Store::open_in_memory().await.unwrap();
         // max_calls = 1: a second call for the SAME key would panic.
         let provider = CountingProvider::new(1, "{\"score\":0.9,\"verdict\":\"accept\"}");
-        let judge = PanelJudge::new("z-ai/glm-5.2", "glm")
-            .with_rubric("math")
-            .with_scoring(JudgeScoring::IntegerLikert);
+        let judge = PanelJudge::new("z-ai/glm-5.2", "glm").with_rubric("math");
 
         let first = grade_one_cached(&store, &provider, &judge, "rubric", "trace", "hash-1")
             .await
@@ -478,12 +426,6 @@ mod tests {
             .with_rubric("r")
             .with_max_tokens(4_000)
             .with_reasoning_max_tokens(2_000);
-
-        let effort_key = folded_request_key(&effort);
-        let budget_key = folded_request_key(&budget);
-        assert!(effort_key.contains("#reffort"));
-        assert!(budget_key.contains("#rmt"));
-        assert_ne!(effort_key, budget_key);
 
         grade_one_cached(&store, &provider, &effort, "rubric", "trace", "h")
             .await
