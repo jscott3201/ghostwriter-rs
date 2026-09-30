@@ -16,7 +16,9 @@ bash scripts/install-hooks.sh   # shared pre-commit (fmt + gates) and pre-push (
 cargo build --workspace
 ```
 
-The toolchain is pinned in `rust-toolchain.toml` (Rust 1.95.0, edition 2024).
+The toolchain is pinned in `rust-toolchain.toml` (Rust 1.98.1, edition 2024).
+This release toolchain fixes macOS optimized proc-macro loading; the workspace
+minimum Rust version remains 1.95.
 
 ## Workflow
 
