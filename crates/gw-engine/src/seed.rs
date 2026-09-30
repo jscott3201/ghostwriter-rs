@@ -26,14 +26,11 @@
 //! path.
 
 use gw_generate::UserTurnCandidate;
-use gw_schema::Content;
-
-use crate::Result;
 
 /// One unit of seed work for a shard: an already-elicited candidate USER turn plus its
 /// reproducibility seed and shard offset. The [`SeedSource`] yields these in order; the engine gates,
 /// generates, and judges each.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SeedItem {
     /// The reproducibility seed (threaded into best-of-k sibling sampling + the record id). Distinct
     /// seeds give distinct records; the SAME seed re-processed mints the SAME record id (idempotency).
@@ -50,26 +47,15 @@ pub struct SeedItem {
 ///
 /// `gw-engine` is generic over this seam so it stays HERMETIC: unit tests inject an
 /// [`InMemorySeedSource`] (deterministic, no network); a real run injects a JSONL/list-backed source.
-/// The contract: [`shard_count`](SeedSource::shard_count) is stable across a run, and
-/// [`items_for_shard`](SeedSource::items_for_shard) returns the SAME ordered items for the SAME shard
-/// on every call (so a crash-restart re-derives the identical work plan and resumes by offset).
+/// Preparation reads [`shard_count`](SeedSource::shard_count) once (clamping zero to one), then
+/// captures every shard exactly once. Those same owned vectors are hashed and executed. Each
+/// relaunch must reproduce the same plan to resume its stored offsets.
 pub trait SeedSource: Send + Sync {
     /// The number of shards the seed space is partitioned into (stable for the life of the run).
     fn shard_count(&self) -> usize;
 
-    /// A stable hash of the ordered prompt list whose indices define shard assignment.
-    ///
-    /// Implementations must hash the same post-filter prompt sequence that
-    /// [`items_for_shard`](Self::items_for_shard) partitions. The shard count is intentionally not
-    /// folded into this hash; the run ledger persists it in its own column.
-    ///
-    /// # Errors
-    /// Returns [`EngineError`](crate::EngineError) if the source cannot derive or serialize the
-    /// manifest hash.
-    fn prompts_hash(&self) -> Result<String>;
-
-    /// The ordered [`SeedItem`]s belonging to `shard` (0-based). MUST be deterministic — the same
-    /// shard yields the same items in the same order on every call, so resume-by-offset is sound.
+    /// The ordered [`SeedItem`]s belonging to `shard` (0-based), called once during preparation.
+    /// Offsets must equal vector ordinals; seeds must be unique within this shard.
     fn items_for_shard(&self, shard: i64) -> Vec<SeedItem>;
 }
 
@@ -118,15 +104,6 @@ impl SeedSource for InMemorySeedSource {
         self.shard_count
     }
 
-    fn prompts_hash(&self) -> Result<String> {
-        let prompts = self
-            .items
-            .iter()
-            .map(candidate_prompt_text)
-            .collect::<Result<Vec<_>>>()?;
-        Ok(gw_storage::prompts_hash(&prompts)?)
-    }
-
     fn items_for_shard(&self, shard: i64) -> Vec<SeedItem> {
         let n = self.shard_count as i64;
         // Partition by `global_index % shard_count`; the per-shard offset is the position within the
@@ -142,15 +119,6 @@ impl SeedSource for InMemorySeedSource {
                 candidate: candidate.clone(),
             })
             .collect()
-    }
-}
-
-fn candidate_prompt_text(candidate: &UserTurnCandidate) -> Result<String> {
-    match &candidate.message.content {
-        Content::Text(text) => Ok(text.trim().to_string()),
-        Content::Parts(_) => Ok(serde_json::to_string(&candidate.message.content)?),
-        // No content means no prompt text; the caller treats empty as a filtering signal.
-        Content::Null => Ok(String::new()),
     }
 }
 
@@ -175,7 +143,7 @@ pub fn record_id(
 mod tests {
     use super::*;
     use gw_generate::{UserSeed, user_message};
-    use gw_schema::{ContentPart, Oracle, VerificationContract, VerificationKind};
+    use gw_schema::{Content, ContentPart, Oracle, VerificationContract, VerificationKind};
 
     fn candidate(text: &str) -> UserTurnCandidate {
         UserTurnCandidate {
@@ -253,16 +221,38 @@ mod tests {
     }
 
     #[test]
-    fn prompts_hash_tracks_ordered_prompt_text() {
+    fn captured_plan_preserves_exact_whitespace_and_order() {
         let a = InMemorySeedSource::new(vec![candidate("q1"), candidate("q2")], 1);
         let b = InMemorySeedSource::new(vec![candidate(" q1 "), candidate("q2")], 1);
         let c = InMemorySeedSource::new(vec![candidate("q2"), candidate("q1")], 1);
-        assert_eq!(a.prompts_hash().unwrap(), b.prompts_hash().unwrap());
-        assert_ne!(a.prompts_hash().unwrap(), c.prompts_hash().unwrap());
+        assert_ne!(
+            crate::CapturedSeedPlan::capture(&a)
+                .unwrap()
+                .identity()
+                .content_hash
+                .clone(),
+            crate::CapturedSeedPlan::capture(&b)
+                .unwrap()
+                .identity()
+                .content_hash
+                .clone()
+        );
+        assert_ne!(
+            crate::CapturedSeedPlan::capture(&a)
+                .unwrap()
+                .identity()
+                .content_hash
+                .clone(),
+            crate::CapturedSeedPlan::capture(&c)
+                .unwrap()
+                .identity()
+                .content_hash
+                .clone()
+        );
     }
 
     #[test]
-    fn prompts_hash_distinguishes_part_boundaries_and_non_text_parts() {
+    fn captured_plan_distinguishes_part_boundaries_and_non_text_parts() {
         let joined = InMemorySeedSource::new(
             vec![candidate_with_content(Content::Parts(vec![
                 ContentPart::Text { text: "ab".into() },
@@ -287,10 +277,26 @@ mod tests {
         let empty_parts =
             InMemorySeedSource::new(vec![candidate_with_content(Content::Parts(vec![]))], 1);
 
-        let joined_hash = joined.prompts_hash().unwrap();
-        let split_hash = split.prompts_hash().unwrap();
-        let image_hash = image_only.prompts_hash().unwrap();
-        let empty_hash = empty_parts.prompts_hash().unwrap();
+        let joined_hash = crate::CapturedSeedPlan::capture(&joined)
+            .unwrap()
+            .identity()
+            .content_hash
+            .clone();
+        let split_hash = crate::CapturedSeedPlan::capture(&split)
+            .unwrap()
+            .identity()
+            .content_hash
+            .clone();
+        let image_hash = crate::CapturedSeedPlan::capture(&image_only)
+            .unwrap()
+            .identity()
+            .content_hash
+            .clone();
+        let empty_hash = crate::CapturedSeedPlan::capture(&empty_parts)
+            .unwrap()
+            .identity()
+            .content_hash
+            .clone();
 
         assert_ne!(joined_hash, split_hash);
         assert_ne!(image_hash, empty_hash);

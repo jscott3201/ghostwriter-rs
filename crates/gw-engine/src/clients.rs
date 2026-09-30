@@ -240,6 +240,29 @@ impl std::fmt::Debug for Clients {
 }
 
 impl Clients {
+    /// Read the actual injected objects' pure declarations. No provider, embedding, sandbox or
+    /// evidence lookup is performed; missing identity is independent of accounting capability.
+    ///
+    /// # Errors
+    /// Rejects an opaque client without an explicit immutable semantic declaration.
+    pub fn semantic_declarations(&self) -> crate::Result<gw_schema::ClientSemantics> {
+        fn declared(
+            value: Option<gw_schema::SemanticDeclaration>,
+            lane: &str,
+        ) -> crate::Result<gw_schema::SemanticDeclaration> {
+            value.filter(gw_schema::SemanticDeclaration::is_valid).ok_or_else(|| crate::EngineError::Invariant(format!("{lane} requires an explicit immutable semantic declaration before run preparation")))
+        }
+        Ok(gw_schema::ClientSemantics {
+            teacher: declared(self.teacher.semantic_declaration(), "teacher")?,
+            judge: declared(self.judge.semantic_declaration(), "judge")?,
+            embedding: declared(self.embedder.semantic_declaration(), "embedding")?,
+            sandbox: declared(self.sandbox.semantic_declaration(), "sandbox oracle")?,
+            execution_evidence: declared(
+                self.execution_evidence.semantic_declaration(),
+                "execution evidence source",
+            )?,
+        })
+    }
     /// Build a client bundle. `teacher` and `judge` may be the same `Arc` (one provider for both
     /// rails). The `sandbox` defaults are wired by the caller (a real run injects a `ToolExecutor`
     /// adapter; a test injects [`NullSandboxOracle`](gw_judge::NullSandboxOracle)).

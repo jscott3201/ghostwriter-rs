@@ -33,12 +33,13 @@ async fn record_count(store: &Store, run_id: &str) -> usize {
 }
 
 fn assert_partition_invariant(err: EngineError) {
-    match err {
-        EngineError::Invariant(msg) => {
-            assert!(msg.contains("run partition mismatch"), "{msg}");
-        }
-        other => panic!("expected partition invariant, got {other:?}"),
-    }
+    assert!(
+        matches!(
+            err,
+            EngineError::Storage(gw_storage::StorageError::RunManifest { .. })
+        ),
+        "expected immutable manifest conflict, got {err:?}"
+    );
 }
 
 #[tokio::test]

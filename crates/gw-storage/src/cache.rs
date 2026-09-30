@@ -35,6 +35,15 @@ fn canonical_bytes(value: &Value) -> Result<Vec<u8>> {
     Ok(serde_json::to_vec(value)?)
 }
 
+/// Hash a caller's explicitly versioned JSON contract with recursively sorted object keys.
+/// Arrays and null/empty distinctions retain their order and identity.
+///
+/// # Errors
+/// Returns a serialization error without performing I/O.
+pub fn canonical_json_hash(value: &Value) -> Result<String> {
+    Ok(blake3_hex(&canonical_bytes(value)?))
+}
+
 /// BLAKE3 of the record's CONTENT, via a positive allowlist (the exact-dedup key,
 /// [`gw_schema::Hashes::record_hash`]).
 ///
@@ -146,22 +155,6 @@ pub fn prompt_hash(messages: &[Message]) -> Result<String> {
             }))
         })
         .collect::<Result<_>>()?;
-    Ok(blake3_hex(&canonical_bytes(&Value::Array(projected))?))
-}
-
-/// BLAKE3 of the ordered prompt list that defines a run's seed partition manifest.
-///
-/// Each string is one post-filter user prompt in file/source order. Array order is deliberately
-/// preserved by `serde_json`, so reordering prompts changes the hash while object-key
-/// canonicalization remains available if a richer prompt source later stores structured entries.
-///
-/// # Errors
-/// Returns [`StorageError::Serde`](crate::StorageError::Serde) on a serialization failure.
-pub fn prompts_hash(prompts: &[String]) -> Result<String> {
-    let projected = prompts
-        .iter()
-        .map(|prompt| Value::String(prompt.clone()))
-        .collect();
     Ok(blake3_hex(&canonical_bytes(&Value::Array(projected))?))
 }
 

@@ -26,6 +26,9 @@ struct QueuedProvider {
     c_returned: Semaphore,
 }
 impl Provider for QueuedProvider {
+    fn semantic_declaration(&self) -> Option<gw_schema::SemanticDeclaration> {
+        self.inner.semantic_declaration()
+    }
     fn accounting_capability(&self) -> gw_schema::AccountingCapability {
         self.inner.accounting_capability()
     }

@@ -7,8 +7,8 @@
 //!
 //! ## v1 seam scope (documented deferral — see the crate report)
 //!
-//! `gw-generate`'s [`UserTurnCandidate`] does not derive `serde`, and there is no published JSONL
-//! schema for the four QC bools / the per-turn [`VerificationContract`]. So v1 reads PLAIN TEXT, one
+//! The CLI seed format is plain text; richer candidate fields belong to the engine contract.
+//! v1 reads one
 //! prompt per line, and synthesizes a judge-only candidate: a [`VerificationKind::None`] /
 //! [`Oracle::None`] contract (admission is judge-only, no deterministic oracle) with the three
 //! engine-side QC bools set true (`answerable` / `difficulty_targeted` / `in_scope`) — the candidate
@@ -28,7 +28,6 @@ use gw_schema::{Oracle, VerificationContract, VerificationKind};
 #[derive(Debug, Clone)]
 pub struct FileSeedSource {
     candidates: Vec<UserTurnCandidate>,
-    prompts: Vec<String>,
     shard_count: usize,
     base_seed: i64,
 }
@@ -67,7 +66,6 @@ impl FileSeedSource {
         let candidates = prompts.iter().map(|p| judge_only_candidate(p)).collect();
         Ok(Self {
             candidates,
-            prompts,
             shard_count: shard_count.max(1),
             base_seed: 0,
         })
@@ -107,10 +105,6 @@ fn judge_only_candidate(prompt: &str) -> UserTurnCandidate {
 impl SeedSource for FileSeedSource {
     fn shard_count(&self) -> usize {
         self.shard_count
-    }
-
-    fn prompts_hash(&self) -> gw_engine::Result<String> {
-        Ok(gw_storage::prompts_hash(&self.prompts)?)
     }
 
     fn items_for_shard(&self, shard: i64) -> Vec<SeedItem> {
@@ -176,8 +170,41 @@ mod tests {
         let reordered = FileSeedSource::from_prompts_str("q2\nq1\n", 2).expect("parses");
         let edited = FileSeedSource::from_prompts_str("q1\nq2 edited\n", 2).expect("parses");
 
-        assert_eq!(a.prompts_hash().unwrap(), b.prompts_hash().unwrap());
-        assert_ne!(a.prompts_hash().unwrap(), reordered.prompts_hash().unwrap());
-        assert_ne!(a.prompts_hash().unwrap(), edited.prompts_hash().unwrap());
+        assert_eq!(
+            gw_engine::CapturedSeedPlan::capture(&a)
+                .unwrap()
+                .identity()
+                .content_hash
+                .clone(),
+            gw_engine::CapturedSeedPlan::capture(&b)
+                .unwrap()
+                .identity()
+                .content_hash
+                .clone()
+        );
+        assert_ne!(
+            gw_engine::CapturedSeedPlan::capture(&a)
+                .unwrap()
+                .identity()
+                .content_hash
+                .clone(),
+            gw_engine::CapturedSeedPlan::capture(&reordered)
+                .unwrap()
+                .identity()
+                .content_hash
+                .clone()
+        );
+        assert_ne!(
+            gw_engine::CapturedSeedPlan::capture(&a)
+                .unwrap()
+                .identity()
+                .content_hash
+                .clone(),
+            gw_engine::CapturedSeedPlan::capture(&edited)
+                .unwrap()
+                .identity()
+                .content_hash
+                .clone()
+        );
     }
 }

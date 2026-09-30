@@ -62,6 +62,7 @@ mod request;
 mod sibling;
 mod teacher;
 mod user_synth;
+pub use user_synth::user_qc_contract;
 
 pub use assemble::{RecordContext, assemble};
 pub use assistant::{AccumulatedStream, AssistantTurn, accumulate, generate_turn};

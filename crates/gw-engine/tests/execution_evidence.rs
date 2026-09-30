@@ -303,7 +303,10 @@ async fn a_stale_report_is_never_followed() {
 #[tokio::test]
 async fn the_report_round_trips_through_put_get_and_a_resumed_verify() {
     let store = Store::open_in_memory().await.unwrap();
-    store.create_run("run-1", "{}", Some(25.0)).await.unwrap();
+    store
+        .insert_historical_run("run-1", "{}", Some(25.0))
+        .await
+        .unwrap();
     let teacher = Arc::new(ScriptedTeacher::new(vec![answer_cot("96", 0.01)], 1));
     let judge = Arc::new(ScriptedJudge::new(vec![&judge_body(0.95, "accept")]));
 

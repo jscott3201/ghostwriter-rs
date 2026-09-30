@@ -10,6 +10,11 @@ pub type EmbeddingFuture<'a> =
 /// Injected diversity embedder. Accounting and cancellation errors must retain their types.
 /// The built-in [`gw_providers::EmbeddingsClient`] implements this asynchronous boundary directly.
 pub trait Embedder: Send + Sync {
+    /// Pure immutable implementation/configuration declaration, independent of accounting.
+    /// Missing declarations cannot authorize engine run preparation.
+    fn semantic_declaration(&self) -> Option<gw_schema::SemanticDeclaration> {
+        None
+    }
     /// Embed text asynchronously. Malformed vectors and accounting failures remain distinguishable.
     fn embed<'a>(&'a self, text: &'a str) -> EmbeddingFuture<'a>;
     /// Cooperative capability of the actual implementation.
@@ -30,6 +35,13 @@ pub trait Embedder: Send + Sync {
 #[derive(Debug, Default, Clone, Copy)]
 pub struct NullEmbedder;
 impl Embedder for NullEmbedder {
+    fn semantic_declaration(&self) -> Option<gw_schema::SemanticDeclaration> {
+        Some(gw_schema::SemanticDeclaration::new(
+            "gw-generate/null-embedder",
+            "1",
+            serde_json::json!({"vectors": "empty", "model_requests": false, "diversity": "all-novel-at-default-positive-threshold"}),
+        ))
+    }
     fn embed<'a>(&'a self, _text: &'a str) -> EmbeddingFuture<'a> {
         Box::pin(async { Ok(Vec::new()) })
     }
@@ -39,6 +51,9 @@ impl Embedder for NullEmbedder {
 }
 
 impl Embedder for gw_providers::EmbeddingsClient {
+    fn semantic_declaration(&self) -> Option<gw_schema::SemanticDeclaration> {
+        Some(gw_providers::EmbeddingsClient::semantic_declaration(self))
+    }
     fn embed<'a>(&'a self, text: &'a str) -> EmbeddingFuture<'a> {
         Box::pin(async move { first(self.embed_batch(&[text]).await?) })
     }

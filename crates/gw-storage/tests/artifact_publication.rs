@@ -54,7 +54,10 @@ fn options() -> ExportOptions {
 
 async fn store(ids: &[&str]) -> Store {
     let store = Store::open_in_memory().await.unwrap();
-    store.create_run("run", "{}", None).await.unwrap();
+    store
+        .insert_historical_run("run", "{}", None)
+        .await
+        .unwrap();
     for id in ids {
         store.put(&record(id)).await.unwrap();
     }

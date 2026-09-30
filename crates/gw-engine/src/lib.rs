@@ -65,6 +65,7 @@
 
 mod admission;
 mod attempts;
+mod behavior;
 mod checkpoint;
 mod clients;
 mod control;
@@ -72,6 +73,7 @@ mod error;
 mod event;
 mod executor;
 mod grade;
+mod plan;
 mod priors;
 mod revise;
 mod seed;
@@ -89,6 +91,7 @@ pub use event::{DEFAULT_EVENT_CAPACITY, EngineEvent, EventSink};
 pub use executor::{Engine, ExportSpec, RunReport};
 pub use grade::{correlation_prior, decision_from_judging, verifier_grade_from_verification};
 pub use gw_schema::AccountingPolicy;
+pub use plan::{CapturedSeedPlan, PreparedRun};
 pub use seed::{InMemorySeedSource, SeedItem, SeedSource, record_id};
 pub use sibling::{GroupOutcome, run_group};
 pub use step::{drive, drive_to_judged, evidence_key, is_terminal, step};

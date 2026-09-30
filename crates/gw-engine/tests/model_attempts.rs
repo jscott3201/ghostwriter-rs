@@ -387,6 +387,9 @@ async fn admitted_prior_settlement_failure_preserves_the_committed_admission_and
 
 struct UnknownProvider(Arc<dyn Provider>);
 impl Provider for UnknownProvider {
+    fn semantic_declaration(&self) -> Option<gw_schema::SemanticDeclaration> {
+        self.0.semantic_declaration()
+    }
     fn stream_chat(&self, req: ChatRequest) -> StreamChatFuture<'_> {
         self.0.stream_chat(req)
     }
@@ -572,12 +575,15 @@ async fn an_unknown_logical_wrapper_runs_with_explicit_incomplete_lane_coverage(
 
 struct CancelledEmbedding;
 impl gw_generate::Embedder for CancelledEmbedding {
+    fn semantic_declaration(&self) -> Option<gw_schema::SemanticDeclaration> {
+        fixture_semantics("cancelled-embedding")
+    }
     fn embed<'a>(&'a self, _: &'a str) -> gw_generate::EmbeddingFuture<'a> {
         Box::pin(async { Err(gw_providers::ProviderError::Cancelled) })
     }
 }
 #[tokio::test]
-async fn unknown_embedding_coverage_and_typed_cancellation_remain_visible_on_resume() {
+async fn replacement_embedding_is_rejected_before_resume_mutates_coverage() {
     let store = Store::open_in_memory().await.unwrap();
     let server = normal_server().await;
     let area = area_k1(one_judge(), lenient_thresholds());
@@ -586,27 +592,33 @@ async fn unknown_embedding_coverage_and_typed_cancellation_remain_visible_on_res
     let before = server.requests.lock().unwrap().len();
     let mut clients = real_clients(&store, &server);
     clients.embedder = Arc::new(CancelledEmbedding);
-    let report = Engine::new(clients, area, 1)
+    let before_snapshot = store
+        .accounting_snapshot("cancelled-embedding")
+        .await
+        .unwrap();
+    let error = Engine::new(clients, area, 1)
         .run(
             "cancelled-embedding",
             &unfinished_source(),
             CancellationToken::new(),
         )
         .await
-        .unwrap();
-    assert!(!report.completed);
-    assert_eq!(report.pending_items, 1);
+        .unwrap_err();
+    assert!(error.to_string().contains("manifest"));
     assert_eq!(server.requests.lock().unwrap().len(), before);
-    let launches = store.model_launches("cancelled-embedding").await.unwrap();
-    assert_eq!(launches.len(), 2);
-    assert!(
-        launches
-            .iter()
-            .any(|launch| launch.embedding == Cap::Unknown)
+    assert_eq!(
+        store
+            .accounting_snapshot("cancelled-embedding")
+            .await
+            .unwrap(),
+        before_snapshot
     );
-    assert!(
-        launches
-            .iter()
-            .any(|launch| launch.embedding == Cap::PhysicalAttemptsV1)
+    assert_eq!(
+        store
+            .model_launches("cancelled-embedding")
+            .await
+            .unwrap()
+            .len(),
+        1
     );
 }

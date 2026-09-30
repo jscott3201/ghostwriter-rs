@@ -86,7 +86,10 @@ mod tests {
     #[tokio::test]
     async fn fresh_shard_resumes_at_zero() {
         let store = Store::open_in_memory().await.unwrap();
-        store.create_run("run-1", "{}", Some(25.0)).await.unwrap();
+        store
+            .insert_historical_run("run-1", "{}", Some(25.0))
+            .await
+            .unwrap();
         let cursor = load_cursor(&store, "run-1", 0).await.unwrap();
         assert_eq!(cursor, ShardCursor::start());
         assert_eq!(cursor.next_offset, 0);
@@ -95,7 +98,10 @@ mod tests {
     #[tokio::test]
     async fn commit_advances_the_cursor_past_the_committed_offset() {
         let store = Store::open_in_memory().await.unwrap();
-        store.create_run("run-1", "{}", Some(25.0)).await.unwrap();
+        store
+            .insert_historical_run("run-1", "{}", Some(25.0))
+            .await
+            .unwrap();
 
         // Commit offset 0 → cursor points at 1.
         commit_cursor(&store, "run-1", 0, 0, "exported")
@@ -119,7 +125,10 @@ mod tests {
     #[tokio::test]
     async fn cursors_are_per_shard() {
         let store = Store::open_in_memory().await.unwrap();
-        store.create_run("run-1", "{}", Some(25.0)).await.unwrap();
+        store
+            .insert_historical_run("run-1", "{}", Some(25.0))
+            .await
+            .unwrap();
         commit_cursor(&store, "run-1", 0, 5, "exported")
             .await
             .unwrap();

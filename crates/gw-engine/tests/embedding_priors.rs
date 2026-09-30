@@ -5,7 +5,7 @@ mod common;
 use std::sync::{Arc, Mutex};
 
 use common::*;
-use gw_engine::{Engine, InMemorySeedSource, SeedSource};
+use gw_engine::{Engine, InMemorySeedSource};
 use gw_generate::Embedder;
 use gw_providers::Provider;
 use gw_schema::LifecycleState;
@@ -15,6 +15,9 @@ use tokio_util::sync::CancellationToken;
 struct SameVectorEmbedder;
 
 impl Embedder for SameVectorEmbedder {
+    fn semantic_declaration(&self) -> Option<gw_schema::SemanticDeclaration> {
+        fixture_semantics("SameVectorEmbedder")
+    }
     fn embed<'a>(&'a self, _text: &'a str) -> gw_generate::EmbeddingFuture<'a> {
         Box::pin(async move { Ok(vec![1.0, 0.0]) })
     }
@@ -23,6 +26,9 @@ impl Embedder for SameVectorEmbedder {
 struct PanicEmbedder;
 
 impl Embedder for PanicEmbedder {
+    fn semantic_declaration(&self) -> Option<gw_schema::SemanticDeclaration> {
+        fixture_semantics("PanicEmbedder")
+    }
     fn embed<'a>(&'a self, _text: &'a str) -> gw_generate::EmbeddingFuture<'a> {
         Box::pin(async move { panic!("cancelled seeding must not call the embedder") })
     }
@@ -41,6 +47,9 @@ impl ScriptedEmbedder {
 }
 
 impl Embedder for ScriptedEmbedder {
+    fn semantic_declaration(&self) -> Option<gw_schema::SemanticDeclaration> {
+        fixture_semantics("ScriptedEmbedder")
+    }
     fn embed<'a>(&'a self, _text: &'a str) -> gw_generate::EmbeddingFuture<'a> {
         Box::pin(async move {
             self.results
@@ -101,7 +110,8 @@ async fn identical_text_from_distinct_seed_items_dedups_second() {
     );
     let teacher: Arc<dyn Provider> = Arc::new(ScriptedTeacher::new(vec![good_cot(0.01)], 1));
     let judge: Arc<dyn Provider> = Arc::new(ScriptedJudge::new(vec![&judge_body(0.95, "accept")]));
-    let clients = clients_with_embedder(store, teacher, judge, Arc::new(SameVectorEmbedder));
+    let clients =
+        clients_with_embedder(store.clone(), teacher, judge, Arc::new(SameVectorEmbedder));
     let report = Engine::new(clients, area_k1(one_judge(), lenient_thresholds()), 1)
         .run("exact-duplicate", &source, CancellationToken::new())
         .await
@@ -195,7 +205,7 @@ async fn append_and_resume_seed_embed_failures_do_not_abort_run() {
     let resume_teacher: Arc<dyn Provider> = Arc::new(ScriptedTeacher::new(vec![], 0));
     let resume_judge: Arc<dyn Provider> = Arc::new(ScriptedJudge::new(vec![]));
     let failing_seed = Arc::new(ScriptedEmbedder::new(vec![Err("seed probe".into())]));
-    let resume = clients_with_embedder(store, resume_teacher, resume_judge, failing_seed);
+    let resume = clients_with_embedder(store.clone(), resume_teacher, resume_judge, failing_seed);
     let resumed = Engine::new(resume, area_k1(one_judge(), lenient_thresholds()), 1)
         .run("failure-priors", &source, CancellationToken::new())
         .await
@@ -239,7 +249,7 @@ async fn resumed_all_duplicate_stream_trips_circuit_breaker() {
         )
         .await
         .unwrap();
-    let resume = clients_with_embedder(store, teacher, judge, Arc::new(SameVectorEmbedder));
+    let resume = clients_with_embedder(store.clone(), teacher, judge, Arc::new(SameVectorEmbedder));
     let error = Engine::new(resume, area_k1(one_judge(), lenient_thresholds()), 1)
         .run("breaker-priors", &source, CancellationToken::new())
         .await
@@ -277,21 +287,15 @@ async fn resumed_item_does_not_dedup_against_its_own_admitted_vector() {
         .remove(0);
     prior.record_id = "resume-own-s0-seed0-a9-c9".into();
     prior.provenance.run_id = "resume-own".into();
-    store
-        .validate_or_record_run_partition("resume-own", 1, &source.prompts_hash().unwrap())
-        .await
-        .unwrap();
-    store
-        .create_run("resume-own", "{}", Some(25.0))
-        .await
-        .unwrap();
-    store.put(&prior).await.unwrap();
 
     let teacher = Arc::new(ScriptedTeacher::new(vec![good_cot(0.01)], 1));
     let teacher_probe = Arc::clone(&teacher);
     let judge: Arc<dyn Provider> = Arc::new(ScriptedJudge::new(vec![&judge_body(0.95, "accept")]));
-    let live = clients_with_embedder(store, teacher, judge, Arc::new(SameVectorEmbedder));
-    Engine::new(live, area_k1(one_judge(), lenient_thresholds()), 1)
+    let live = clients_with_embedder(store.clone(), teacher, judge, Arc::new(SameVectorEmbedder));
+    let engine = Engine::new(live, area_k1(one_judge(), lenient_thresholds()), 1);
+    register_run(&store, &engine, "resume-own", &source).await;
+    store.put(&prior).await.unwrap();
+    engine
         .run("resume-own", &source, CancellationToken::new())
         .await
         .unwrap();
@@ -325,24 +329,16 @@ async fn pre_cancelled_resume_stops_prior_seeding_before_embed() {
         .remove(0);
     prior.record_id = "cancel-seeding-s0-seed0-a9-c9".into();
     prior.provenance.run_id = "cancel-seeding".into();
-    store
-        .validate_or_record_run_partition("cancel-seeding", 1, &source.prompts_hash().unwrap())
-        .await
-        .unwrap();
-    store
-        .create_run("cancel-seeding", "{}", Some(25.0))
-        .await
-        .unwrap();
-    store.put(&prior).await.unwrap();
 
     let no_teacher: Arc<dyn Provider> = Arc::new(ScriptedTeacher::new(vec![], 0));
     let no_judge: Arc<dyn Provider> = Arc::new(ScriptedJudge::new(vec![]));
-    let clients = clients_with_embedder(store, no_teacher, no_judge, Arc::new(PanicEmbedder));
+    let clients =
+        clients_with_embedder(store.clone(), no_teacher, no_judge, Arc::new(PanicEmbedder));
     let cancel = CancellationToken::new();
     cancel.cancel();
-    let report = Engine::new(clients, area_k1(one_judge(), lenient_thresholds()), 1)
-        .run("cancel-seeding", &source, cancel)
-        .await
-        .unwrap();
+    let engine = Engine::new(clients, area_k1(one_judge(), lenient_thresholds()), 1);
+    register_run(&store, &engine, "cancel-seeding", &source).await;
+    store.put(&prior).await.unwrap();
+    let report = engine.run("cancel-seeding", &source, cancel).await.unwrap();
     assert!(!report.completed);
 }

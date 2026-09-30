@@ -91,6 +91,10 @@ pub struct VerifierInput<'a> {
 /// `ToolExecutor`, and tests supply a fake. A [`Literal`](Oracle::Literal) / precomputed `expected`
 /// oracle is compared directly and never touches this seam.
 pub trait SandboxOracle {
+    /// Pure immutable implementation/configuration declaration; never execute during preparation.
+    fn semantic_declaration(&self) -> Option<gw_schema::SemanticDeclaration> {
+        None
+    }
     /// Execute `tool_or_sql` in the sandbox and return its canonical result string. `Err` carries a
     /// human-readable failure (timeout, sandbox error). The oracle is read-only ground-truth
     /// computation, never a mutation.
@@ -105,6 +109,13 @@ pub trait SandboxOracle {
 pub struct NullSandboxOracle;
 
 impl SandboxOracle for NullSandboxOracle {
+    fn semantic_declaration(&self) -> Option<gw_schema::SemanticDeclaration> {
+        Some(gw_schema::SemanticDeclaration::new(
+            "gw-judge/null-sandbox-oracle",
+            "1",
+            serde_json::json!({"execute": "always-refuse"}),
+        ))
+    }
     fn execute(&self, _tool_or_sql: &str) -> std::result::Result<String, String> {
         Err("no sandbox oracle wired (NullSandboxOracle); v1 control tools are stubbed".into())
     }
@@ -119,6 +130,11 @@ impl SandboxOracle for NullSandboxOracle {
 /// same report, so re-verifying an edge (crash-resume) can never resolve a different verdict. A
 /// backend that runs an external evaluator is responsible for that idempotence.
 pub trait ExecutionEvidenceSource {
+    /// Pure identity of the immutable evidence collection and lookup behavior. A mutable path or
+    /// backend label is insufficient; preparation never calls [`Self::evidence`].
+    fn semantic_declaration(&self) -> Option<gw_schema::SemanticDeclaration> {
+        None
+    }
     /// The report for `key`, or `None` when this candidate has no execution axis (or no report was
     /// produced for it) — which leaves the evidence check inert.
     fn evidence(&self, key: &EvidenceBinding) -> Option<ExecutionEvidence>;
@@ -131,6 +147,13 @@ pub trait ExecutionEvidenceSource {
 pub struct NullExecutionEvidenceSource;
 
 impl ExecutionEvidenceSource for NullExecutionEvidenceSource {
+    fn semantic_declaration(&self) -> Option<gw_schema::SemanticDeclaration> {
+        Some(gw_schema::SemanticDeclaration::new(
+            "gw-judge/null-execution-evidence",
+            "1",
+            serde_json::json!({"lookup": "always-none"}),
+        ))
+    }
     fn evidence(&self, _key: &EvidenceBinding) -> Option<ExecutionEvidence> {
         None
     }

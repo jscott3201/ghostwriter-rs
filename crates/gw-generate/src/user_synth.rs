@@ -64,7 +64,7 @@ pub fn cosine(a: &[f32], b: &[f32]) -> f64 {
 /// The seed inputs that condition a synthesized USER turn (USER-SYNTHESIS §7). These flow into the
 /// [`Generation`](gw_schema::Generation) reproducibility block (`persona`, `taxonomy_node`,
 /// `prompt_template_id`) at assembly time.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct UserSeed {
     /// The persona conditioning the turn (e.g. `"curious_user"`). `None` ⇒ unconditioned.
     pub persona: Option<String>,
@@ -79,7 +79,7 @@ pub struct UserSeed {
 
 /// A candidate USER turn paired with the QC inputs needed to gate it (USER-SYNTHESIS §9). The
 /// synthesizer fills these; `evaluate` turns them into a [`UserTurnVerdict`].
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct UserTurnCandidate {
     /// The synthesized USER message (clean text; user turns carry no reasoning).
     pub message: Message,
@@ -155,6 +155,12 @@ const CONTROL_TOKENS: &[&str] = &[
     "<|message|>",
     "<|return|>",
 ];
+
+/// Pure identity of the current QC gate, using the same framing tokens and threshold as execution.
+#[must_use]
+pub fn user_qc_contract() -> serde_json::Value {
+    serde_json::json!({"revision": 1, "framing_rejects": CONTROL_TOKENS, "text_parts": "concatenate-in-order-without-separator", "threshold": DEFAULT_COSINE_THRESHOLD, "similarity": "f64-cosine-empty-zero-or-dimension-mismatch-is-zero", "diverse": "max-similarity-strictly-less-than-threshold", "refusal_expected": "in-scope-exemption", "gate": "all-four-booleans"})
+}
 
 /// The first control token contained in `text`, if any (the most descriptive marker first, mirroring
 /// gw-format's ordering).

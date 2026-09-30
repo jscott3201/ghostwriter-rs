@@ -2,7 +2,7 @@
 use crate::{Clients, EventSink, attempts::LaunchObservation};
 use gw_generate::Embedder;
 use gw_providers::{ChatRequest, Provider, StreamChatFuture};
-use gw_schema::{AccountingCapability, AccountingPolicy, TrainingRecord};
+use gw_schema::*;
 use gw_storage::{LaunchRequest, Store};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -30,9 +30,8 @@ pub(crate) async fn clients(store: Store, embedder: Arc<dyn Embedder>) -> Client
     let coverage = store
         .register_accounting_launch(LaunchRequest {
             run_id: "r",
-            config_json: "{}",
-            shard_count: 2,
-            prompts_hash: "p",
+            manifest: manifest(),
+            mode: gw_storage::RunMode::CreateOrResume,
             policy: &clients.policy,
             teacher: clients.teacher.accounting_capability(),
             judge: clients.judge.accounting_capability(),
@@ -57,4 +56,28 @@ pub(crate) fn record(id: &str) -> TrainingRecord {
         "generation": {}, "lifecycle":{"state":"admitted"},
         "judging":{"panel":[], "verdict":"admit", "aggregate":0.9}
     })).unwrap()
+}
+
+pub(crate) fn manifest() -> RunManifest {
+    let d = SemanticDeclaration::new(
+        "test/transaction-fixture",
+        "1",
+        serde_json::json!({"behavior":"no-client-execution"}),
+    );
+    RunManifest {
+        version: RUN_MANIFEST_VERSION,
+        input_plan: InputPlanIdentity {
+            content_hash: "a".repeat(64),
+            shard_items: vec![1],
+        },
+        execution: d.clone(),
+        clients: ClientSemantics {
+            teacher: d.clone(),
+            judge: d.clone(),
+            embedding: d.clone(),
+            sandbox: d.clone(),
+            execution_evidence: d,
+        },
+        unattested_deployment: UnattestedDeployment::default(),
+    }
 }

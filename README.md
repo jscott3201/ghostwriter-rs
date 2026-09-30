@@ -185,7 +185,8 @@ gw gen run --config gw.toml --run-id demo-001 --prompts prompts.txt \
 ```
 
 Prefer a live dashboard? Swap `run` for `tui`. Crashed or interrupted? Re-run the **same** `--run-id`
-with the **same** `--prompts` and `--shards` to resume — already-committed work is skipped and the
+with the **same effective generation/admission settings**, `--prompts`, and `--shards` to resume.
+The immutable manifest is checked before credentials are read; committed work is skipped and
 persisted teacher output is reused. Finite admission remains conservative about unresolved receipts.
 
 The quickstart keeps the conservative correlation prior and effective-count floor. Its single judge
@@ -338,8 +339,8 @@ local grading finalization, caching, persistence and publication can still compl
 request is needed, that send is denied and the item keeps its unfinished checkpoint. Zero is valid
 and permits cache-only or local completion, while denying fresh physical requests.
 
-Fresh engine runs atomically persist the run, seed partition, operational policy and actual client
-coverage before any startup embedding or model request. Older runs remain explicitly incomplete;
+Fresh engine runs atomically persist the immutable semantic manifest, operational policy and actual
+client coverage before any startup embedding or model request. Older runs remain explicitly incomplete;
 an empty legacy receipt table does not prove zero historical spend. A finite launch requires
 complete history and known coverage of every lane. A later replacement with an unknown client is
 reassessed and cannot inherit the previous client's certification.
@@ -362,6 +363,37 @@ Dropping a request performs no background persistence or drain. Process loss aft
 an unresolved receipt: it may or may not have transmitted. Resuming does not establish remote
 exactly-once execution. The current SQLite durability settings and receipts do not constitute
 power-loss qualification or provider-invoice reconciliation.
+
+
+### Immutable run identity
+
+Every new run stores a versioned generation/admission manifest in SQLite. It binds the full captured
+seed plan, effective teacher and ordered judge requests, rubric, admission thresholds and intent,
+verification rules, embedding behavior, and declared client endpoints. Every source shard is captured
+once, including empty shards, and execution consumes those exact inputs. Message metadata, reasoning,
+tools, oracle strings, QC flags, and whitespace all participate in the input identity.
+
+`run`, `replay`, and `tui` check compatibility before reading credentials. The engine repeats the
+check inside the launch transaction, so competing incompatible initializers cannot both succeed.
+An incompatible launch leaves the original manifest, creation time, status, checkpoints, accounting
+epoch, and launch history unchanged. Even a completed or fully cached run requires compatible meaning.
+Use a new run ID to change generation or admission settings.
+
+Accounting policy and amounts, rates, concurrency, UI timing, database/output paths, and export
+projection remain operational choices. Compatible replay preserves the exact original manifest bytes
+while registering the current accounting policy. Unknown replay IDs and legacy, unpinned, malformed,
+or unsupported manifests fail execution with a new-run instruction. Historical runs remain available
+for provider-free inspection and export; replay never adopts missing evidence.
+
+Library extensions implement the pure `semantic_declaration()` getter on each actual `Provider`,
+`Embedder`, `SandboxOracle`, and `ExecutionEvidenceSource`. Declare a stable implementation and behavior
+revision plus immutable configuration or an evidence-collection digest. A type name, mutable path,
+generic label, or accounting capability is insufficient. Preparation calls none of their execution
+methods. These cooperative declarations identify requested models and configured routes; served
+weights, tokenizers, templates, parsers, quantization, and deployment revisions remain unknown.
+Configured embedding revisions are unenforced, and index labels do not select the engine's actual
+in-memory cosine implementation. Source media URLs identify declared inputs without fetching media.
+Chat and embedding base URLs reject userinfo, query, and fragment forms; use a credential-free route.
 
 ---
 
@@ -497,7 +529,7 @@ gw eval promote            Variance-aware promotion gate over two eval_results.j
 | Flag | Meaning |
 |---|---|
 | `--config <FILE>` | TOML config (the figment base layer). |
-| `--run-id <ID>` | Idempotency key. Re-running the same id over the same seeds **resumes**. |
+| `--run-id <ID>` | Immutable run identity. Matching inputs and effective generation/admission settings **resume**. |
 | `--prompts <FILE>` | Newline-delimited prompts file (one user turn per line). |
 | `--db <PATH>` | Override the SQLite store path. |
 | `--shards <N>` | Partition the seed space into N shards (default `1`) — the primary concurrency axis. |
@@ -518,7 +550,8 @@ rejected, review, and error states are excluded. The manifest counts all scanned
 **`gw gen replay`** — resumes `--run-id` from a store using matching generation settings and the
 **same** `--prompts` and `--shards` the original run used (the seed→shard partition is `index % shards`, so a
 different value would re-partition the space and duplicate or orphan records). Replay accepts the
-same accounting flags as run/TUI; an explicit policy change follows the epoch rules above.
+same accounting flags as run/TUI; an explicit policy change follows the epoch rules above. Unknown
+run IDs fail. Incompatible generation/admission settings require a new run ID.
 
 > **Concurrency.** `--max-in-flight` bounds seed groups across shard tasks; it does not count
 > physical HTTP requests. Each group's `k` siblings may overlap under observation-only, while each

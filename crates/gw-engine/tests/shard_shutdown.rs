@@ -58,6 +58,9 @@ impl GatedTeacher {
 }
 
 impl Provider for GatedTeacher {
+    fn semantic_declaration(&self) -> Option<gw_schema::SemanticDeclaration> {
+        fixture_semantics("teacher")
+    }
     fn stream_chat(&self, req: ChatRequest) -> StreamChatFuture<'_> {
         let Content::Text(prompt) = &req.messages[0].content else {
             panic!("expected a text prompt");

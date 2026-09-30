@@ -140,7 +140,10 @@ pub async fn context(
     role: AttemptRole,
     purpose: AttemptPurpose,
 ) -> ObservationContext {
-    store.create_run("run", "{}", None).await.unwrap();
+    store
+        .insert_historical_run("run", "{}", None)
+        .await
+        .unwrap();
     let coverage = store
         .begin_model_launch(
             "run",

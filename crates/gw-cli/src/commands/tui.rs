@@ -38,15 +38,27 @@ pub async fn tui(args: RunArgs) -> anyhow::Result<()> {
 
     // The connected sink (into the engine's Clients) + its receiver (drained by the dashboard).
     let (sink, rx) = EventSink::subscribe();
-    let (engine, store) = build_engine(&config, sink, args.max_in_flight)
-        .await
-        .context("building the engine")?;
+    let mode = gw_storage::RunMode::CreateOrResume;
+    let (engine, store, prepared) = build_engine(
+        &config,
+        sink,
+        args.max_in_flight,
+        &args.run_id,
+        &source,
+        mode,
+    )
+    .await
+    .context("building the engine")?;
 
     // ONE token shared between the dashboard and the engine task (clean mutual shutdown).
     let cancel = new_cancel_token();
     let engine_cancel = cancel.clone();
     let run_id = args.run_id.clone();
-    let handle = tokio::spawn(async move { engine.run(&run_id, &source, engine_cancel).await });
+    let handle = tokio::spawn(async move {
+        engine
+            .run_prepared(&run_id, prepared, mode, engine_cancel)
+            .await
+    });
 
     // Clamp each interval to a non-zero floor: `tokio::time::interval` (inside `gw_tui::run`) PANICS
     // on a zero period, and `tick_ms` / `frame_ms` are operator-settable config with no `> 0`

@@ -178,10 +178,26 @@ impl TeacherCall {
     ///
     /// # Errors
     ///
-    /// Returns [`GenerateError::Invariant`] when `max_tokens` is zero — there is NO path to a
-    /// budget-less teacher request (INVARIANT-g). The effort/budget mutual exclusion is enforced
-    /// structurally by [`ReasoningPolicy`], so it cannot fail here.
+    /// Returns [`GenerateError::Invariant`] for zero completion/reasoning budgets or non-finite,
+    /// out-of-domain sampling. The effort/budget mutual exclusion is enforced structurally by
+    /// [`ReasoningPolicy`].
     pub fn build(&self) -> Result<ChatRequest> {
+        if !self.sampling.temperature.is_finite()
+            || !(0.0..=2.0).contains(&self.sampling.temperature)
+            || self
+                .sampling
+                .top_p
+                .is_some_and(|p| !p.is_finite() || !(0.0..=1.0).contains(&p))
+        {
+            return Err(GenerateError::Invariant(
+                "sampling requires finite temperature in [0,2] and top_p in [0,1]".into(),
+            ));
+        }
+        if matches!(self.reasoning, ReasoningPolicy::MaxTokens(0)) {
+            return Err(GenerateError::Invariant(
+                "teacher reasoning max_tokens must be positive".into(),
+            ));
+        }
         if self.max_tokens == 0 {
             return Err(GenerateError::Invariant(format!(
                 "max_tokens must always be set (> 0) on a teacher request for `{}`; \

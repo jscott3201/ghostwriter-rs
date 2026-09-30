@@ -177,7 +177,10 @@ async fn seed_assistant_generated(
     run_id: &str,
     record_id: &str,
 ) -> TrainingRecord {
-    store.create_run(run_id, "{}", Some(25.0)).await.unwrap();
+    store
+        .insert_historical_run(run_id, "{}", Some(25.0))
+        .await
+        .unwrap();
     seed_sibling_assistant_generated(store, teacher, run_id, record_id, 0, 1).await
 }
 
@@ -203,11 +206,6 @@ async fn partial_revising_winner_resume_does_not_elect_judged_runner_up() {
         &judge_body(0.95, "accept"),
     ]));
     let seed_source = source(&["q0"], 1);
-    store
-        .validate_or_record_run_partition(run_id, 1, &seed_source.prompts_hash().unwrap())
-        .await
-        .unwrap();
-    store.create_run(run_id, "{}", Some(25.0)).await.unwrap();
 
     let item = seed_source.items_for_shard(0).remove(0);
     let area = area_k(one_judge(), lenient_thresholds(), 2);
@@ -217,6 +215,13 @@ async fn partial_revising_winner_resume_does_not_elect_judged_runner_up() {
         judge.clone(),
         EventSink::disconnected(),
     );
+    register_run(
+        &store,
+        &Engine::new(cl.clone(), area.clone(), 1),
+        run_id,
+        &seed_source,
+    )
+    .await;
     let winner_id = record_id(run_id, 0, item.seed, 0, 0);
     let runner_id = record_id(run_id, 0, item.seed, 0, 1);
 

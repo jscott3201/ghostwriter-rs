@@ -21,11 +21,38 @@ pub struct EmbeddingsClientBuilder {
     dim: usize,
     api_key_env: Option<String>,
     timeout: Duration,
+    declared_revision: Option<String>,
+    declared_index: Option<gw_schema::VectorIndex>,
     #[cfg(test)]
     http2_prior_knowledge: bool,
 }
 
 impl EmbeddingsClientBuilder {
+    /// Record a configured model revision as an unenforced declaration, separate from served facts.
+    #[must_use]
+    pub fn declared_revision(mut self, revision: Option<String>) -> Self {
+        self.declared_revision = revision;
+        self
+    }
+    /// Record the configured index label; the engine still owns its actual in-memory prior index.
+    #[must_use]
+    pub fn declared_index(mut self, index: gw_schema::VectorIndex) -> Self {
+        self.declared_index = Some(index);
+        self
+    }
+    /// Prepare this client's pure declaration before credentials or HTTP construction.
+    ///
+    /// # Errors
+    /// Rejects unsupported endpoints and a zero vector dimension.
+    pub fn semantic_declaration(&self) -> Result<gw_schema::SemanticDeclaration, ProviderError> {
+        crate::identity::embedding(
+            &self.base_url,
+            &self.model,
+            self.dim,
+            self.declared_revision.as_deref(),
+            self.declared_index,
+        )
+    }
     #[cfg(test)]
     pub(crate) fn http2_for_test(mut self) -> Self {
         self.http2_prior_knowledge = true;
@@ -72,6 +99,7 @@ impl EmbeddingsClientBuilder {
     /// # Errors
     /// Returns a configuration error or names a configured key variable that is absent.
     pub fn build(self) -> Result<EmbeddingsClient, ProviderError> {
+        self.semantic_declaration()?;
         let key = self
             .api_key_env
             .as_ref()
@@ -85,6 +113,7 @@ impl EmbeddingsClientBuilder {
     /// # Errors
     /// Returns [`ProviderError::Config`] for invalid headers or client configuration.
     pub fn build_with_key(self, key: Option<&str>) -> Result<EmbeddingsClient, ProviderError> {
+        let declaration = self.semantic_declaration()?;
         let headers = embedding_headers(key)?;
         let http = Client::builder()
             .default_headers(headers)
@@ -102,9 +131,10 @@ impl EmbeddingsClientBuilder {
             .map_err(|e| ProviderError::Config(format!("http client build failed: {e}")))?;
         Ok(EmbeddingsClient {
             http,
-            base_url: self.base_url.trim_end_matches('/').to_string(),
+            base_url: crate::normalize_endpoint(&self.base_url)?,
             model: self.model,
             dim: self.dim,
+            declaration,
         })
     }
 }
@@ -129,6 +159,7 @@ pub struct EmbeddingsClient {
     base_url: String,
     model: String,
     dim: usize,
+    declaration: gw_schema::SemanticDeclaration,
 }
 
 impl std::fmt::Debug for EmbeddingsClient {
@@ -142,6 +173,11 @@ impl std::fmt::Debug for EmbeddingsClient {
 }
 
 impl EmbeddingsClient {
+    /// The pure configured declaration captured at construction; no model request is made.
+    #[must_use]
+    pub fn semantic_declaration(&self) -> gw_schema::SemanticDeclaration {
+        self.declaration.clone()
+    }
     /// Start configuring an embeddings client.
     #[must_use]
     pub fn builder() -> EmbeddingsClientBuilder {
@@ -151,6 +187,8 @@ impl EmbeddingsClient {
             dim: gw_schema::DEFAULT_EMBEDDING_DIM as usize,
             api_key_env: None,
             timeout: DEFAULT_TIMEOUT,
+            declared_revision: None,
+            declared_index: None,
             #[cfg(test)]
             http2_prior_knowledge: false,
         }

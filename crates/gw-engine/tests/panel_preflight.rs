@@ -61,6 +61,9 @@ async fn invalid_numeric_settings_fail_before_spending() {
 struct SubsetJudge;
 
 impl Provider for SubsetJudge {
+    fn semantic_declaration(&self) -> Option<gw_schema::SemanticDeclaration> {
+        fixture_semantics("judge")
+    }
     fn stream_chat(&self, request: ChatRequest) -> StreamChatFuture<'_> {
         let verdict = if matches!(request.model.as_str(), "judge-2" | "judge-3") {
             "uncertain"
@@ -219,14 +222,9 @@ async fn review_only_allows_unattainable_defaults_without_admission() {
 }
 
 #[tokio::test]
-async fn review_only_best_of_k_stays_held_on_replay_with_automatic_live_settings() {
+async fn replay_rejects_changing_review_only_to_automatic_admission() {
     let store = Store::open_in_memory().await.unwrap();
     let source = one_item_source();
-    store
-        .validate_or_record_run_partition("sticky", 1, &source.prompts_hash().unwrap())
-        .await
-        .unwrap();
-    store.create_run("sticky", "{}", None).await.unwrap();
     let teacher = Arc::new(ScriptedTeacher::new(vec![], 3));
     let judge = Arc::new(FailingJudge::new(usize::MAX, &judge_body(0.95, "accept")));
     let cl = clients(
@@ -239,6 +237,13 @@ async fn review_only_best_of_k_stays_held_on_replay_with_automatic_live_settings
     let review = automatic
         .clone()
         .with_admission_intent(AdmissionIntent::ReviewOnly);
+    register_run(
+        &store,
+        &Engine::new(cl.clone(), review.clone(), 1),
+        "sticky",
+        &source,
+    )
+    .await;
     let item = source.items_for_shard(0).remove(0);
     let cancel = CancellationToken::new();
     let outcome = run_group("sticky", 0, &item, &cl, &review, RunControl::new(&cancel))
@@ -265,9 +270,8 @@ async fn review_only_best_of_k_stays_held_on_replay_with_automatic_live_settings
     let replay = Engine::new(cl, automatic, 1)
         .run("sticky", &source, CancellationToken::new())
         .await
-        .unwrap();
-    assert_eq!(replay.needs_review, 3);
-    assert_eq!(replay.admitted, 0);
+        .unwrap_err();
+    assert!(replay.to_string().contains("manifest"));
     assert_eq!(teacher.call_count(), 3);
     assert_eq!(judge.call_count(), judge_calls);
 }
@@ -278,6 +282,9 @@ struct CancelTeacher {
 }
 
 impl Provider for CancelTeacher {
+    fn semantic_declaration(&self) -> Option<gw_schema::SemanticDeclaration> {
+        fixture_semantics("teacher")
+    }
     fn stream_chat(&self, _: ChatRequest) -> StreamChatFuture<'_> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.cancel.cancel();
@@ -308,7 +315,7 @@ async fn review_only_intent_is_persisted_before_the_first_grade() {
     let review = automatic
         .clone()
         .with_admission_intent(AdmissionIntent::ReviewOnly);
-    let report = Engine::new(cl.clone(), review, 1)
+    let report = Engine::new(cl.clone(), review.clone(), 1)
         .run("generated", &one_item_source(), cancel)
         .await
         .unwrap();
@@ -320,7 +327,7 @@ async fn review_only_intent_is_persisted_before_the_first_grade() {
     assert_eq!(rec.lifecycle.state, LifecycleState::AssistantGenerated);
     assert_eq!(rec.judging.admission_intent, AdmissionIntent::ReviewOnly);
     assert_eq!(judge.call_count(), 0);
-    let replay = Engine::new(cl, automatic, 1)
+    let replay = Engine::new(cl, review, 1)
         .run("generated", &one_item_source(), CancellationToken::new())
         .await
         .unwrap();

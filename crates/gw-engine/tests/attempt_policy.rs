@@ -236,7 +236,6 @@ async fn finite_siblings_wait_for_live_settlement_then_deny_unknown_price_or_can
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn superseded_live_coordinator_drains_its_old_attempt_and_never_dispatches_again() {
-    use gw_engine::SeedSource;
     use tokio::sync::Semaphore;
     let store = Store::open_in_memory().await.unwrap();
     let started = Arc::new(Semaphore::new(0));
@@ -251,6 +250,11 @@ async fn superseded_live_coordinator_drains_its_old_attempt_and_never_dispatches
         area_k(one_judge(), lenient_thresholds(), 2),
         1,
     );
+    let manifest = engine
+        .prepare(&one_item_source())
+        .unwrap()
+        .manifest()
+        .clone();
     let task = tokio::spawn(async move {
         engine
             .run("epoch", &one_item_source(), CancellationToken::new())
@@ -260,9 +264,8 @@ async fn superseded_live_coordinator_drains_its_old_attempt_and_never_dispatches
     store
         .register_accounting_launch(gw_storage::LaunchRequest {
             run_id: "epoch",
-            config_json: "{}",
-            shard_count: 1,
-            prompts_hash: &one_item_source().prompts_hash().unwrap(),
+            manifest,
+            mode: gw_storage::RunMode::CreateOrResume,
             policy: &gw_schema::AccountingPolicy::ObservationOnly,
             teacher: gw_schema::AccountingCapability::PhysicalAttemptsV1,
             judge: gw_schema::AccountingCapability::PhysicalAttemptsV1,
@@ -306,6 +309,9 @@ async fn direct_helpers_and_replaced_unknown_clients_cannot_bypass_registration(
     use gw_engine::{RunControl, SeedSource};
     struct Unknown(Arc<dyn gw_providers::Provider>);
     impl gw_providers::Provider for Unknown {
+        fn semantic_declaration(&self) -> Option<gw_schema::SemanticDeclaration> {
+            fixture_semantics("teacher")
+        }
         fn stream_chat(
             &self,
             request: gw_providers::ChatRequest,
@@ -315,7 +321,10 @@ async fn direct_helpers_and_replaced_unknown_clients_cannot_bypass_registration(
     }
     let store = Store::open_in_memory().await.unwrap();
     let server = priced_server().await;
-    store.create_run("direct", "{}", None).await.unwrap();
+    store
+        .insert_historical_run("direct", "{}", None)
+        .await
+        .unwrap();
     let clients = finite(&store, &server, 5.0);
     let seed = one_item_source().items_for_shard(0).remove(0);
     let area = area_k1(one_judge(), lenient_thresholds());

@@ -22,7 +22,10 @@ async fn seed_assistant_generated(
     teacher: &Arc<ScriptedTeacher>,
     record_id: &str,
 ) -> TrainingRecord {
-    store.create_run("run-1", "{}", Some(25.0)).await.unwrap();
+    store
+        .insert_historical_run("run-1", "{}", Some(25.0))
+        .await
+        .unwrap();
     let gated = synthesize_user_turn(good_candidate("12*8?"), &gw_generate::NullEmbedder, &[])
         .await
         .unwrap();
@@ -259,7 +262,10 @@ async fn seed_assistant_generated_named(
     run_id: &str,
     record_id: &str,
 ) -> TrainingRecord {
-    store.create_run(run_id, "{}", Some(25.0)).await.unwrap();
+    store
+        .insert_historical_run(run_id, "{}", Some(25.0))
+        .await
+        .unwrap();
     let gated = synthesize_user_turn(good_candidate("12*8?"), &gw_generate::NullEmbedder, &[])
         .await
         .unwrap();

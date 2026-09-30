@@ -67,6 +67,7 @@ mod grader;
 mod panel;
 mod preflight;
 mod request_identity;
+pub use request_identity::judge_request_contract;
 mod verifier;
 
 pub use cache::{JUDGE_CACHE_KIND, grade_one_cached};

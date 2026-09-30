@@ -31,12 +31,22 @@ pub async fn replay(args: ReplayArgs) -> anyhow::Result<()> {
     args.accounting.apply(&mut config)?;
     let source = FileSeedSource::from_prompts_file(&args.prompts, args.shards)?;
 
-    let (engine, store) = build_engine(&config, EventSink::disconnected(), args.max_in_flight)
-        .await
-        .context("building the engine")?;
+    let mode = gw_storage::RunMode::Replay;
+    let (engine, store, prepared) = build_engine(
+        &config,
+        EventSink::disconnected(),
+        args.max_in_flight,
+        &args.run_id,
+        &source,
+        mode,
+    )
+    .await
+    .context("building the engine")?;
 
     let cancel = new_cancel_token();
-    let result = engine.run(&args.run_id, &source, cancel).await;
+    let result = engine
+        .run_prepared(&args.run_id, prepared, mode, cancel)
+        .await;
     super::accounting::terminal(
         &store,
         &args.run_id,

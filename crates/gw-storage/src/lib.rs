@@ -19,8 +19,8 @@
 //! - **cache** — content hashing ([`record_hash`], [`prompt_hash`], [`completion_hash`]) and the
 //!   "never re-spend" call cache ([`cache_get`](Store::cache_get) /
 //!   [`cache_put`](Store::cache_put)).
-//! - **runledger** — [`validate_or_record_run_partition`](Store::validate_or_record_run_partition),
-//!   [`create_run`](Store::create_run), [`set_run_status`](Store::set_run_status),
+//! - **runledger** — [`validate_run_manifest`](Store::validate_run_manifest),
+//!   [`insert_historical_run`](Store::insert_historical_run), [`set_run_status`](Store::set_run_status),
 //!   [`checkpoint`](Store::checkpoint), and [`resume_cursor`](Store::resume_cursor) for crash
 //!   recovery.
 //! - **export** — [`Store::publish_export`] / [`export_parquet_bytes`]: a lossless columnar dump of
@@ -48,7 +48,7 @@
 //!
 //! # async fn run() -> Result<(), gw_storage::StorageError> {
 //! let store = Store::open("gw-run.sqlite").await?;
-//! store.create_run("run-1", "{}", Some(25.0)).await?;
+//! store.insert_historical_run("run-1", "{}", Some(25.0)).await?;
 //! // ... put records, then advance their lifecycle ...
 //! store
 //!     .advance_lifecycle("rec-1", LifecycleState::Admitted, Some("passed gate"))
@@ -72,11 +72,13 @@ mod export;
 mod publication;
 mod receipts;
 mod records;
+mod run_manifest;
 mod runledger;
+pub use run_manifest::RunMode;
 mod store;
 
 pub use artifact::{ARTIFACT_METADATA_KEY, ArtifactVerification, ExportPlan, verify_artifact};
-pub use cache::{completion_hash, prompt_hash, prompts_hash, record_hash};
+pub use cache::{canonical_json_hash, completion_hash, prompt_hash, record_hash};
 pub use error::{Result, StorageError};
 pub use export::{clean_messages_json, export_parquet_bytes};
 pub use publication::{ExportPublication, PublicationDisposition};

@@ -30,6 +30,13 @@ use common::{cleanup_db, unique_temp_path};
 struct ScriptedProvider(Mutex<VecDeque<StreamDelta>>);
 
 impl Provider for ScriptedProvider {
+    fn semantic_declaration(&self) -> Option<gw_schema::SemanticDeclaration> {
+        Some(gw_schema::SemanticDeclaration::new(
+            "test/export-scripted-endpoint",
+            "1",
+            serde_json::json!({"contract":"best-of-k-canned-chat"}),
+        ))
+    }
     fn stream_chat(&self, _req: ChatRequest) -> StreamChatFuture<'_> {
         let delta = self
             .0

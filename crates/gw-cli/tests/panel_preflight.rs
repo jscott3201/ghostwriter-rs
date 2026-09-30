@@ -138,8 +138,8 @@ fn replay_applies_explicit_review_only_before_provider_construction() {
     std::fs::remove_file(prompts).unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("OPENROUTER_API_KEY"),
-        "explicit review-only must pass feasibility: {stderr}"
+        stderr.contains("unknown run"),
+        "explicit review-only passes feasibility before replay identity rejects an unknown run: {stderr}"
     );
     assert!(!stderr.contains("unattainable"));
 }
