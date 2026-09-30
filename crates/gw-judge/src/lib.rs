@@ -58,6 +58,7 @@
 //! pure; the cache uses `Store::open_in_memory`. Any live test is `#[ignore]` + env-key-gated.
 
 mod cache;
+mod cached_panel;
 mod calibration;
 mod consensus;
 mod decision;
@@ -68,7 +69,8 @@ mod preflight;
 mod request_identity;
 mod verifier;
 
-pub use cache::{JUDGE_CACHE_KIND, grade_one_cached, grade_panel_cached};
+pub use cache::{JUDGE_CACHE_KIND, grade_one_cached};
+pub use cached_panel::{PanelFailure, grade_panel_cached};
 pub use calibration::{
     CalibrationParams, DEFAULT_BETA, DEFAULT_GAMMA, calibration_weights, uniform_weights,
 };

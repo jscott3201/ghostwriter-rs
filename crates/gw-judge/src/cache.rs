@@ -21,7 +21,7 @@
 //! do not affect an individual judge request. Endpoint/routing defaults applied inside the provider
 //! and resolved model revisions are not captured here; this key does not establish their identity.
 //!
-//! [`grade_panel_cached`] is the production panel entry: for each judge it checks the cache, calls
+//! [`crate::grade_panel_cached`] is the production panel entry: for each judge it checks the cache, calls
 //! the provider only on a miss, and writes the result back. A fake provider that asserts on a
 //! second call for the same key proves the never-re-spend property (the unit test below).
 
@@ -40,7 +40,7 @@ pub const JUDGE_CACHE_KIND: &str = "judge";
 /// Serialize a [`Grade`] to the JSON value stored in the cache (and re-hydrated on a hit). The grade
 /// is round-tripped through its audit-bearing fields; the cached value is the source of truth on a
 /// hit, so no provider call is made.
-fn grade_to_cache_value(grade: &Grade) -> Value {
+pub(crate) fn grade_to_cache_value(grade: &Grade) -> Value {
     serde_json::json!({
         "judge_model": grade.judge_model,
         "score": grade.score,
@@ -70,7 +70,7 @@ fn verdict_token(v: crate::decision::Verdict) -> &'static str {
 
 /// Re-hydrate a [`Grade`] from a cached JSON value. Missing/garbled fields degrade gracefully (an
 /// unreadable verdict becomes `Uncertain`), so malformed cache values do not crash a re-run.
-fn grade_from_cache_value(value: &Value) -> Grade {
+pub(crate) fn grade_from_cache_value(value: &Value) -> Grade {
     use crate::decision::Verdict;
     let verdict = match value.get("verdict").and_then(Value::as_str) {
         Some("accept") => Verdict::Accept,
@@ -162,51 +162,12 @@ pub async fn grade_one_cached<P: Provider + ?Sized>(
     Ok(grade)
 }
 
-/// Grade the whole panel with the never-re-spend cache — the production panel entry. Each judge is
-/// graded through [`grade_one_cached`] (cache hit ⇒ no provider call). Returns
-/// [`JudgeError::EmptyPanel`](crate::JudgeError::EmptyPanel) for an empty panel.
-///
-/// Calls run sequentially here (not `try_join_all`) because they share the `&Store`; the per-judge
-/// work is dominated by the provider round-trip, which the cache elides on a re-run anyway. The
-/// blind-sealed property holds regardless of ordering: no judge prompt contains another's output.
-///
-/// # Errors
-/// Propagates the first [`JudgeError`](crate::JudgeError) from cache or a judge call.
-pub async fn grade_panel_cached<P: Provider + ?Sized>(
-    store: &Store,
-    provider: &P,
-    judges: &[PanelJudge],
-    rubric: &str,
-    candidate_render: &str,
-    content_hash: &str,
-) -> Result<Vec<Grade>> {
-    if judges.is_empty() {
-        return Err(crate::error::JudgeError::EmptyPanel(
-            "grade_panel_cached requires at least one judge".into(),
-        ));
-    }
-    let mut grades = Vec::with_capacity(judges.len());
-    for judge in judges {
-        grades.push(
-            grade_one_cached(
-                store,
-                provider,
-                judge,
-                rubric,
-                candidate_render,
-                content_hash,
-            )
-            .await?,
-        );
-    }
-    Ok(grades)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::decision::Verdict;
     use crate::panel::JudgeSampling;
+    use crate::{PanelFailure, grade_panel_cached};
     use gw_providers::{ChatRequest, DeltaStream, ProviderError, StreamChatFuture, StreamDelta};
     use gw_schema::ReasoningEffort;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -451,14 +412,18 @@ mod tests {
             PanelJudge::new("a", "fa").with_rubric("r"),
             PanelJudge::new("b", "fb").with_rubric("r"),
         ];
-        let first = grade_panel_cached(&store, &provider, &judges, "rub", "trace", "hp")
-            .await
-            .unwrap();
+        let first = grade_panel_cached(&store, &provider, &judges, "rub", "trace", "hp", |_| {
+            PanelFailure::Record
+        })
+        .await
+        .unwrap();
         assert_eq!(first.len(), 2);
         // Re-run: both judges hit the cache; max_calls=2 means a third spend would panic.
-        let second = grade_panel_cached(&store, &provider, &judges, "rub", "trace", "hp")
-            .await
-            .unwrap();
+        let second = grade_panel_cached(&store, &provider, &judges, "rub", "trace", "hp", |_| {
+            PanelFailure::Record
+        })
+        .await
+        .unwrap();
         assert_eq!(second.len(), 2);
         assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
     }
