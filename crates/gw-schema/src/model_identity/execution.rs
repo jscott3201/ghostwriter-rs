@@ -13,7 +13,27 @@ pub enum ModelOperation {
     Embedding,
 }
 document! {
+    /// Route-independent adapter behavior, distinct from a full client/run descriptor.
+    /// The existing `SemanticDeclaration` vocabulary carries implementation, behavior revision,
+    /// and non-secret behavior parameters. Serving endpoints, replica/instance identity, and
+    /// requested model aliases belong in the surrounding request or evidence fields instead.
+    /// Custom adapters must explicitly declare behavior; wrapping a full client descriptor does
+    /// not remove location fields or independently establish this cooperative contract.
+    pub struct ModelAdapterBehavior {
+        /// Adapter behavior only; never a full endpoint-bearing client/run declaration.
+        pub declaration: SemanticDeclaration,
+    }
+}
+impl ModelAdapterBehavior {
+    /// Check the declaration's structural shape; no implementation or configuration is trusted.
+    pub fn validate(&self) -> Result<()> {
+        semantic(&self.declaration)
+    }
+}
+document! {
     /// Declared execution semantics shared by requests and supplied deployment claims.
+    /// All declarations here describe behavior; serving location and replica identity belong
+    /// in the separate requested-execution and deployment-evidence fields.
     /// Unknown fields remain explicit and do not establish cache equivalence or eligibility.
     pub struct ModelExecutionSemantics {
         /// Independent semantic execution contract version; only 1 is supported.
@@ -22,8 +42,8 @@ document! {
         pub alias: String,
         /// Requested operation.
         pub operation: ModelOperation,
-        /// Existing client/adapter semantic declaration, with its behavior revision.
-        pub client: SemanticDeclaration,
+        /// Explicit adapter behavior, distinct from an existing full client/run descriptor.
+        pub adapter_behavior: ModelAdapterBehavior,
         /// Serving-profile implementation, revision, and non-secret semantic configuration.
         pub serving_profile: Declaration<SemanticDeclaration>,
         /// Primary artifact and its pinned lineage, if declared.
@@ -47,7 +67,7 @@ impl ModelExecutionSemantics {
     pub fn validate(&self) -> Result<()> {
         version(self.version)?;
         nonempty(&self.alias)?;
-        semantic(&self.client)?;
+        self.adapter_behavior.validate()?;
         self.serving_profile.check(semantic)?;
         self.artifact.check(ArtifactIdentity::validate)?;
         self.additional_artifacts.check(|values| {

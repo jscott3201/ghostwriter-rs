@@ -869,9 +869,18 @@ artifact, role, and intended use, including embeddings, teachers, judges, prompt
 derivatives. They do not establish model eligibility. Task-source rights and candidate test-execution
 evidence retain their existing meanings.
 
-Requested execution binds an alias and operation to the existing `SemanticDeclaration` vocabulary,
-including a serving-profile revision and any known artifact, tokenizer, template, runtime, parser,
-and configuration declarations. Supplied deployment evidence records method/version, issuer and
+Requested execution binds an alias and operation to an explicit `ModelAdapterBehavior`, which uses
+`SemanticDeclaration` for adapter behavior only. Serving endpoints and replica identities belong in
+separate requested-execution or deployment-evidence fields. The existing full client/run declarations
+remain endpoint-sensitive and cannot be used directly as adapter behavior. The pure
+`gw_providers::builtin_adapter_behavior` helper reads the known built-in v1 descriptor shapes and
+extracts their behavior parameters; unsupported implementations, versions, or fields are rejected.
+For embeddings, the requested model stays in the execution alias, and unenforced model-revision/index
+labels are excluded from adapter behavior. Existing client descriptors, fingerprints, constructors,
+manifests, runtime behavior, and current caches are unchanged.
+
+Execution also declares a serving-profile revision and any known artifact, tokenizer, template,
+runtime, parser, and configuration behavior. Supplied deployment evidence records method/version, issuer and
 claimed verifier, raw evidence reference/digest, claimed loaded artifacts and effective semantics,
 endpoint/instance/incarnation, and claimed validity/revocation evidence. It requires independent
 qualification before use; there is no deserialized approval or verification flag. Unknown expiration

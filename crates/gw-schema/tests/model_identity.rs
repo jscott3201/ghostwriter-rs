@@ -40,7 +40,7 @@ fn artifact_json() -> Value {
 fn semantics_json() -> Value {
     json!({
         "version":1, "alias":"example/model", "operation":"chat_completion",
-        "client":semantic("chat-adapter"), "serving_profile":declared(semantic("profile")),
+        "adapter_behavior":{"declaration":semantic("chat-adapter")}, "serving_profile":declared(semantic("profile")),
         "artifact":declared(identity('a')), "additional_artifacts":declared(json!([identity('c'),identity('b')])),
         "tokenizer":declared(component("tokenizer.json","tokenizer",'b')),
         "chat_template":declared(component("chat-template.jinja","chat_template",'c')),
@@ -142,7 +142,8 @@ fn unknown_fields_and_forged_authority_are_rejected_at_nested_boundaries() {
             vec![
                 "",
                 "/semantics",
-                "/semantics/client",
+                "/semantics/adapter_behavior",
+                "/semantics/adapter_behavior/declaration",
                 "/semantics/artifact",
                 "/semantics/artifact/value",
                 "/policy_evidence/value/0",
@@ -287,7 +288,10 @@ fn unsupported_versions_and_invalid_nested_declarations_are_rejected_by_deserial
     }
     for (pointer, value) in [
         ("/validity/expires_at_unix_ms", json!(100)),
-        ("/effective/client/configuration", json!([])),
+        (
+            "/effective/adapter_behavior/declaration/configuration",
+            json!([]),
+        ),
         ("/instance", json!("")),
     ] {
         assert!(
@@ -473,7 +477,7 @@ fn semantic_changes_and_evidence_bindings_are_distinct() {
         ("/runtime/value/revision", json!("2")),
         ("/parser/value/revision", json!("2")),
         ("/serving_profile/value/revision", json!("2")),
-        ("/client/revision", json!("2")),
+        ("/adapter_behavior/declaration/revision", json!("2")),
         ("/configuration/value/hex", json!("e".repeat(64))),
         ("/artifact", unknown()),
     ] {
@@ -638,12 +642,12 @@ fn policy_identity_pins_role_use_terms_and_document() {
 #[test]
 fn semantic_digest_matches_independently_written_canonical_wire_vector() {
     let value = json!({"version":1,"alias":"m","operation":"embedding",
-        "client":{"implementation":"client","revision":"1","configuration":{"z":2,"a":1}},
+        "adapter_behavior":{"declaration":{"implementation":"client","revision":"1","configuration":{"z":2,"a":1}}},
         "serving_profile":unknown(),"artifact":unknown(),"additional_artifacts":unknown(),
         "tokenizer":unknown(),"chat_template":unknown(),"runtime":unknown(),"parser":unknown(),"configuration":unknown()});
     // Explicit sorted field order, including nested keys and unknown statuses; no production
     // serializer or canonicalization helper constructs this reference preimage.
-    let canonical = r#"{"additional_artifacts":{"status":"unknown"},"alias":"m","artifact":{"status":"unknown"},"chat_template":{"status":"unknown"},"client":{"configuration":{"a":1,"z":2},"implementation":"client","revision":"1"},"configuration":{"status":"unknown"},"operation":"embedding","parser":{"status":"unknown"},"runtime":{"status":"unknown"},"serving_profile":{"status":"unknown"},"tokenizer":{"status":"unknown"},"version":1}"#;
+    let canonical = r#"{"adapter_behavior":{"declaration":{"configuration":{"a":1,"z":2},"implementation":"client","revision":"1"}},"additional_artifacts":{"status":"unknown"},"alias":"m","artifact":{"status":"unknown"},"chat_template":{"status":"unknown"},"configuration":{"status":"unknown"},"operation":"embedding","parser":{"status":"unknown"},"runtime":{"status":"unknown"},"serving_profile":{"status":"unknown"},"tokenizer":{"status":"unknown"},"version":1}"#;
     let mut hasher = blake3::Hasher::new_derive_key("ghostwriter.model-execution-semantics.v1");
     hasher.update(canonical.as_bytes());
     assert_eq!(
