@@ -1,0 +1,87 @@
+# Forgejo development PR checks. Run dependency checks on every PR so the
+# gate does not depend on GitHub-specific change detection or draft events.
+
+name: ci
+
+on:
+  pull_request:
+    branches: [development]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: short
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
+jobs:
+  fmt:
+    name: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  file-size-cap:
+    name: file-size cap (700 LOC)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash .github/scripts/check-file-size.sh
+
+  no-secret-scan:
+    name: no-secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash .github/scripts/check-no-secrets.sh
+
+  rustdoc:
+    name: rustdoc (-D warnings)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-bin: false
+      - name: cargo doc (deny warnings)
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc --no-deps --workspace --document-private-items --locked
+
+  deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - run: cargo deny check bans licenses sources
+
+  ci-ok:
+    name: CI OK
+    if: always()
+    needs: [fmt, file-size-cap, no-secret-scan, rustdoc, deny]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every gate to succeed
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          needs = json.loads(os.environ["NEEDS_JSON"])
+          for job, result in sorted(needs.items()):
+              print(f"{job}: {result.get('result')}")
+          if not needs or any(result.get("result") != "success" for result in needs.values()):
+              sys.exit("Every required job must succeed")
+          PY
