@@ -10,9 +10,9 @@
 //!
 //! ## Scope & invariants
 //!
-//! This crate is **types only** — pure structs/enums + `Default` impls. No business logic, no
-//! algorithms (no `n_eff` computation, no hashing). It carries the load-bearing invariants of
-//! the contract in its *shape*:
+//! This crate contains pure data contracts, structural validation, and canonical identity
+//! hashing. It performs no I/O or grading/admission computation. It carries the load-bearing
+//! invariants of the contract in its shape:
 //!
 //! - **(a)** reasoning is a first-class sibling of `content`, never inlined (`Message`,
 //!   `PreferenceSide`).
@@ -41,6 +41,7 @@ mod hashes;
 mod judging;
 mod lifecycle;
 mod message;
+mod model_identity;
 mod numeric;
 mod preference;
 mod provenance;
@@ -53,6 +54,9 @@ mod task;
 mod task_identity;
 mod verification;
 mod verification_contract;
+
+// --- pure model declarations and supplied deployment evidence ---
+pub use model_identity::*;
 
 // --- §1.11 the envelope ---
 pub use record::TrainingRecord;
