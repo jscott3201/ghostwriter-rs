@@ -130,12 +130,13 @@ impl CircuitBreaker {
     }
 }
 
-/// The terminal summary of a run: per-state record counts + whether it drained cleanly.
+/// The terminal summary: persisted record states, this invocation's export, and whether it drained.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RunReport {
     /// Records admitted (reached `Admitted` or beyond — `Admitted`/`Formatted`/`Exported`).
     pub admitted: usize,
-    /// Records acknowledged in a verified artifact (`Exported`).
+    /// Records in the verified artifact acknowledged by this invocation; zero when export is skipped.
+    /// Existing `Exported` lifecycle states alone do not count as an export by this invocation.
     pub exported: usize,
     /// Records rejected.
     pub rejected: usize,
@@ -324,6 +325,9 @@ impl Engine {
                 }
             }
             let mut report = self.tally(run_id).await?;
+            report.exported = manifest
+                .as_ref()
+                .map_or(0, |manifest| manifest.n_admitted as usize);
             report.completed = !halted;
             self.clients
                 .store
@@ -745,7 +749,6 @@ impl Engine {
         let exported = count(LifecycleState::Exported).await?;
         let admitted_only = count(LifecycleState::Admitted).await?;
         let formatted = count(LifecycleState::Formatted).await?;
-        report.exported = exported;
         // "admitted" = anything that passed admission (Admitted/Formatted/Exported).
         report.admitted = exported + admitted_only + formatted;
         report.rejected = count(LifecycleState::Rejected).await?;
