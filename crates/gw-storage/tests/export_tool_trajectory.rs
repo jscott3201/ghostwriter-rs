@@ -151,6 +151,7 @@ fn tool_record(record_id: &str, run_id: &str, verdict: Option<Verdict>) -> Train
             git_commit: None,
         },
         generation: Default::default(),
+        task_provenance: None,
         verification_contract: None,
         execution_evidence: None,
         verification: Default::default(),
@@ -622,7 +623,7 @@ async fn unsettled_sibling_group_exports_no_rows() {
 ///    applies unchanged here.
 /// 2. The v1 shard shape (a parallel `reasoning_json` column) is gone rather than kept in step. It
 ///    is a documented, versioned break: a manifest written by this build names
-///    [`ExportSchemaVersion::CanonicalMessages`], and a manifest without that key reads back as v1,
+///    [`ExportSchemaVersion::ReviewedTasks`], and a manifest without that key reads back as v1,
 ///    so a reader can tell which contract a file was written under.
 #[tokio::test]
 async fn export_records_what_it_cannot_preserve() {
@@ -643,7 +644,7 @@ async fn export_records_what_it_cannot_preserve() {
     // is not carried forward.
     assert_eq!(
         manifest.column_schema_version,
-        ExportSchemaVersion::CanonicalMessages
+        ExportSchemaVersion::ReviewedTasks
     );
     let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes))
         .unwrap()

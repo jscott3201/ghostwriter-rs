@@ -120,6 +120,7 @@ fn good_cot_script() -> Vec<StreamDelta> {
 
 fn candidate(text: &str, kind: VerificationKind) -> UserTurnCandidate {
     UserTurnCandidate {
+        task_provenance: None,
         message: user_message(text),
         seed: UserSeed {
             persona: Some("curious_user".into()),
@@ -133,7 +134,8 @@ fn candidate(text: &str, kind: VerificationKind) -> UserTurnCandidate {
             required_tests: vec![],
             kind,
             oracle: Oracle::None,
-            answer_marker: None,
+            numeric: (kind == VerificationKind::NumericMatch)
+                .then(gw_schema::NumericComparison::default),
         },
         answerable: true,
         difficulty_targeted: true,

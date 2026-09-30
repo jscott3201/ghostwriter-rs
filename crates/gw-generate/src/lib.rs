@@ -118,11 +118,7 @@ pub async fn generate_assistant<P: Provider + ?Sized>(
     gated: &GatedUserTurn,
     call: &TeacherCall,
 ) -> Result<AssistantTurn> {
-    gated
-        .candidate
-        .contract
-        .validate()
-        .map_err(|reason| GenerateError::Invariant(reason.into()))?;
+    gated.candidate.validate_contract()?;
     if !gated.passed() {
         return Err(GenerateError::Invariant(format!(
             "refusing to spend teacher tokens: user-turn QC gate failed \

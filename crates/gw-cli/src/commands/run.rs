@@ -13,7 +13,7 @@ use gw_engine::EventSink;
 
 use crate::cli::RunArgs;
 use crate::config::Config;
-use crate::seedsource::FileSeedSource;
+use crate::seedsource::InputSeedSource;
 use crate::wire::{build_engine, new_cancel_token};
 
 /// Resolve the effective [`Config`] for a run: load the file + env layers, then apply the clap
@@ -37,7 +37,7 @@ pub fn effective_config(args: &RunArgs) -> anyhow::Result<Config> {
     Ok(config)
 }
 
-/// Run the engine headlessly over the prompts in `args.prompts`, persisting to the store, and print
+/// Run the engine headlessly over the selected task or prompt file, persisting to the store, and print
 /// the terminal report.
 ///
 /// # Errors
@@ -45,7 +45,8 @@ pub fn effective_config(args: &RunArgs) -> anyhow::Result<Config> {
 /// `OPENROUTER_API_KEY`), or engine-run failure.
 pub async fn run(args: RunArgs) -> anyhow::Result<()> {
     let config = effective_config(&args)?;
-    let source = FileSeedSource::from_prompts_file(&args.prompts, args.shards)?;
+    let source =
+        InputSeedSource::from_files(args.prompts.as_deref(), args.tasks.as_deref(), args.shards)?;
 
     let mode = gw_storage::RunMode::CreateOrResume;
     let (engine, store, prepared) = build_engine(
@@ -85,7 +86,8 @@ mod tests {
             config: None,
             db: Some(PathBuf::from("/tmp/override.sqlite")),
             run_id: "r1".into(),
-            prompts: PathBuf::from("/tmp/prompts.txt"),
+            prompts: Some(PathBuf::from("/tmp/prompts.txt")),
+            tasks: None,
             shards: 1,
             accounting: crate::cli::AccountingArgs {
                 accounting_policy: Some(crate::cli::AccountingMode::FiniteUsd),

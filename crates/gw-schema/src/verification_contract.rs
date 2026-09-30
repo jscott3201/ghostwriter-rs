@@ -25,12 +25,10 @@ pub struct VerificationContract {
     pub kind: VerificationKind,
     /// How ground truth is computed.
     pub oracle: Oracle,
-    /// Canonical answer-format marker, chosen ONCE per corpus build (B8). Drives teacher
-    /// answer-marker steering + the export-time single-marker REFUSE/quarantine guard
-    /// (DATA-SCHEMA §3) and the extractor fallback (JUDGE-DESIGN §1.1). None ⇒ no single
-    /// canonical marker enforced (guard inert).
+    /// Explicit numeric extraction/tolerances. Required for `NumericMatch`; absent for other kinds.
+    /// Missing on historical numeric records, which remain readable but cannot execute.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub answer_marker: Option<String>,
+    pub numeric: Option<crate::NumericComparison>,
 }
 
 /// How an observation affects admission, independently of its factual outcome.
@@ -58,6 +56,25 @@ impl VerificationContract {
         let execution = self
             .execution_policy
             .ok_or("verification contract lacks explicit execution policy")?;
+        if self.kind == VerificationKind::NumericMatch {
+            let numeric = self
+                .numeric
+                .as_ref()
+                .ok_or("numeric comparator requires explicit extraction and tolerances")?;
+            numeric.validate()?;
+            let expected = match &self.oracle {
+                Oracle::Literal { expected } => Some(expected),
+                Oracle::SandboxExecution { expected, .. } => expected.as_ref(),
+                _ => None,
+            };
+            if let Some(expected) = expected {
+                numeric.bound(crate::parse_finite_decimal(expected).ok_or(
+                    "numeric expected answer must be a finite decimal/scientific token",
+                )?)?;
+            }
+        } else if self.numeric.is_some() {
+            return Err("numeric extraction/tolerances require the numeric comparator");
+        }
         if answer != Absent {
             let supported = matches!(
                 (&self.kind, &self.oracle),

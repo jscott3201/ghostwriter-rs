@@ -51,6 +51,13 @@ pub fn validate_record_verification(rec: &TrainingRecord, area: &AreaConfig) -> 
     contract
         .validate()
         .map_err(|reason| EngineError::Invariant(reason.into()))?;
+    if let Some(task) = &rec.task_provenance {
+        let prompt = rec.messages.first().ok_or_else(|| {
+            EngineError::Invariant("numeric task record lacks its user prompt".into())
+        })?;
+        task.validate_for(prompt, contract)
+            .map_err(|reason| EngineError::Invariant(reason.into()))?;
+    }
     if let Some(facts) = rec.verification.interpretation.as_ref() {
         facts
             .gate()
@@ -340,6 +347,7 @@ mod tests {
                 git_commit: None,
             },
             generation: Generation::default(),
+            task_provenance: None,
             verification_contract: None,
             execution_evidence: None,
             verification: Verification::default(),
@@ -357,7 +365,7 @@ mod tests {
             oracle: gw_schema::Oracle::Literal {
                 expected: "42".into(),
             },
-            answer_marker: None,
+            numeric: Some(gw_schema::NumericComparison::default()),
         });
         rec.verification = gw_judge::run_verifier(
             &gw_judge::VerifierInput {

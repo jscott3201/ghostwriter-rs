@@ -94,7 +94,7 @@ pub fn run_verifier<S: SandboxOracle + ?Sized>(
                 let text = last_assistant(input.messages)
                     .map(content_text)
                     .unwrap_or("");
-                match compare_answer(contract.kind, text, expected.as_deref()) {
+                match compare_answer(contract, text, expected.as_deref()) {
                     AnswerComparison::Match => observation(Outcome::Pass, "answer matches oracle"),
                     AnswerComparison::NonMatch => {
                         observation(Outcome::Fail, "answer does not match oracle")

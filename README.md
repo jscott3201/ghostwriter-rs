@@ -247,7 +247,8 @@ that replaces stale output. Publication failure fails the run; success events an
 acknowledgment. Standalone `gen export` leaves generation states unchanged.
 
 The authoritative footer key is `ghostwriter.export_artifact`. Metadata version 1 wraps the existing
-manifest, scope and `artifact_id`; the eight-column `canonical_messages` schema remains unchanged.
+manifest, scope and `artifact_id`. New artifacts use the nine-column `reviewed_tasks` schema;
+frozen `canonical_messages` publications preserve their eight-column contract during recovery.
 `gw_storage::verify_artifact` reads every batch and returns an explicit `MissingLegacyMetadata` result
 for historical files without this entry. Ordinary Parquet row readers can still read those files.
 No adjacent file is used to infer metadata.
@@ -257,15 +258,18 @@ each followed by a newline. The separate artifact identity covers the complete p
 and scope, including empty populations. It excludes the destination and its own ID field. Metadata
 does not invent missing model identities or claim a complete generation provenance graph.
 
-For independent version-1 identity implementations:
+For independent implementations of metadata identity version 1:
 
 1. Sort rows by `record_id` in UTF-8 byte order. Reject duplicate IDs. A framed string is its UTF-8
    byte length as an unsigned 64-bit big-endian integer followed by those bytes.
-2. Hash each row with BLAKE3 derive-key context `ghostwriter.export.projected-row.v1`: framed
+2. For column schema v2, hash each row with context `ghostwriter.export.projected-row.v1`: framed
    `record_id`, `training_area`, `record_hash`, `prompt_hash`; verdict presence byte (`0` absent,
    `1` present) and framed verdict when present; aggregate presence byte and its exact IEEE-754
    64-bit big-endian bits when present; unsigned 32-bit big-endian `reasoning_tokens`; framed
-   `messages_json`. Encode the resulting digest as lowercase hexadecimal.
+   `messages_json`. For column schema v3, use context
+   `ghostwriter.export.projected-row.v2-reviewed-tasks`, encode those same fields, then append a
+   task presence byte and framed canonical `task_json` when present. Encode the digest as lowercase
+   hexadecimal. Task JSON uses typed fields and recursively sorted object keys.
 3. Hash the artifact with context `ghostwriter.export.artifact.v1`: unsigned 32-bit big-endian
    `metadata_version`; framed scope JSON; framed complete manifest JSON; unsigned 64-bit big-endian
    row count; each framed hexadecimal row digest in sorted order. Scope and manifest JSON use the
@@ -391,6 +395,52 @@ Verified replay and reconciliation use supported persisted facts without rerunni
 Records missing explicit policy or a supported interpretation remain available for inspection and
 standalone export, but executable replay/regrading rejects them before new model work. They are not
 automatically rewritten or inferred from historical booleans.
+
+### Reviewed numeric task files
+
+Run, replay, and TUI accept exactly one of `--tasks FILE` or `--prompts FILE`. The
+[reviewed arithmetic example](examples/reviewed-numeric-tasks.json) is a complete version 1 task
+document. `NumericTaskSource::from_json` and `from_document` provide the same pure validation to
+library callers. Invalid documents fail before credentials, store creation, or model dispatch.
+
+Each ordered task declares a stable label; source namespace, item, immutable revision, and citation;
+reviewed rights basis, evidence, reviewer, and permitted uses; a namespaced corpus group; split
+manifest, revision, and role; one nonempty user-text prompt; literal numeric answer, extraction,
+tolerances, and policies; and domain, difficulty, and QC observations. Unknown fields/versions,
+other conversation structures, executable oracles, duplicate tasks, and conflicting assignments
+for a group are rejected. Rights, difficulty, and QC fields record reviewed assertions. The harness
+does not fetch their references or establish legal clearance, measured difficulty, or cross-corpus
+split/decontamination qualification.
+
+Numeric contracts persist these settings explicitly:
+
+- `whole_content` requires the entire assistant content, except surrounding whitespace, to be a
+  numeric token.
+- `final_marker` requires exactly one literal marker, at the start of the final nonempty line
+  after trimming that line. Only a numeric token may follow it. Missing, repeated, embedded, or
+  ambiguous markers produce Unknown. Reasoning and arbitrary prose are never searched for numbers.
+- Tokens follow `[+-]?(digits(.digits*)?|.digits+)([eE][+-]?digits+)?`, using ASCII digits.
+  Currency, percent, separators, hexadecimal, NaN/infinity, overflow, and nonzero values that
+  underflow to zero are rejected. Literal expected answers are strings so these failures remain
+  detectable during intake.
+- Values and arithmetic use IEEE-754 binary64, including its rounding of large integers; this
+  does not provide arbitrary-precision decimal/integer equality. Tolerances are finite,
+  nonnegative JSON numbers. A match uses the inclusive bound
+  `abs(actual - expected) <= max(absolute, relative * abs(expected))`. Overflowing relative
+  bounds are rejected; comparison avoids overflowing an opposite-sign distance. For example,
+  `9007199254740993` and `9007199254740992` round to the same binary64 value.
+
+The task prompt must ask the teacher for the chosen answer format. The harness does not inject the
+reference answer or add format instructions. Authoritative wrong/unknown answers stop before the
+quality panel; a correct answer still needs a passing quality decision. The run manifest pins the
+numeric interpretation and the complete ordered materialized plan.
+
+The versioned semantic task digest is derived from typed source identity/citation, exact prompt,
+and numeric answer/extraction/tolerance semantics. Caller labels are never accepted as hashes.
+Rights, group, split, policy, and QC declarations remain outside that semantic digest but are bound
+by the full plan digest. Split changes therefore preserve the semantic identity while preventing
+incompatible replay. Numeric seeds, shards, offsets, and record IDs keep their existing mapping;
+the corpus group remains distinct from the prompt-hash `sibling_group_id`.
 
 ### Immutable run identity
 
@@ -558,7 +608,8 @@ gw eval promote            Variance-aware promotion gate over two eval_results.j
 |---|---|
 | `--config <FILE>` | TOML config (the figment base layer). |
 | `--run-id <ID>` | Immutable run identity. Matching inputs and effective generation/admission settings **resume**. |
-| `--prompts <FILE>` | Newline-delimited prompts file (one user turn per line). |
+| `--prompts <FILE>` | Plain prompts with explicit judge-only policies; exclusive with `--tasks`. |
+| `--tasks <FILE>` | Strict reviewed numeric task JSON; exclusive with `--prompts`. |
 | `--db <PATH>` | Override the SQLite store path. |
 | `--shards <N>` | Partition the seed space into N shards (default `1`) — the primary concurrency axis. |
 | `--max-in-flight <N>` | Cap on seed items in flight across all shards (default `4`). |
@@ -576,7 +627,7 @@ rejected, review, and error states are excluded. The manifest counts all scanned
 `n_records`; `n_admitted` and `build_inputs_hash` describe only the selected exported rows.
 
 **`gw gen replay`** — resumes `--run-id` from a store using matching generation settings and the
-**same** `--prompts` and `--shards` the original run used (the seed→shard partition is `index % shards`, so a
+**same** task or prompt input and `--shards` the original run used (the seed→shard partition is `index % shards`, so a
 different value would re-partition the space and duplicate or orphan records). Replay accepts the
 same accounting flags as run/TUI; an explicit policy change follows the epoch rules above. Unknown
 run IDs fail. Incompatible generation/admission settings require a new run ID.
@@ -643,6 +694,13 @@ consumer decodes it straight back into `Message[]`. (The historical v1 `{role, c
 parallel `reasoning_json` pair was lossy — `reasoning_json` is gone, and `column_schema_version` in
 the manifest records which contract a shard was written under.) The CoT policy and the target are
 recorded as manifest metadata so a downstream trainer applies the matching loss mask and template.
+Current exports use column schema v3 (`reviewed_tasks`), which adds nullable `task_json`. It contains
+typed task provenance plus the exact verification contract, validated against the row's prompt.
+Plain prompts have null task provenance. Task declarations participate in row and artifact identity.
+Verification and receipt recovery continue to honor v2's exact eight-column contract and hash
+framing. A prepared or acknowledged publication keeps its stored column version, identity, selected
+members, and acknowledgment history when restored or republished; it is never upgraded during
+recovery. A v2 receipt rejects selected records that acquired task provenance after preparation.
 The exporter does not emit token IDs or loss labels and does not qualify official tokenizer,
 truncation, or trainer behavior. TOML format values are `gemma4`, `chatml`, `share_gpt`,
 `open_ai_messages`, `harmony`, and `trl_prompt_completion`; CLI spellings are shown in the table.

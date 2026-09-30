@@ -26,7 +26,7 @@ fn rich_candidate() -> UserTurnCandidate {
           "reasoning":" thoughts ","reasoning_details":[{"type":"reasoning.text","text":"text","signature":"sig","id":"id","format":"native","index":0},{"type":"reasoning.summary","summary":"summary","id":"sum","format":"native","index":1},{"type":"reasoning.encrypted","data":"cipher","id":"enc","format":"native","index":2}],
           "tool_calls":[{"id":"call-a","function":{"name":"tool","arguments":{"x":1},"raw_arguments":"{ \"x\":1 }"}},{"id":"call-b","function":{"name":"tool","arguments":{"x":2}}}],"tool_call_id":"result-a","name":"tool-result"},
         "seed":{"persona":"persona","taxonomy_node":"node","prompt_template_id":"template","difficulty":"hard"},
-        "contract":{"answer_policy":"absent","execution_policy":"absent","kind":"numeric_match","oracle":{"oracle":"sandbox_execution","tool_or_sql":"SELECT 1","expected":"NaN"},"answer_marker":"ANSWER:"},
+        "contract":{"answer_policy":"absent","execution_policy":"absent","kind":"set_match","oracle":{"oracle":"sandbox_execution","tool_or_sql":"SELECT 1","expected":"NaN"}},
         "answerable":true,"difficulty_targeted":true,"in_scope":true
     })).unwrap()
 }
@@ -68,7 +68,6 @@ fn every_nested_candidate_field_changes_identity_without_fetching_media() {
         "/contract/kind",
         "/contract/oracle/tool_or_sql",
         "/contract/oracle/expected",
-        "/contract/answer_marker",
         "/answerable",
         "/difficulty_targeted",
         "/in_scope",
@@ -78,7 +77,7 @@ fn every_nested_candidate_field_changes_identity_without_fetching_media() {
         let field = changed.pointer_mut(path).unwrap();
         *field = match path {
             "/message/role" => json!("system"),
-            "/contract/kind" => json!("set_match"),
+            "/contract/kind" => json!("schema_shape"),
             _ => match field {
                 Value::String(s) => json!(format!("{s} ")),
                 Value::Bool(b) => json!(!*b),

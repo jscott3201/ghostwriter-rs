@@ -424,6 +424,9 @@ async fn conservative_sql_schema_and_unavailable_sandbox_remain_unknown() {
         let mut candidate = numeric_candidate("Compare to the oracle", "expected");
         candidate.contract.answer_policy = Some(Policy::Authoritative);
         candidate.contract.kind = kind;
+        if kind != VerificationKind::NumericMatch {
+            candidate.contract.numeric = None;
+        }
         if kind == VerificationKind::NumericMatch {
             candidate.contract.oracle = Oracle::SandboxExecution {
                 tool_or_sql: "reference tool".into(),

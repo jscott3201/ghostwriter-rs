@@ -134,7 +134,7 @@ impl Store {
             return Err(integrity("engine publication requires a run scope"));
         }
         let publication_id = publication_identity(&plan.artifact.artifact_id, destination, purpose);
-        let members = plan.members();
+        let members = plan.members()?;
         let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
         let records = selected_records(&mut tx, &plan.artifact, &members).await?;
         checked_projection(&plan.artifact, &members, &records)?;
@@ -262,9 +262,15 @@ fn checked_projection(
     members: &[Member],
     records: &[TrainingRecord],
 ) -> Result<Vec<Projected>> {
-    let rows: Vec<_> = records.iter().map(project).collect::<Result<_>>()?;
+    let version = artifact.manifest.column_schema_version;
+    let rows: Vec<_> = records
+        .iter()
+        .map(|record| project(record, version))
+        .collect::<Result<_>>()?;
     for (row, member) in rows.iter().zip(members) {
-        if row.record_id != member.record_id || projected_hash(row) != member.projected_hash {
+        if row.record_id != member.record_id
+            || projected_hash(row, version)? != member.projected_hash
+        {
             return Err(integrity(
                 "selected export record changed after preparation",
             ));

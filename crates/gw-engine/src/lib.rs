@@ -79,6 +79,8 @@ mod revise;
 mod seed;
 mod sibling;
 mod step;
+mod tasks;
+pub use tasks::NumericTaskSource;
 
 #[cfg(test)]
 mod accounting_test_support;

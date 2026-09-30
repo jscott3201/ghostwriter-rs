@@ -123,6 +123,7 @@ fn tool_record(record_id: &str, run_id: &str) -> TrainingRecord {
             git_commit: None,
         },
         generation: Default::default(),
+        task_provenance: None,
         verification_contract: None,
         execution_evidence: None,
         verification: Default::default(),

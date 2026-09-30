@@ -22,10 +22,10 @@ use gw_engine::EventSink;
 
 use crate::cli::RunArgs;
 use crate::commands::run::effective_config;
-use crate::seedsource::FileSeedSource;
+use crate::seedsource::InputSeedSource;
 use crate::wire::{build_engine, new_cancel_token};
 
-/// Run the engine over the prompts in `args.prompts` WITH the dashboard, sharing one cancellation
+/// Run the engine over the selected task or prompt file WITH the dashboard, sharing one cancellation
 /// token between the engine task and the TUI loop.
 ///
 /// # Errors
@@ -34,7 +34,8 @@ use crate::wire::{build_engine, new_cancel_token};
 /// here (not silently swallowed by the spawned task).
 pub async fn tui(args: RunArgs) -> anyhow::Result<()> {
     let config = effective_config(&args)?;
-    let source = FileSeedSource::from_prompts_file(&args.prompts, args.shards)?;
+    let source =
+        InputSeedSource::from_files(args.prompts.as_deref(), args.tasks.as_deref(), args.shards)?;
 
     // The connected sink (into the engine's Clients) + its receiver (drained by the dashboard).
     let (sink, rx) = EventSink::subscribe();

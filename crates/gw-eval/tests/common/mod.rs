@@ -48,6 +48,7 @@ pub fn candidate(prompt: usize, index: u32, score: Option<f64>) -> TrainingRecor
             completion_index: Some(index),
             ..Default::default()
         },
+        task_provenance: None,
         verification_contract: None,
         execution_evidence: None,
         verification: Verification {

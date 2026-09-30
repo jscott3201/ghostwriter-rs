@@ -91,9 +91,22 @@ pub struct RunArgs {
     /// The run id (idempotency key). A re-run of the SAME id over the same seeds RESUMES.
     #[arg(long, value_name = "ID")]
     pub run_id: String,
-    /// Path to a newline-delimited prompts file (one user turn per line) — the v1 seed source.
-    #[arg(long, value_name = "FILE")]
-    pub prompts: PathBuf,
+    /// Plain prompts, one user turn per line, with explicit judge-only verification.
+    #[arg(
+        long,
+        value_name = "FILE",
+        required_unless_present = "tasks",
+        conflicts_with = "tasks"
+    )]
+    pub prompts: Option<PathBuf>,
+    /// Strict reviewed numeric task JSON. Supply exactly one of --tasks or --prompts.
+    #[arg(
+        long,
+        value_name = "FILE",
+        required_unless_present = "prompts",
+        conflicts_with = "prompts"
+    )]
+    pub tasks: Option<PathBuf>,
     /// Number of shards to partition the seed space into.
     #[arg(long, value_name = "N", default_value_t = 1)]
     pub shards: usize,
@@ -141,7 +154,7 @@ pub struct ExportArgs {
 
 /// `gen replay` flags (thin: re-enter `Engine::run` for an existing run id + store).
 ///
-/// Resume is sound only when the SAME seed plan is re-derived, so the SAME `--prompts` file (and
+/// Resume is sound only when the SAME seed plan is re-derived, so the SAME task/prompt input (and
 /// `--shards`) the original run used MUST be supplied — the engine then skips already-committed
 /// offsets and re-drives any mid-flight record from its last persisted state, reusing stored output.
 #[derive(Debug, clap::Args, PartialEq)]
@@ -161,9 +174,22 @@ pub struct ReplayArgs {
     /// The run id to resume (must already exist in the store with persisted checkpoints).
     #[arg(long, value_name = "ID")]
     pub run_id: String,
-    /// The SAME newline-delimited prompts file the original run used (resume re-derives by offset).
-    #[arg(long, value_name = "FILE")]
-    pub prompts: PathBuf,
+    /// The same plain prompt source used by the original run.
+    #[arg(
+        long,
+        value_name = "FILE",
+        required_unless_present = "tasks",
+        conflicts_with = "tasks"
+    )]
+    pub prompts: Option<PathBuf>,
+    /// The same reviewed numeric task document used by the original run.
+    #[arg(
+        long,
+        value_name = "FILE",
+        required_unless_present = "prompts",
+        conflicts_with = "prompts"
+    )]
+    pub tasks: Option<PathBuf>,
     /// The SAME shard count the original run used (REQUIRED — there is no safe default for a resume:
     /// the seed→shard partition is `index % shards`, so a different (or silently defaulted) value
     /// re-partitions the space and duplicates/orphans records against the persisted offset cursors).

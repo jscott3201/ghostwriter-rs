@@ -149,6 +149,7 @@ async fn standalone_export_matches_automatic_best_of_k_and_replay() {
     });
     let source = InMemorySeedSource::new(
         vec![UserTurnCandidate {
+            task_provenance: None,
             message: user_message("What is 12*8?"),
             seed: UserSeed::default(),
             contract: VerificationContract {
@@ -157,7 +158,7 @@ async fn standalone_export_matches_automatic_best_of_k_and_replay() {
                 required_tests: vec![],
                 kind: VerificationKind::None,
                 oracle: Oracle::None,
-                answer_marker: None,
+                numeric: None,
             },
             answerable: true,
             difficulty_targeted: true,

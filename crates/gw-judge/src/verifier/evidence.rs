@@ -383,7 +383,7 @@ mod tests {
             std::sync::LazyLock::new(|| gw_schema::VerificationContract {
                 kind: gw_schema::VerificationKind::None,
                 oracle: gw_schema::Oracle::None,
-                answer_marker: None,
+                numeric: None,
                 answer_policy: Some(gw_schema::VerificationPolicy::Absent),
                 execution_policy: Some(gw_schema::VerificationPolicy::Authoritative),
                 required_tests: vec![NODE.into()],

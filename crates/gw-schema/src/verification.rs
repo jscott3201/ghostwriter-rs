@@ -56,7 +56,7 @@ pub enum CheckKind {
 }
 
 /// Current policy/fact interpretation revision. Older or missing revisions cannot be re-certified.
-pub const VERIFICATION_INTERPRETATION_VERSION: u32 = 1;
+pub const VERIFICATION_INTERPRETATION_VERSION: u32 = 2;
 
 /// A factual result before admission policy is applied.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

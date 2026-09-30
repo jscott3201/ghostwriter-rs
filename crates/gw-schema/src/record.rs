@@ -41,6 +41,9 @@ pub struct TrainingRecord {
 
     pub provenance: Provenance,
     pub generation: Generation,
+    /// Reviewed task provenance, absent for plain prompts and historical records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_provenance: Option<crate::TaskProvenance>,
     /// The deterministic-verifier contract (kind + oracle) carried from the user-turn candidate so the
     /// Verify rail's answer-correctness check (NumericMatch / RefusalExpected / SqlResultMatch / …) can
     /// run on the engine's `assistant_generated → verified` edge AND on a crash-resume of that edge.

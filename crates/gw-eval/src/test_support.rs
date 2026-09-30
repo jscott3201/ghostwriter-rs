@@ -56,6 +56,7 @@ pub fn scored_sibling(
             git_commit: None,
         },
         generation: Generation::default(),
+        task_provenance: None,
         verification_contract: None,
         execution_evidence: None,
         verification: Verification {

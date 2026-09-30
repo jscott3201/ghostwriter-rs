@@ -147,6 +147,7 @@ mod tests {
 
     fn candidate(text: &str) -> UserTurnCandidate {
         UserTurnCandidate {
+            task_provenance: None,
             message: user_message(text),
             seed: UserSeed::default(),
             contract: VerificationContract {
@@ -155,7 +156,7 @@ mod tests {
                 required_tests: vec![],
                 kind: VerificationKind::NumericMatch,
                 oracle: Oracle::None,
-                answer_marker: None,
+                numeric: Some(gw_schema::NumericComparison::default()),
             },
             answerable: true,
             difficulty_targeted: true,
