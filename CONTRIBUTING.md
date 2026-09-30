@@ -5,6 +5,10 @@ command list and project invariants live in [AGENTS.md](AGENTS.md).
 
 ## Setup
 
+Development and pull requests are managed on Forgejo. Maintainers clone from
+Forgejo and use it as their `origin`; GitHub is the public code mirror, with
+GitHub Actions disabled. The public checkout remains available below.
+
 ```sh
 git clone https://github.com/jscott3201/ghostwriter-rs
 cd ghostwriter-rs
@@ -24,9 +28,29 @@ The toolchain is pinned in `rust-toolchain.toml` (Rust 1.95.0, edition 2024).
    `cargo nextest run --workspace --locked`, and the doctests.
 4. Commit with **Conventional Commits**: `feat(scope): …`, `fix(scope): …`,
    `chore(scope): …`.
-5. Open a PR into `development` and fill out the template. Dev-PR CI runs the fast
-   gates; the heavy build/clippy/test matrix runs at the `development → main`
-   release gate.
+5. Open a Forgejo PR into `development` and fill out the template. Dev-PR CI runs
+   formatting, file-size, secret, documentation, and dependency checks. The
+   heavy build/clippy/test checks run on Linux at the `development → main`
+   release gate. Each workflow reports a required `CI OK` status that succeeds
+   only when every job passes.
+
+The active workflows live in `.forgejo/workflows/`. The `.github/workflows/`
+copies are retained for reference; GitHub receives code through the push mirror.
+
+## macOS release validation
+
+Before merging a release PR into `main`, run the gates in [AGENTS.md](AGENTS.md)
+on macOS at the same commit tested by the Forgejo Linux release gate. Also run:
+
+```sh
+cargo build --workspace --release --locked
+cargo deny check bans licenses sources
+cargo audit --color always
+```
+
+Record the commit, macOS version, architecture, and results in the release PR.
+The Forgejo `CI OK` status covers Linux; the maintainer checks the separate
+macOS results before merging.
 
 ## Tests
 
