@@ -100,13 +100,14 @@ mod records;
 mod run_manifest;
 mod runledger;
 pub use run_manifest::RunMode;
+mod startup;
 mod store;
 #[cfg(test)]
 mod test_hooks;
 
 pub use artifact::{ARTIFACT_METADATA_KEY, ArtifactVerification, ExportPlan, verify_artifact};
 pub use cache::{canonical_json_hash, completion_hash, prompt_hash, record_hash};
-pub use error::{Result, StorageError};
+pub use error::{Result, StartupPhase, StorageError};
 pub use export::{clean_messages_json, export_parquet_bytes};
 pub use publication::{ExportPublication, PublicationDisposition};
 pub use receipts::ExportPurpose;
@@ -133,3 +134,6 @@ mod legacy_migration_tests;
 
 #[cfg(test)]
 mod publication_integrity_tests;
+
+#[cfg(test)]
+mod startup_tests;
