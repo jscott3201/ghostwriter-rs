@@ -522,9 +522,19 @@ same accounting flags as run/TUI; an explicit policy change follows the epoch ru
 
 > **Concurrency.** `--max-in-flight` bounds seed groups across shard tasks; it does not count
 > physical HTTP requests. Each group's `k` siblings may overlap under observation-only, while each
-> sibling's cached judge panel is evaluated in sequence. Teacher and judge chat calls share the
+> sibling's distinct cached judge misses may also overlap, bounded by that panel's cardinality.
+> Equal effective request keys within a panel share one result; cache hits make no model requests.
+> Results retain panel order even when responses finish out of order. These are per-panel logical
+> bounds; they do not set an endpoint-wide HTTP limit. Teacher and judge chat calls share the
 > configured RPM limiter. Embedding calls have their own asynchronous path. Finite accounting
 > serializes physical model requests regardless of these pipeline concurrency bounds.
+
+A cached panel stops starting logical misses after an error and drains every operation it already
+started, including provider futures waiting for RPM, retry backoff, or accounting admission.
+Successful responses finish their cache writes, so replay requests only missing grades. Fatal
+provider or cache errors seal engine dispatch before the panel finishes draining; a later fatal
+error takes precedence over an earlier content error or cancellation. Existing provider waits can
+still delay that drain.
 
 A fatal shard error or panic stops new work and joins every shard before the run reports failure.
 Surviving shards settle started transitions at a persisted boundary; grading may finish its panel and

@@ -118,12 +118,23 @@ impl EngineError {
             // record would fail the same way — symmetric with the top-level `Storage` arm (and unlike a
             // judge CONTENT fault). Matched BEFORE the Generate|Judge record-level fallthrough so a
             // recoverable store outage on the judge path is not laundered into per-record `Error`s.
-            EngineError::Judge(JudgeError::Storage(_)) => false,
+            EngineError::Judge(error) => {
+                Self::judge_failure(error) == gw_judge::PanelFailure::Record
+            }
             // Generate/Judge are record-level UNLESS they wrap a SYSTEMIC (non-retryable auth/config)
             // provider fault, which would fail every record the same way → infrastructure-fatal (F2).
-            EngineError::Generate(_) | EngineError::Judge(_) => !self.is_systemic_provider_fault(),
+            EngineError::Generate(_) => !self.is_systemic_provider_fault(),
             EngineError::Format(_) => true,
             EngineError::Storage(_) | EngineError::Serde(_) | EngineError::Invariant(_) => false,
+        }
+    }
+
+    /// The cached panel uses the same taxonomy while draining, before its outer engine call returns.
+    pub(crate) fn judge_failure(error: &JudgeError) -> gw_judge::PanelFailure {
+        match error {
+            JudgeError::Provider(error) => Self::provider_failure(error),
+            JudgeError::Storage(_) => gw_judge::PanelFailure::Fatal,
+            _ => gw_judge::PanelFailure::Record,
         }
     }
 
@@ -140,24 +151,29 @@ impl EngineError {
         let Some(pe) = self.provider_source() else {
             return false;
         };
+        Self::provider_failure(pe) != gw_judge::PanelFailure::Record
+    }
+
+    fn provider_failure(pe: &ProviderError) -> gw_judge::PanelFailure {
+        use gw_judge::PanelFailure;
         match pe {
+            ProviderError::Cancelled => PanelFailure::Cancelled,
+            ProviderError::Admission(_) => PanelFailure::Halt,
             // Construction-time misconfiguration (defense-in-depth — unreachable at the call site, but
             // unambiguously systemic if it ever surfaces).
-            ProviderError::Admission(_)
-            | ProviderError::MissingApiKey(_)
+            ProviderError::MissingApiKey(_)
             | ProviderError::Config(_)
-            | ProviderError::Accounting { .. }
-            | ProviderError::Cancelled => true,
+            | ProviderError::Accounting { .. } => PanelFailure::Fatal,
             // The reachable trigger: a non-retryable AUTH status (invalid/revoked key) returned every
             // call. 401 Unauthorized, 403 Forbidden, 407 Proxy Authentication Required.
             ProviderError::Status {
-                status,
+                status: 401 | 403 | 407,
                 retryable: false,
                 ..
-            } => matches!(status, 401 | 403 | 407),
+            } => PanelFailure::Fatal,
             // Retryable status / transport / 429 / stream reset → transient, not systemic.
             // Decode → per-record malformed payload, stays record-level.
-            _ => false,
+            _ => PanelFailure::Record,
         }
     }
 

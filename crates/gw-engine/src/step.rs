@@ -333,6 +333,15 @@ async fn grade_and_consense(
         &area.rubric,
         &candidate_render,
         &content_hash,
+        |error| {
+            let class = EngineError::judge_failure(error);
+            if class != gw_judge::PanelFailure::Record
+                && let Some(launch) = &clients.observation
+            {
+                launch.observer.cancel.cancel();
+            }
+            class
+        },
     )
     .await?;
 
