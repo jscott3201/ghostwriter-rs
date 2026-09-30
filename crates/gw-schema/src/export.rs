@@ -89,7 +89,8 @@ pub enum ExportSchemaVersion {
 }
 
 impl ExportSchemaVersion {
-    /// The version this build WRITES. Exported shards always carry it in the manifest.
+    /// The default version for new publications. Frozen publications retain their stored version
+    /// when recovery writes their shards again.
     pub const CURRENT: Self = Self::ReviewedTasks;
 }
 

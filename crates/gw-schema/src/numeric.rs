@@ -18,6 +18,7 @@ pub enum NumericExtraction {
 }
 
 /// Finite nonnegative bounds. A match has distance at most `max(absolute, relative * abs(expected))`.
+/// Distance is the absolute value of rounded binary64 subtraction; overflow exceeds every bound.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NumericTolerance {
@@ -99,7 +100,16 @@ impl NumericComparison {
         match &self.extraction {
             NumericExtraction::WholeContent => Some(content.trim()),
             NumericExtraction::FinalMarker { marker } => {
-                if self.validate().is_err() || content.match_indices(marker).count() != 1 {
+                // Byte windows include overlapping literal occurrences, unlike match_indices.
+                if self.validate().is_err()
+                    || content
+                        .as_bytes()
+                        .windows(marker.len())
+                        .filter(|window| *window == marker.as_bytes())
+                        .take(2)
+                        .count()
+                        != 1
+                {
                     return None;
                 }
                 let final_line = content

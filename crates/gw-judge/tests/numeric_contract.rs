@@ -149,6 +149,51 @@ fn final_marker_must_be_unique_at_the_final_numeric_line() {
 }
 
 #[test]
+fn overlapping_final_markers_are_unknown() {
+    use VerificationOutcome::{Pass, Unknown};
+    for (content, outcome) in [("++42", Pass), ("+++42", Unknown), ("++++42", Unknown)] {
+        assert_eq!(observed(content, Some("++")), outcome, "{content:?}");
+    }
+}
+
+#[test]
+fn absolute_tolerance_uses_symmetric_binary64_distance() {
+    use VerificationOutcome::{Fail, Pass};
+    for (left, right, absolute, outcome) in [
+        // The exact distance 1e16 + 1 rounds to 1e16 in binary64, in either orientation.
+        (1e16, -1.0, 1e16, Pass),
+        // This distance is the next representable value above the inclusive bound.
+        (1e16, -2.0, 1e16, Fail),
+        (0.0, -0.0, 0.0, Pass),
+        (f64::from_bits(1), -0.0, 0.0, Fail),
+        (
+            f64::from_bits(1),
+            -f64::from_bits(1),
+            f64::from_bits(1),
+            Fail,
+        ),
+        (f64::MAX, -1.0, f64::MAX, Pass),
+        (f64::MAX / 2.0, -f64::MAX / 2.0, f64::MAX, Pass),
+        (f64::MAX, -f64::MAX, f64::MAX, Fail),
+    ] {
+        let numeric = gw_schema::NumericComparison {
+            tolerance: gw_schema::NumericTolerance {
+                absolute,
+                relative: 0.0,
+            },
+            ..Default::default()
+        };
+        for (actual, expected) in [(left, right), (right, left)] {
+            assert_eq!(
+                observed_with(&actual.to_string(), &expected.to_string(), numeric.clone()).unwrap(),
+                outcome,
+                "actual={actual}, expected={expected}, absolute={absolute}"
+            );
+        }
+    }
+}
+
+#[test]
 fn inclusive_tolerance_boundaries_and_extremes_never_pass_by_overflow() {
     use VerificationOutcome::{Fail, Pass};
     let settings = |absolute, relative| gw_schema::NumericComparison {

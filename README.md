@@ -427,7 +427,7 @@ Numeric contracts persist these settings explicitly:
   does not provide arbitrary-precision decimal/integer equality. Tolerances are finite,
   nonnegative JSON numbers. A match uses the inclusive bound
   `abs(actual - expected) <= max(absolute, relative * abs(expected))`. Overflowing relative
-  bounds are rejected; comparison avoids overflowing an opposite-sign distance. For example,
+  bounds are rejected; an overflowing distance exceeds every accepted finite bound. For example,
   `9007199254740993` and `9007199254740992` round to the same binary64 value.
 
 The task prompt must ask the teacher for the chosen answer format. The harness does not inject the

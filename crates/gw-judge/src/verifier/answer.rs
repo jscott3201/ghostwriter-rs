@@ -29,14 +29,10 @@ fn normalize_answer(s: &str) -> String {
         .to_ascii_lowercase()
 }
 
-/// All arguments are finite and tolerance nonnegative. Avoid overflow for opposite-sign extremes
-/// by subtracting one magnitude from the bound rather than adding both candidate magnitudes.
+/// All arguments are finite and tolerance nonnegative. Binary64 subtraction gives symmetric
+/// rounded distance; an overflowing distance is infinity and exceeds the finite bound.
 fn within_tolerance(actual: f64, expected: f64, bound: f64) -> bool {
-    if actual.is_sign_negative() == expected.is_sign_negative() {
-        (actual - expected).abs() <= bound
-    } else {
-        actual.abs() <= bound && expected.abs() <= bound - actual.abs()
-    }
+    (actual - expected).abs() <= bound
 }
 
 fn compare_numeric(answer: &str, expected: &str, settings: &NumericComparison) -> AnswerComparison {
