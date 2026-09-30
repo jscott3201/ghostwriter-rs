@@ -227,6 +227,7 @@ impl Engine {
         source: &S,
         cancel: CancellationToken,
     ) -> Result<RunReport> {
+        self.area.assess_admission()?;
         let shard_count = source.shard_count().max(1);
         let prompts_hash = source.prompts_hash()?;
         self.clients
@@ -653,6 +654,7 @@ impl Engine {
             "training_area": self.area.training_area,
             "teacher_slug": self.area.teacher_slug,
             "k": self.area.k,
+            "admission_intent": self.area.admission_intent,
         })
     }
 

@@ -62,6 +62,7 @@ pub async fn revise_once(
     if control.is_cancelled() {
         return Ok(original.clone());
     }
+    area.assess_admission()?;
 
     let completion_index = original.generation.completion_index.unwrap_or(0);
     let retry_id = record_id(run_id, shard, seed.seed, 1, completion_index);
@@ -206,6 +207,7 @@ async fn generate_retry(
     rec.generation.sibling_group_id = Some(prompt_hash(&rec.messages)?);
     // Record the lineage: the retry derives from the original Revising record.
     rec.provenance.parent_ids = vec![original.record_id.clone()];
+    rec.judging.admission_intent = area.intent_for(original);
     // Tag the retry so `step::reconcile` downgrades a SECOND revise straight to Rejected (the single
     // bound: the retry never writes a second `revising` transition).
     rec.tags.push(crate::step::REVISE_RETRY_TAG.to_string());

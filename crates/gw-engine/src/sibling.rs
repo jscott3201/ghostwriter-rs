@@ -62,6 +62,7 @@ pub async fn run_group(
     area: &AreaConfig,
     control: RunControl<'_>,
 ) -> Result<GroupOutcome> {
+    area.assess_admission()?;
     let plans = plan_group(SamplingPreset::official().with_seed(seed.seed), area.k);
     let plan_count = plans.len();
     let mut interrupted = false;
@@ -415,6 +416,7 @@ async fn generate_and_persist(
     // Fill the sibling_group_id from the canonical prompt_hash (gw-generate leaves it None; gw-storage
     // is authoritative for hashes, so compute it here from the same canonical projection).
     rec.generation.sibling_group_id = Some(sibling_group_id(&rec, &group.clients.store)?);
+    rec.judging.admission_intent = group.area.admission_intent;
     let _ = group.shard; // shard rode into the record id; nothing else to stamp here.
 
     // Persist at AssistantGenerated (the expensive CoT is written before the next transition).

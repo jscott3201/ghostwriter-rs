@@ -64,6 +64,7 @@ mod decision;
 mod error;
 mod grader;
 mod panel;
+mod preflight;
 mod request_identity;
 mod verifier;
 
@@ -81,6 +82,9 @@ pub use panel::{
     DEFAULT_JUDGE_MAX_TOKENS, DEFAULT_JUDGE_REASONING_MAX_TOKENS, Grade, JudgeReasoning,
     JudgeSampling, JudgeScoring, MIN_JUDGE_VERDICT_TOKENS, PanelJudge, build_judge_request,
     grade_one, grade_panel,
+};
+pub use preflight::{
+    DEFAULT_CORRELATION_RHO, PanelAssessment, assess_panel, validate_correlation_prior,
 };
 pub use verifier::{
     EXECUTION_EVIDENCE_CHECK, ExecutionEvidenceSource, NullExecutionEvidenceSource,

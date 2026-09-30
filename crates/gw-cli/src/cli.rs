@@ -57,10 +57,31 @@ pub enum EvalCommand {
     Promote(PromoteArgs),
 }
 
+/// Whether a generation command requests automatic admission or collection for human review.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum AdmissionMode {
+    /// Admit candidates that clear the verifier and panel safeguards.
+    Automatic,
+    /// Keep otherwise admitted candidates at NeedsReview, including on replay.
+    ReviewOnly,
+}
+
+impl From<AdmissionMode> for gw_schema::AdmissionIntent {
+    fn from(intent: AdmissionMode) -> Self {
+        match intent {
+            AdmissionMode::Automatic => Self::Automatic,
+            AdmissionMode::ReviewOnly => Self::ReviewOnly,
+        }
+    }
+}
+
 /// Shared knobs for `gen run` / `gen tui` (the engine-spending paths). The config FILE supplies the
 /// area/provider/budget defaults; these flags LAYER over it (highest precedence after env).
 #[derive(Debug, clap::Args, PartialEq)]
 pub struct RunArgs {
+    /// Override automatic admission or explicitly collect for human review.
+    #[arg(long, value_enum, value_name = "INTENT")]
+    pub admission_intent: Option<AdmissionMode>,
     /// Path to the TOML config file (figment base layer). Absent ⇒ defaults + env only.
     #[arg(long, value_name = "FILE")]
     pub config: Option<PathBuf>,
@@ -118,6 +139,9 @@ pub struct ExportArgs {
 /// re-spent).
 #[derive(Debug, clap::Args, PartialEq)]
 pub struct ReplayArgs {
+    /// Override admission intent; persisted review-only records always remain review-only.
+    #[arg(long, value_enum, value_name = "INTENT")]
+    pub admission_intent: Option<AdmissionMode>,
     /// Path to the TOML config file (must describe the same area/provider as the original run).
     #[arg(long, value_name = "FILE")]
     pub config: Option<PathBuf>,

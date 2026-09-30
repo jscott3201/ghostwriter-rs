@@ -25,34 +25,16 @@ use crate::error::{EngineError, Result};
 /// Build the inter-judge correlation matrix for a panel of `k` judges from the cold-start prior
 /// `rho`, ENFORCING the never-identity invariant for `k > 1`.
 ///
-/// For `k <= 1` there is no pair to correlate, so the (degenerate) 1×1 or 0×0 matrix is returned as
-/// is — the correlation guard is inert at `k <= 1` by construction. For `k > 1` the matrix is
-/// `CorrelationMatrix::uniform_offdiagonal(k, rho)`; if that comes out numerically IDENTITY (a `rho`
-/// of `0.0`, or non-finite), this returns [`EngineError::Invariant`] — the engine must never hand the
-/// grader an identity R for a real panel.
+/// Requires finite `0 <= rho <= 1`. For `k <= 1` there is no pair to correlate. For a multi-judge
+/// panel the prior must also be positive and numerically nonidentity, using the same validation
+/// as admission preflight.
 ///
 /// # Errors
-/// Returns [`EngineError::Invariant`] when `k > 1` and the resulting matrix is identity (a `rho` that
-/// silently disables the correlation guard).
+/// Returns [`EngineError::Invariant`] for invalid correlation settings.
 pub fn correlation_prior(k: usize, rho: f64) -> Result<CorrelationMatrix> {
-    if k <= 1 {
-        return Ok(CorrelationMatrix::uniform_offdiagonal(k, rho));
-    }
-    if !rho.is_finite() || rho <= 0.0 {
-        return Err(EngineError::Invariant(format!(
-            "correlation prior rho={rho} would yield an identity R for a k={k} panel — the \
-             correlation guard would silently degrade to Kish-only; rho must be a positive \
-             cold-start prior (~0.7)"
-        )));
-    }
-    let r = CorrelationMatrix::uniform_offdiagonal(k, rho);
-    if r.is_identity() {
-        return Err(EngineError::Invariant(format!(
-            "built an identity correlation matrix for a k={k} panel (rho={rho}); refusing to \
-             degrade the correlation guard to Kish-only"
-        )));
-    }
-    Ok(r)
+    gw_judge::validate_correlation_prior(k, rho)
+        .map_err(|error| EngineError::Invariant(error.to_string()))?;
+    Ok(CorrelationMatrix::uniform_offdiagonal(k, rho))
 }
 
 /// Reconstruct a [`VerifierGrade`] from the persisted `verification` block on a record (pure).
@@ -90,7 +72,10 @@ pub fn verifier_grade_from_verification(rec: &TrainingRecord, _area: &AreaConfig
 /// Returns [`EngineError::Judge`] if the `Judging` block carries neither an aggregate nor a persisted
 /// verdict (it was never graded — a programmer error reaching reconcile too early).
 pub fn decision_from_judging(rec: &TrainingRecord, area: &AreaConfig) -> Result<Decision> {
-    Ok(rederive_verdict(&rec.judging, area.thresholds)?)
+    Ok(
+        rederive_verdict(&rec.judging, area.thresholds)?
+            .with_admission_intent(area.intent_for(rec)),
+    )
 }
 
 #[cfg(test)]
@@ -111,7 +96,7 @@ mod tests {
         // rho=0.0 would make uniform_offdiagonal numerically identity → fail loud.
         let err = correlation_prior(4, 0.0).unwrap_err();
         assert!(matches!(err, EngineError::Invariant(_)));
-        assert!(err.to_string().contains("Kish-only"));
+        assert!(err.to_string().contains("nonidentity"));
     }
 
     #[test]

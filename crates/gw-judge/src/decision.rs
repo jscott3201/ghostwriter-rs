@@ -56,6 +56,8 @@ pub enum DecisionReason {
     VerifierUndecided,
     /// The aggregate cleared the area accept threshold.
     AboveThreshold,
+    /// The collection explicitly requires human review even when automatic admission would pass.
+    ReviewOnly,
     /// The aggregate fell in the revise band `[reject_below, accept_threshold)`.
     ReviseBand,
     /// The aggregate fell below `reject_below`.
@@ -76,6 +78,7 @@ impl DecisionReason {
             DecisionReason::VerifierReject => "verifier_reject",
             DecisionReason::VerifierUndecided => "verifier_undecided",
             DecisionReason::AboveThreshold => "above_threshold",
+            DecisionReason::ReviewOnly => "review_only",
             DecisionReason::ReviseBand => "revise_band",
             DecisionReason::BelowThreshold => "below_threshold",
             DecisionReason::CorrelatedJudges => "correlated_judges",
@@ -93,6 +96,7 @@ fn every_reason_token_round_trips() {
         DecisionReason::VerifierReject,
         DecisionReason::VerifierUndecided,
         DecisionReason::AboveThreshold,
+        DecisionReason::ReviewOnly,
         DecisionReason::ReviseBand,
         DecisionReason::BelowThreshold,
         DecisionReason::CorrelatedJudges,
@@ -132,6 +136,19 @@ pub enum Decision {
 }
 
 impl Decision {
+    /// Apply collection intent while preserving rejects, revisions, and verifier escalations.
+    #[must_use]
+    pub fn with_admission_intent(self, intent: gw_schema::AdmissionIntent) -> Self {
+        if intent == gw_schema::AdmissionIntent::ReviewOnly && matches!(self, Self::Accept { .. }) {
+            Self::Escalate {
+                to: EscalateTo::Human,
+                reason: DecisionReason::ReviewOnly,
+            }
+        } else {
+            self
+        }
+    }
+
     /// The [`DecisionReason`] carried by this decision.
     #[must_use]
     pub fn reason(&self) -> DecisionReason {

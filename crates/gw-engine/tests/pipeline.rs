@@ -210,7 +210,8 @@ async fn escalate_maps_to_needs_review_and_leaves_pipeline() {
         EventSink::disconnected(),
     );
     // DEFAULT thresholds (min_n_eff=1.5) — the escalation floor.
-    let area = area_k1(three_judges(), Default::default());
+    let area = area_k1(three_judges(), Default::default())
+        .with_admission_intent(gw_schema::AdmissionIntent::ReviewOnly);
     let engine = Engine::new(cl, area, 4);
 
     let report = engine

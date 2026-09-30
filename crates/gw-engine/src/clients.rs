@@ -32,6 +32,7 @@ use gw_judge::{
     AreaThresholds, ExecutionEvidenceSource, NullExecutionEvidenceSource, PanelJudge, SandboxOracle,
 };
 use gw_providers::Provider;
+use gw_schema::AdmissionIntent;
 use gw_storage::Store;
 
 use crate::budget::BudgetMeter;
@@ -40,7 +41,7 @@ use crate::event::EventSink;
 /// The default cold-start inter-judge correlation prior `rho` (≈ 0.7, JUDGE-DESIGN §5.4). Used to
 /// build `CorrelationMatrix::uniform_offdiagonal(k, rho)` for a `k > 1` panel grade — NEVER identity.
 /// An unproven panel cannot inflate its independence; this mirrors a high Glicko-2 sigma.
-pub const DEFAULT_CORRELATION_RHO: f64 = 0.7;
+pub use gw_judge::DEFAULT_CORRELATION_RHO;
 
 /// The default best-of-k for a v1 run (single trace, no fan-out). Matches `gw_generate::DEFAULT_K`.
 pub const DEFAULT_K: u32 = 1;
@@ -53,6 +54,8 @@ pub const DEFAULT_MAX_TOKENS: u32 = 16_384;
 /// training area. Carried on [`Clients`] so the step function reads it without a global config dep.
 #[derive(Debug, Clone)]
 pub struct AreaConfig {
+    /// Whether generated candidates may be admitted automatically or are collected for review.
+    pub admission_intent: AdmissionIntent,
     /// The training-area name (e.g. `"rust-async"`), stamped into provenance + the record id prefix.
     pub training_area: String,
     /// The teacher model slug for this area (e.g. `"z-ai/glm-5.2"`).
@@ -93,6 +96,7 @@ impl AreaConfig {
         rubric: impl Into<String>,
     ) -> Self {
         Self {
+            admission_intent: AdmissionIntent::Automatic,
             training_area: training_area.into(),
             teacher_slug: teacher_slug.into(),
             max_tokens: DEFAULT_MAX_TOKENS,
@@ -104,6 +108,38 @@ impl AreaConfig {
             thresholds: AreaThresholds::default(),
             correlation_rho: DEFAULT_CORRELATION_RHO,
             k: DEFAULT_K,
+        }
+    }
+
+    /// Select automatic admission or explicit review-only collection.
+    #[must_use]
+    pub fn with_admission_intent(mut self, intent: AdmissionIntent) -> Self {
+        self.admission_intent = intent;
+        self
+    }
+
+    /// Assess the resolved panel before generation or judge dispatch.
+    ///
+    /// # Errors
+    /// Rejects empty panels, invalid numeric domains, and unattainable automatic admission.
+    pub fn assess_admission(&self) -> crate::Result<gw_judge::PanelAssessment> {
+        gw_judge::assess_panel(
+            self.judges.len(),
+            self.thresholds,
+            self.correlation_rho,
+            self.admission_intent,
+        )
+        .map_err(|error| crate::EngineError::Invariant(error.to_string()))
+    }
+
+    /// A persisted review-only intent cannot be relaxed by a new live configuration.
+    pub(crate) fn intent_for(&self, record: &gw_schema::TrainingRecord) -> AdmissionIntent {
+        if self.admission_intent == AdmissionIntent::ReviewOnly
+            || record.judging.admission_intent == AdmissionIntent::ReviewOnly
+        {
+            AdmissionIntent::ReviewOnly
+        } else {
+            AdmissionIntent::Automatic
         }
     }
 
