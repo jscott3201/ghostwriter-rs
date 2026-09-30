@@ -1,12 +1,8 @@
 //! Per-kind answer-correctness comparators for the Verifier rail (JUDGE-DESIGN §1.1, V1).
 //!
-//! THE LOAD-BEARING RULE (`rescue_negatives = true`): the deterministic verifier hard-rejects ONLY
-//! what it is certain about. The reasoning-present Verify gate and decontam are authoritative; an
-//! ANSWER-CORRECTNESS comparison — where a rule-based comparator can be wrong on
-//! correct-but-differently-formatted data (`42.0` vs `42`, a reordered set) — returns a three-state
-//! [`AnswerComparison`] so the rail's caller routes a residual non-match to `Uncertain` → judge
-//! rescue rather than a silent hard reject (the hard reject is reserved for an area that explicitly
-//! opts into rule-only-authoritative grading).
+//! Comparators report Match, NonMatch, or Undecided without applying admission policy. Numeric
+//! tolerance and order-insensitive set matching preserve their existing algorithms. SQL/schema
+//! string inequality stays Undecided; the task's answer policy determines its admission consequence.
 
 use gw_schema::VerificationKind;
 
@@ -18,16 +14,14 @@ const NUMERIC_REL_TOL: f64 = 1e-6;
 const NUMERIC_ABS_TOL: f64 = 1e-9;
 
 /// The three-state outcome of a rule-based answer comparison. Distinct from a plain `bool` so the
-/// CRITICAL `Undecided` case (a parse failure, or no oracle) routes to judge rescue rather than
-/// being conflated with a hard `NonMatch`.
+/// `Undecided` case (a parse failure or unavailable oracle) remains distinct from `NonMatch`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum AnswerComparison {
     /// The answer matches the oracle under the kind's comparator.
     Match,
     /// The answer is a clear, decidable non-match (the rule comparator succeeded and disagreed).
     NonMatch,
-    /// The rule comparator could not decide (no oracle, or a parse failure on either side). Routes
-    /// to `Uncertain` → judge rescue, NEVER a silent pass or a hard reject.
+    /// The rule comparator could not decide: unavailable oracle or a parse failure on either side.
     Undecided,
 }
 

@@ -264,6 +264,7 @@ impl Engine {
         mode: gw_storage::RunMode,
         cancel: CancellationToken,
     ) -> Result<RunReport> {
+        crate::grade::validate_run_verification(&self.clients.store, run_id).await?;
         let shard_lengths = prepared.plan.identity().shard_items.clone();
         let shard_count = shard_lengths.len();
         let coverage = self

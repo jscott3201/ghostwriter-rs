@@ -13,21 +13,20 @@
 //!
 //! 1. **Binding** ([`EvidenceBinding`]) — which task, attempt, and patch the run was executed
 //!    against. Evidence computed for a different candidate is not evidence for this one.
-//! 2. **The required tests** ([`ExecutionEvidence::required_tests`]) — what the area declares MUST
-//!    pass. A green suite that never ran the required test is not a pass.
+//! 2. **Task coverage** ([`crate::VerificationContract::required_tests`]) — every task-required test
+//!    must pass. The report's own list is audit data and cannot reduce task obligations.
 //! 3. **The per-case detail** ([`ExecutionEvidence::cases`]) — what each test actually reported.
 //!
 //! The adapter accepts a `Passed` claim only when the detail corroborates it (every required node
 //! reported `Passed`, no reported error, and a zero exit). An uncorroborated claim is treated as
 //! `Unknown` — never as a pass. A report the adapter cannot read (no cases, duplicate case keys, a
-//! missing exit code) is `Unknown` too, so an unreadable evaluator result can never admit a record.
+//! missing exit code) is `Unknown` too, so an unreadable report never becomes a verifier Pass.
 //!
 //! ## The vocabulary is deliberately three-valued
 //!
 //! `Unknown` is a first-class outcome, not an error. It is what an interrupted run, an
 //! infrastructure fault, a malformed report, or a missing required-test contract all reduce to, and
-//! it routes the record to human/verifier review — it never rejects (the work may still be fine)
-//! and never admits (nothing proved it).
+//! authoritative policy routes it to review while advisory policy leaves the panel active.
 
 use serde::{Deserialize, Serialize};
 
@@ -59,11 +58,11 @@ pub enum TestStatus {
 }
 
 /// One reported test node: the evaluator's stable node key (`classname::name`, or whatever key the
-/// area's evaluator uses — it must match the strings in [`ExecutionEvidence::required_tests`]) and
+/// task's evaluator uses — it must match [`crate::VerificationContract::required_tests`]) and
 /// the status it reported.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TestCase {
-    /// The node key. Compared verbatim against [`ExecutionEvidence::required_tests`].
+    /// The node key. Compared verbatim against [`crate::VerificationContract::required_tests`].
     pub node: String,
     /// What the evaluator reported for this node.
     pub status: TestStatus,
@@ -101,9 +100,8 @@ pub struct EvidenceBinding {
 pub struct ExecutionEvidence {
     /// The outcome the evaluator reported.
     pub outcome: ExecutionOutcome,
-    /// The nodes this area declares REQUIRED. A pass requires EVERY one of them to be reported
-    /// `Passed`; a missing or skipped required node is a `Failed`. Empty ⇒ nothing was required, so
-    /// nothing can be proven — `Unknown`.
+    /// Coverage claimed by the evaluator, retained verbatim for audit. The verifier uses the
+    /// task's [`crate::VerificationContract::required_tests`] instead of trusting this list.
     #[serde(default)]
     pub required_tests: Vec<String>,
     /// What each node reported. Absent or empty ⇒ the report is unreadable ⇒ `Unknown`.

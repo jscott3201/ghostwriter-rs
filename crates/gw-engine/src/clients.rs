@@ -67,9 +67,6 @@ pub struct AreaConfig {
     pub teacher_reasoning_max_tokens: Option<u32>,
     /// Whether this area requires chain-of-thought (drives the reasoning-present Verify hard gate).
     pub cot_required: bool,
-    /// Whether the rule-based answer comparator is authoritative (hard-reject a non-match) for this
-    /// area. DEFAULT `false` (`rescue_negatives`: a rule non-match routes to judge rescue).
-    pub rule_only_authoritative: bool,
     /// The judge panel for this area (its size is `k_judges`; a `k_judges > 1` panel triggers the
     /// non-identity correlation matrix).
     pub judges: Vec<PanelJudge>,
@@ -102,7 +99,6 @@ impl AreaConfig {
             max_tokens: DEFAULT_MAX_TOKENS,
             teacher_reasoning_max_tokens: None,
             cot_required: true,
-            rule_only_authoritative: false,
             judges,
             rubric: rubric.into(),
             thresholds: AreaThresholds::default(),
@@ -322,7 +318,6 @@ mod tests {
         let cfg = AreaConfig::new("math", "z-ai/glm-5.2", vec![], "rubric");
         assert_eq!(cfg.k, 1);
         assert!(cfg.cot_required);
-        assert!(!cfg.rule_only_authoritative);
         assert_eq!(cfg.correlation_rho, DEFAULT_CORRELATION_RHO);
         assert_eq!(cfg.max_tokens, DEFAULT_MAX_TOKENS);
         assert_eq!(cfg.k_judges(), 0);

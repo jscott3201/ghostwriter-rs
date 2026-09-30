@@ -92,6 +92,9 @@ fn judge_only_candidate(prompt: &str) -> UserTurnCandidate {
         message: user_message(prompt),
         seed: UserSeed::default(),
         contract: VerificationContract {
+            answer_policy: Some(gw_schema::VerificationPolicy::Absent),
+            execution_policy: Some(gw_schema::VerificationPolicy::Absent),
+            required_tests: vec![],
             kind: VerificationKind::None,
             oracle: Oracle::None,
             answer_marker: None,

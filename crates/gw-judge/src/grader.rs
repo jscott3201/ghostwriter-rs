@@ -457,6 +457,7 @@ mod tests {
                 checks: vec![],
                 all_passed: true,
                 needs_review: Some("execution_evidence: undecided".into()),
+                interpretation: None,
             },
         };
         let panel = vec![

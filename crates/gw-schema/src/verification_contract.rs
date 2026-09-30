@@ -12,6 +12,15 @@ use serde::{Deserialize, Serialize};
 /// (USER-SYNTHESIS §8).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VerificationContract {
+    /// Answer policy. Missing only on historical records; executable tasks must declare it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer_policy: Option<VerificationPolicy>,
+    /// Execution policy, independent of the answer comparator.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_policy: Option<VerificationPolicy>,
+    /// Exact test identifiers required by the task, never reduced by a report's own list.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_tests: Vec<String>,
     /// The class of correctness check.
     pub kind: VerificationKind,
     /// How ground truth is computed.
@@ -22,6 +31,62 @@ pub struct VerificationContract {
     /// canonical marker enforced (guard inert).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub answer_marker: Option<String>,
+}
+
+/// How an observation affects admission, independently of its factual outcome.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VerificationPolicy {
+    /// Do not run or interpret this axis.
+    Absent,
+    /// Preserve facts while allowing the quality panel to decide.
+    Advisory,
+    /// Fail rejects; unknown holds for review; pass still requires the quality panel.
+    Authoritative,
+}
+
+impl VerificationContract {
+    /// Validate an executable task without I/O. Historical missing policies remain readable.
+    ///
+    /// # Errors
+    /// Rejects missing policies, unsupported active answer combinations, and invalid test IDs.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        use VerificationPolicy::{Absent, Authoritative};
+        let answer = self
+            .answer_policy
+            .ok_or("verification contract lacks explicit answer policy")?;
+        let execution = self
+            .execution_policy
+            .ok_or("verification contract lacks explicit execution policy")?;
+        if answer != Absent {
+            let supported = matches!(
+                (&self.kind, &self.oracle),
+                (
+                    VerificationKind::NumericMatch
+                        | VerificationKind::SetMatch
+                        | VerificationKind::SqlResultMatch
+                        | VerificationKind::SchemaShape,
+                    Oracle::Literal { .. } | Oracle::SandboxExecution { .. }
+                ) | (
+                    VerificationKind::RefusalExpected,
+                    Oracle::RefusalPolicy { .. }
+                )
+            );
+            if !supported {
+                return Err("active answer policy requires a supported comparator and oracle");
+            }
+        }
+        if execution == Authoritative && self.required_tests.is_empty() {
+            return Err("authoritative execution requires task-declared test identifiers");
+        }
+        let mut seen = std::collections::HashSet::new();
+        for id in &self.required_tests {
+            if id.trim().is_empty() || !seen.insert(id) {
+                return Err("required test identifiers must be nonblank and unique");
+            }
+        }
+        Ok(())
+    }
 }
 
 /// The class of correctness check for a synthesized USER turn.
@@ -38,7 +103,7 @@ pub enum VerificationKind {
     RefusalExpected,
     /// answer must match a described schema/columns.
     SchemaShape,
-    /// open-ended; no deterministic oracle (judge-only admission).
+    /// No answer comparator; execution policy remains independent.
     None,
 }
 
@@ -56,7 +121,7 @@ pub enum Oracle {
     Literal { expected: String },
     /// Refusal is the oracle: correct behavior is a safe refusal + explanation.
     RefusalPolicy { policy_id: String },
-    /// No deterministic oracle; admission is judge-only.
+    /// No answer oracle; active answer policies cannot use this variant.
     None,
 }
 

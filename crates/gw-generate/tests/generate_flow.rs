@@ -128,6 +128,9 @@ fn candidate(text: &str, kind: VerificationKind) -> UserTurnCandidate {
             difficulty: Some("easy".into()),
         },
         contract: VerificationContract {
+            answer_policy: Some(gw_schema::VerificationPolicy::Absent),
+            execution_policy: Some(gw_schema::VerificationPolicy::Absent),
+            required_tests: vec![],
             kind,
             oracle: Oracle::None,
             answer_marker: None,

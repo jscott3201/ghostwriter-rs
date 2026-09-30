@@ -1,64 +1,30 @@
-//! The precomputed-execution adapter: turn a carried [`ExecutionEvidence`] into a deterministic
-//! [`Check`] plus the rail-level consequence, WITHOUT executing anything.
+//! Adapt precomputed candidate execution reports without running candidate code.
 //!
-//! The engine never runs the candidate — an external evaluator already did, and its report is
-//! carried on the envelope ([`ExecutionEvidence`]). This module is the only place that decides what
-//! that report means, so the "unknown is conservative, a failure is authoritative" rule has one
-//! obvious home.
+//! Facts are independent of admission policy. A foreign task or attempt is an evidence-contract
+//! failure, not proof about the model's correctness; a moved completion hash is Unknown. Binding
+//! is checked before any reported result. Matching reports are cross-checked against task-owned
+//! required test IDs and their structured cases; a report cannot reduce its own obligations.
 //!
-//! ## The three outcomes and what each one is allowed to do
-//!
-//! - [`EvidenceVerdict::Failed`] — a definite failure. The check FAILS, `all_passed` goes false, and
-//!   the rail returns `Reject`. This is the verifier-first hard gate: a panel score, however high,
-//!   cannot reach the record (the engine short-circuits before any judge call is spent).
-//! - [`EvidenceVerdict::Unknown`] — nothing proved the work. The check passes inertly (a failure was
-//!   not proven, so the record is not rejected) but the rail raises
-//!   [`VerifierGrade::blocks_admission`](super::VerifierGrade::blocks_admission), so the record goes
-//!   to `NeedsReview` instead of being admitted — or outvoted by — the panel. The assistant's own
-//!   summary of its work is never a substitute for evidence, so an unevidenced "it passes" is
-//!   Unknown, not Passed.
-//! - [`EvidenceVerdict::Passed`] — the report is both reported green AND corroborated by its own
-//!   detail. The check passes and the rail hands the remainder to the panel.
-//!
-//! ## The precedence rule (why a claim is cross-checked at all)
-//!
-//! An [`ExecutionEvidence`] carries both a reported [`ExecutionOutcome`] and the structured detail
-//! behind it. The adapter re-derives an outcome from that detail and keeps the MORE CONSERVATIVE of
-//! the two, where `Unknown` outranks `Failed` outranks `Passed`. So:
-//!
-//! - a `Passed` claim with no corroborating detail is downgraded to `Unknown` (a bare claim is not
-//!   evidence);
-//! - a `Passed` claim contradicted by its own detail (a failing node, a reported suite error, a
-//!   missing required node) is downgraded to `Failed`;
-//! - a `Failed` report is never softened — an authoritative failure stands even if the detail the
-//!   adapter can read looks green;
-//! - an `Unknown` report is never hardened — an interrupted or infrastructure-faulted run stays
-//!   `Unknown` whatever its partial detail shows.
-//!
-//! ## Binding: a report describes one candidate only
-//!
-//! The binding keys are checked BEFORE the outcome, because evidence computed for a different
-//! candidate is not evidence for this one. The two mismatches are deliberately NOT the same
-//! consequence:
-//!
-//! - a **task / attempt** mismatch is a definite [`EvidenceVerdict::Failed`] — the report belongs to
-//!   a different record, so applying it would be applying another candidate's result;
-//! - a **patch-hash** mismatch is [`EvidenceVerdict::Unknown`] — the same attempt, but the content
-//!   moved under it. The result is stale rather than wrong, and a stale result is never followed,
-//!   so the record goes to review instead of being sunk on evidence that no longer describes it.
+//! Within one report, Unknown outranks Failed, which outranks Passed. Missing coverage, exit status,
+//! empty cases, and duplicate cases stay Unknown. Required missing/skipped nodes, suite errors,
+//! failing nodes, and nonzero exits retain the established failure semantics. A passing claim needs
+//! a zero exit, every required node passing, and at least one passing node. The separate policy
+//! projection decides whether a factual Fail rejects or an Unknown holds for review.
 
 use gw_schema::{
-    Check, CheckKind, EvidenceBinding, ExecutionEvidence, ExecutionOutcome, TestStatus,
+    EvidenceBinding, ExecutionEvidence, ExecutionOutcome, TestStatus, VerificationObservation,
+    VerificationOutcome,
 };
 
+#[cfg(test)]
 use super::{EXECUTION_EVIDENCE_CHECK, VerifierInput};
 
 /// The outcome of adapting one [`ExecutionEvidence`] into the verifier rail.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvidenceVerdict {
-    /// The report proves the candidate failed. Hard-fails the check (authoritative reject).
+    /// A candidate execution failure or a foreign task/attempt evidence-contract failure.
     Failed,
-    /// The report proves nothing. The check passes inertly, but admission is blocked.
+    /// No usable conclusion about this candidate.
     Unknown,
     /// The report proves the candidate passed, and its own detail corroborates it.
     Passed,
@@ -84,10 +50,10 @@ impl EvidenceVerdict {
 /// and outrank everything else, so a report that proves nothing can never be read as a failure by
 /// accident; a reported suite error and a failing node are `Failed`; and a pass requires a zero
 /// exit AND every required node reported `Passed` AND at least one node actually having passed.
-fn derive_from_detail(e: &ExecutionEvidence) -> EvidenceVerdict {
+fn derive_from_detail(e: &ExecutionEvidence, required_tests: &[String]) -> EvidenceVerdict {
     // Nothing was required, so nothing can be proven. A run with no declared required tests is not
     // evidence of correctness.
-    if e.required_tests.is_empty() {
+    if required_tests.is_empty() {
         return EvidenceVerdict::Unknown;
     }
     // No usable exit status: the run never reported how it terminated.
@@ -128,8 +94,7 @@ fn derive_from_detail(e: &ExecutionEvidence) -> EvidenceVerdict {
         .filter(|c| c.status == TestStatus::Passed)
         .map(|c| c.node.as_str())
         .collect();
-    if !e
-        .required_tests
+    if !required_tests
         .iter()
         .all(|req| passed_nodes.contains(&req.as_str()))
     {
@@ -142,11 +107,14 @@ fn derive_from_detail(e: &ExecutionEvidence) -> EvidenceVerdict {
     EvidenceVerdict::Passed
 }
 
-/// Classify one carried [`ExecutionEvidence`] against the key of the candidate it is being applied
-/// to. Binding first (an off-candidate report is never interpreted), then the conservative
-/// cross-check of the reported outcome against the report's own detail.
+/// Classify one report against the exact candidate and task-declared test IDs. Report-owned
+/// `required_tests` are retained as audit data and do not define coverage for this operation.
 #[must_use]
-pub fn classify(e: &ExecutionEvidence, key: &EvidenceBinding) -> EvidenceVerdict {
+pub fn classify(
+    e: &ExecutionEvidence,
+    key: &EvidenceBinding,
+    required_tests: &[String],
+) -> EvidenceVerdict {
     // Bound to a different task or attempt: this report describes ANOTHER candidate. Applying it
     // would be applying someone else's result, which is a definite failure of the evidence, not a
     // stale one.
@@ -163,90 +131,54 @@ pub fn classify(e: &ExecutionEvidence, key: &EvidenceBinding) -> EvidenceVerdict
         ExecutionOutcome::Failed => EvidenceVerdict::Failed,
         ExecutionOutcome::Unknown => EvidenceVerdict::Unknown,
     };
-    reported.more_conservative(derive_from_detail(e))
+    reported.more_conservative(derive_from_detail(e, required_tests))
 }
 
-/// A human-readable reason for a non-passing verdict, folded into [`Check::detail`].
-fn detail_for(e: &ExecutionEvidence, key: &EvidenceBinding, verdict: EvidenceVerdict) -> String {
-    let tail = e
-        .source_ref
-        .as_deref()
-        .map(|r| format!(" (source: {r})"))
-        .unwrap_or_default();
-    match verdict {
-        EvidenceVerdict::Passed => format!("execution evidence passed{}", tail),
-        EvidenceVerdict::Failed => {
-            let reason = if e.binding.task != key.task || e.binding.attempt != key.attempt {
-                format!(
-                    "bound to task={:?}/attempt={:?}, not this candidate (task={:?}/attempt={:?})",
-                    e.binding.task, e.binding.attempt, key.task, key.attempt
-                )
-            } else {
-                let required = e.required_tests.len();
-                let ran = e.cases.len();
-                format!(
-                    "failed: required={required}, reported={ran}, exit={:?}, errors={}, failing_nodes={}",
-                    e.exit_code,
-                    e.errors.len(),
-                    e.cases
-                        .iter()
-                        .filter(|c| c.status == TestStatus::Failed)
-                        .count()
-                )
-            };
-            format!("execution evidence {reason}{tail}")
-        }
-        EvidenceVerdict::Unknown => {
-            let reason = if e.binding.patch_hash != key.patch_hash {
-                "stale: evidence patch_hash does not match this candidate's content".to_string()
-            } else {
-                format!(
-                    "undecided: required={}, reported={}, exit={:?}, errors={}, outcome={:?}",
-                    e.required_tests.len(),
-                    e.cases.len(),
-                    e.exit_code,
-                    e.errors.len(),
-                    e.outcome
-                )
-            };
-            format!("execution evidence {reason} — routed to review, never admitted{tail}")
-        }
-    }
-}
-
-/// Adapt the input's carried [`ExecutionEvidence`] into a [`Check`] plus the rail-level consequence
-/// `(check, verdict, admission_blocked)`.
-///
-/// Returns `None` when the input carries NO evidence: an area with no execution axis has no
-/// execution check, exactly as a `None` contract contributes no answer check. Absent evidence is
-/// not a failure and not a block — it simply is not this rail's business.
+/// Observe task-bound execution facts without consulting or trusting the report's own coverage list.
 #[must_use]
-pub fn execution_evidence_check(
-    input: &VerifierInput<'_>,
-) -> Option<(Check, EvidenceVerdict, bool)> {
-    let evidence = input.execution_evidence?;
-    let key = input.evidence_key.clone();
-    let verdict = classify(evidence, &key);
-    let passed = verdict != EvidenceVerdict::Failed;
-    // Only an undecidable report blocks admission. A proven failure hard-rejects on `passed`
-    // instead, and a proven pass hands the remainder to the panel.
-    let admission_blocked = verdict == EvidenceVerdict::Unknown;
-    let check = Check {
-        name: EXECUTION_EVIDENCE_CHECK.into(),
-        kind: CheckKind::UnitTest,
-        passed,
-        score: match verdict {
-            EvidenceVerdict::Passed => Some(1.0),
-            EvidenceVerdict::Failed => Some(0.0),
-            EvidenceVerdict::Unknown => None,
-        },
-        detail: Some(detail_for(evidence, &key, verdict)),
+pub fn observe(
+    evidence: Option<&ExecutionEvidence>,
+    key: &EvidenceBinding,
+    required_tests: &[String],
+) -> VerificationObservation {
+    let Some(evidence) = evidence else {
+        return VerificationObservation {
+            outcome: VerificationOutcome::Unknown,
+            reason: "execution evidence missing".into(),
+        };
     };
-    Some((check, verdict, admission_blocked))
+    let verdict = classify(evidence, key, required_tests);
+    let reason = if evidence.binding.task != key.task || evidence.binding.attempt != key.attempt {
+        "evidence-contract failure: report belongs to another task or attempt"
+    } else if evidence.binding.patch_hash != key.patch_hash {
+        "stale execution evidence: completion hash changed"
+    } else {
+        match verdict {
+            EvidenceVerdict::Passed => "execution pass corroborated for every task-required test",
+            EvidenceVerdict::Failed => "execution report or required test coverage failed",
+            EvidenceVerdict::Unknown => {
+                "execution evidence unavailable, ambiguous, or uncorroborated"
+            }
+        }
+    };
+    VerificationObservation {
+        outcome: match verdict {
+            EvidenceVerdict::Passed => VerificationOutcome::Pass,
+            EvidenceVerdict::Failed => VerificationOutcome::Fail,
+            EvidenceVerdict::Unknown => VerificationOutcome::Unknown,
+        },
+        reason: reason.into(),
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    fn classify(
+        e: &gw_schema::ExecutionEvidence,
+        key: &gw_schema::EvidenceBinding,
+    ) -> super::EvidenceVerdict {
+        super::classify(e, key, &e.required_tests)
+    }
     use super::*;
 
     /// The required-test node key used throughout: an explicit `classname::name` string.
@@ -438,8 +370,26 @@ mod tests {
     use gw_schema::{Content, Message, ReasoningDetail, Role, TestCase};
 
     use crate::decision::Verdict as RailVerdict;
-    use crate::verifier::{NullSandboxOracle, VerifierGrade, run_verifier};
+    use crate::verifier::{NullSandboxOracle, VerifierGrade};
 
+    fn run_verifier<S: super::super::SandboxOracle + ?Sized>(
+        input: &VerifierInput<'_>,
+        sandbox: &S,
+    ) -> VerifierGrade {
+        super::super::run_verifier(input, sandbox).unwrap()
+    }
+    fn execution_contract() -> &'static gw_schema::VerificationContract {
+        static CONTRACT: std::sync::LazyLock<gw_schema::VerificationContract> =
+            std::sync::LazyLock::new(|| gw_schema::VerificationContract {
+                kind: gw_schema::VerificationKind::None,
+                oracle: gw_schema::Oracle::None,
+                answer_marker: None,
+                answer_policy: Some(gw_schema::VerificationPolicy::Absent),
+                execution_policy: Some(gw_schema::VerificationPolicy::Authoritative),
+                required_tests: vec![NODE.into()],
+            });
+        &CONTRACT
+    }
     /// A completed assistant turn with a plaintext CoT detail, so the reasoning-present gate passes
     /// and the execution axis is what is under test.
     fn assistant() -> Message {
@@ -468,8 +418,7 @@ mod tests {
             messages,
             reasoning_tokens: 50,
             cot_required: true,
-            contract: None,
-            rule_only_authoritative: false,
+            contract: Some(execution_contract()),
             execution_evidence: e,
             evidence_key: key(),
         }
@@ -526,15 +475,17 @@ mod tests {
         assert!(check_present(&g));
     }
 
-    /// An area with no execution axis is entirely unaffected: no check, no block, no behaviour
-    /// change. This is what keeps the pre-evidence pipeline intact.
+    /// Required but absent execution evidence is Unknown and holds for review.
     #[test]
-    fn an_absent_report_leaves_the_execution_axis_inert() {
+    fn an_absent_report_on_an_authoritative_task_holds_for_review() {
         let msgs = vec![assistant()];
         let g = run_verifier(&rail_input(&msgs, None), &NullSandboxOracle);
-        assert_eq!(g.verdict, RailVerdict::Accept);
-        assert!(!g.blocks_admission());
-        assert!(!check_present(&g), "no evidence, no check");
+        assert_eq!(g.verdict, RailVerdict::Uncertain);
+        assert!(g.blocks_admission());
+        assert!(
+            check_present(&g),
+            "missing evidence is an unknown observation"
+        );
     }
 
     /// The execution axis composes with the reasoning gate: a failing CoT gate still rejects, and a

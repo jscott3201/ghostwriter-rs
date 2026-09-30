@@ -44,16 +44,16 @@ pub struct TrainingRecord {
     /// The deterministic-verifier contract (kind + oracle) carried from the user-turn candidate so the
     /// Verify rail's answer-correctness check (NumericMatch / RefusalExpected / SqlResultMatch / …) can
     /// run on the engine's `assistant_generated → verified` edge AND on a crash-resume of that edge.
-    /// `None` ⇒ no deterministic oracle for this record (judge-only admission); the reasoning-present
-    /// hard gate still applies regardless. Additive + optional: absent on records that carry no contract.
+    /// Current executable records declare independent answer/execution policies. `None` preserves
+    /// historical records for inspection/export; it does not authorize current execution.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verification_contract: Option<VerificationContract>,
     /// PRECOMPUTED execution ground truth for a trajectory whose correctness is only knowable by
     /// running it (a code patch against its required tests). Produced OUT OF PROCESS and carried
     /// here; the harness performs no execution of its own. The verifier's `execution_evidence` check
     /// adapts it into a deterministic verdict, and it is bound to the exact task/attempt/patch it was
-    /// computed against so it is never followed across candidates. `None` ⇒ this record carries no
-    /// execution axis (the evidence check is inert, exactly as a `None` contract is judge-only).
+    /// computed against so it is never followed across candidates. `None` produces Unknown when the
+    /// task's execution policy is active; Absent policy leaves this report unused.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution_evidence: Option<ExecutionEvidence>,
     #[serde(default)]

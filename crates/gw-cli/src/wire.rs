@@ -206,6 +206,7 @@ pub async fn build_engine(
     store
         .validate_run_manifest(run_id, prepared.manifest(), mode)
         .await?;
+    gw_engine::validate_run_verification(&store, run_id).await?;
     let provider = build_provider(config)?;
     let clients = build_clients(
         store.clone(),

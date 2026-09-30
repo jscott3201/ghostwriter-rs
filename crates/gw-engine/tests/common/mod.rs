@@ -493,6 +493,9 @@ pub fn good_candidate(text: &str) -> UserTurnCandidate {
             difficulty: Some("easy".into()),
         },
         contract: VerificationContract {
+            answer_policy: Some(gw_schema::VerificationPolicy::Absent),
+            execution_policy: Some(gw_schema::VerificationPolicy::Absent),
+            required_tests: vec![],
             kind: VerificationKind::None,
             oracle: Oracle::None,
             answer_marker: None,
@@ -509,6 +512,9 @@ pub fn good_candidate(text: &str) -> UserTurnCandidate {
 pub fn numeric_candidate(text: &str, expected: &str) -> UserTurnCandidate {
     let mut c = good_candidate(text);
     c.contract = VerificationContract {
+        answer_policy: Some(gw_schema::VerificationPolicy::Advisory),
+        execution_policy: Some(gw_schema::VerificationPolicy::Absent),
+        required_tests: vec![],
         kind: VerificationKind::NumericMatch,
         oracle: Oracle::Literal {
             expected: expected.into(),
@@ -523,6 +529,9 @@ pub fn numeric_candidate(text: &str, expected: &str) -> UserTurnCandidate {
 pub fn refusal_candidate(text: &str) -> UserTurnCandidate {
     let mut c = good_candidate(text);
     c.contract = VerificationContract {
+        answer_policy: Some(gw_schema::VerificationPolicy::Authoritative),
+        execution_policy: Some(gw_schema::VerificationPolicy::Absent),
+        required_tests: vec![],
         kind: VerificationKind::RefusalExpected,
         oracle: Oracle::RefusalPolicy {
             policy_id: "p1".into(),
@@ -585,14 +594,6 @@ pub fn area_k(judges: Vec<PanelJudge>, thresholds: AreaThresholds, k: u32) -> Ar
         .with_thresholds(thresholds)
         .with_cot_required(true)
         .with_k(k)
-}
-
-/// A k=1 area config whose rule comparator is RULE-ONLY AUTHORITATIVE: a verifier answer non-match is a
-/// HARD reject (the opt-in path), so a wrong answer can never be rescued/admitted by the panel.
-pub fn area_rule_authoritative(judges: Vec<PanelJudge>, thresholds: AreaThresholds) -> AreaConfig {
-    let mut cfg = area_k1(judges, thresholds);
-    cfg.rule_only_authoritative = true;
-    cfg
 }
 
 /// A one-item, one-shard seed source for the common single-record test.

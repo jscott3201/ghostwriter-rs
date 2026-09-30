@@ -150,6 +150,9 @@ mod tests {
             message: user_message(text),
             seed: UserSeed::default(),
             contract: VerificationContract {
+                answer_policy: Some(gw_schema::VerificationPolicy::Absent),
+                execution_policy: Some(gw_schema::VerificationPolicy::Absent),
+                required_tests: vec![],
                 kind: VerificationKind::NumericMatch,
                 oracle: Oracle::None,
                 answer_marker: None,

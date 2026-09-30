@@ -1,8 +1,7 @@
-//! Pure grading helpers bridging the persisted envelope and the `gw-judge` rail types.
+//! Grading reconstruction and executable verification preflight.
 //!
-//! These functions carry NO side effects — they re-derive `gw-judge` decisions from a persisted
-//! [`TrainingRecord`] envelope, and they build the load-bearing inter-judge correlation matrix. They
-//! live apart from `crate::step` so the R-prior invariant has one obvious home and its own tests.
+//! Decisions are re-derived from persisted facts without model or oracle calls. Run preflight reads
+//! stored envelopes before dispatch. The correlation prior has one shared implementation here.
 //!
 //! ## The R-prior invariant (LOAD-BEARING — never identity for k > 1)
 //!
@@ -37,24 +36,90 @@ pub fn correlation_prior(k: usize, rho: f64) -> Result<CorrelationMatrix> {
     Ok(CorrelationMatrix::uniform_offdiagonal(k, rho))
 }
 
-/// Reconstruct a [`VerifierGrade`] from the persisted `verification` block on a record (pure).
+/// Reject unsupported executable records without changing their historical envelope.
 ///
-/// The verifier rail already ran (the record is at/after `Verified`), so this re-derives the grade
-/// from the stored block WITHOUT re-running the rail: `all_passed == false` is a hard reject;
-/// otherwise an `Accept` (the panel decides the remainder). This keeps the `Verified → Judged` edge
-/// honoring the hard gate without recomputing the deterministic checks.
-#[must_use]
-pub fn verifier_grade_from_verification(rec: &TrainingRecord, _area: &AreaConfig) -> VerifierGrade {
-    let verification: Verification = rec.verification.clone();
-    let verdict = if verification.all_passed {
-        JudgeVerdict::Accept
-    } else {
+/// # Errors
+/// Rejects missing task policy or missing/unsupported facts after verification.
+pub fn validate_record_verification(rec: &TrainingRecord) -> Result<()> {
+    let contract = rec.verification_contract.as_ref().ok_or_else(|| {
+        EngineError::Invariant(
+            "record lacks task verification policy; historical records are inspect/export only"
+                .into(),
+        )
+    })?;
+    contract
+        .validate()
+        .map_err(|reason| EngineError::Invariant(reason.into()))?;
+    if let Some(facts) = rec.verification.interpretation.as_ref() {
+        facts
+            .gate()
+            .map_err(|reason| EngineError::Invariant(reason.into()))?;
+        if Some(facts.answer.policy) != contract.answer_policy
+            || Some(facts.execution.policy) != contract.execution_policy
+            || !matches!(
+                facts.reasoning.policy,
+                gw_schema::VerificationPolicy::Absent
+                    | gw_schema::VerificationPolicy::Authoritative
+            )
+        {
+            return Err(EngineError::Invariant(
+                "persisted verification policy disagrees with task contract".into(),
+            ));
+        }
+    } else if !matches!(
+        rec.lifecycle.state,
+        gw_schema::LifecycleState::Seeded
+            | gw_schema::LifecycleState::UserSynthesized
+            | gw_schema::LifecycleState::AssistantGenerated
+            | gw_schema::LifecycleState::Error
+    ) {
+        return Err(EngineError::Invariant("record lacks supported verification interpretation; historical records are inspect/export only".into()));
+    }
+    Ok(())
+}
+
+/// Check every stored run record before dispatching model work, including other shards.
+///
+/// # Errors
+/// Rejects unsupported historical records or a storage failure.
+pub async fn validate_run_verification(store: &gw_storage::Store, run_id: &str) -> Result<()> {
+    for rec in store
+        .scan(&gw_storage::RecordFilter::new().run_id(run_id))
+        .await?
+    {
+        validate_record_verification(&rec)?;
+    }
+    Ok(())
+}
+
+/// Reconstruct admission from versioned factual observations and applied policy, without I/O.
+/// Historical booleans never supply current facts.
+///
+/// # Errors
+/// Rejects missing or unsupported interpretation and inconsistent policies.
+pub fn verifier_grade_from_verification(
+    rec: &TrainingRecord,
+    _area: &AreaConfig,
+) -> Result<VerifierGrade> {
+    validate_record_verification(rec)?;
+    let mut verification: Verification = rec.verification.clone();
+    let facts = verification.interpretation.as_ref().ok_or_else(|| {
+        EngineError::Invariant("record has no completed verification interpretation".into())
+    })?;
+    (verification.all_passed, verification.needs_review) = facts
+        .gate()
+        .map_err(|reason| EngineError::Invariant(reason.into()))?;
+    let verdict = if !verification.all_passed {
         JudgeVerdict::Reject
+    } else if verification.needs_review.is_some() {
+        JudgeVerdict::Uncertain
+    } else {
+        JudgeVerdict::Accept
     };
-    VerifierGrade {
+    Ok(VerifierGrade {
         verdict,
         verification,
-    }
+    })
 }
 
 /// Re-derive the panel-level [`Decision`] from a record's persisted `Judging` block at the AREA's live
@@ -72,6 +137,19 @@ pub fn verifier_grade_from_verification(rec: &TrainingRecord, _area: &AreaConfig
 /// Returns [`EngineError::Judge`] if the `Judging` block carries neither an aggregate nor a persisted
 /// verdict (it was never graded — a programmer error reaching reconcile too early).
 pub fn decision_from_judging(rec: &TrainingRecord, area: &AreaConfig) -> Result<Decision> {
+    let verifier = verifier_grade_from_verification(rec, area)?;
+    if verifier.is_hard_reject() || verifier.blocks_admission() {
+        return Ok(gw_judge::HybridGrader::new(area.thresholds)
+            .with_admission_intent(area.intent_for(rec))
+            .grade(
+                Some(&verifier),
+                &[],
+                &[],
+                Some(&area.training_area),
+                &CorrelationMatrix::identity(0),
+            )?
+            .decision);
+    }
     Ok(
         rederive_verdict(&rec.judging, area.thresholds)?
             .with_admission_intent(area.intent_for(rec)),
@@ -119,18 +197,31 @@ mod tests {
     }
 
     #[test]
-    fn verifier_grade_reflects_all_passed() {
+    fn verifier_grade_uses_facts_instead_of_historical_booleans() {
         let mut rec = sample_record();
-        rec.verification = Verification {
-            all_passed: true,
-            ..Default::default()
-        };
-        let g = verifier_grade_from_verification(&rec, &area());
-        assert!(!g.is_hard_reject());
-
         rec.verification.all_passed = false;
-        let g = verifier_grade_from_verification(&rec, &area());
-        assert!(g.is_hard_reject());
+        assert!(
+            !verifier_grade_from_verification(&rec, &area())
+                .unwrap()
+                .is_hard_reject()
+        );
+        rec.verification
+            .interpretation
+            .as_mut()
+            .unwrap()
+            .answer
+            .observation
+            .as_mut()
+            .unwrap()
+            .outcome = gw_schema::VerificationOutcome::Fail;
+        rec.verification.all_passed = true;
+        assert!(
+            verifier_grade_from_verification(&rec, &area())
+                .unwrap()
+                .is_hard_reject()
+        );
+        rec.verification.interpretation = None;
+        assert!(verifier_grade_from_verification(&rec, &area()).is_err());
     }
 
     #[test]
@@ -203,7 +294,7 @@ mod tests {
 
     fn sample_record() -> TrainingRecord {
         use gw_schema::{Content, Generation, Message, Provenance, Role, TeacherRef};
-        TrainingRecord {
+        let mut rec = TrainingRecord {
             record_id: "rec-1".into(),
             schema_version: semver::Version::new(1, 0, 0),
             dataset_version: None,
@@ -244,6 +335,31 @@ mod tests {
             lifecycle: Default::default(),
             hashes: Default::default(),
             cost: Default::default(),
-        }
+        };
+        rec.verification_contract = Some(gw_schema::VerificationContract {
+            answer_policy: Some(gw_schema::VerificationPolicy::Authoritative),
+            execution_policy: Some(gw_schema::VerificationPolicy::Absent),
+            required_tests: vec![],
+            kind: gw_schema::VerificationKind::NumericMatch,
+            oracle: gw_schema::Oracle::Literal {
+                expected: "42".into(),
+            },
+            answer_marker: None,
+        });
+        rec.verification = gw_judge::run_verifier(
+            &gw_judge::VerifierInput {
+                messages: &rec.messages,
+                reasoning_tokens: 0,
+                cot_required: false,
+                contract: rec.verification_contract.as_ref(),
+                execution_evidence: None,
+                evidence_key: Default::default(),
+            },
+            &gw_judge::NullSandboxOracle,
+        )
+        .unwrap()
+        .verification;
+        rec.lifecycle.state = gw_schema::LifecycleState::Verified;
+        rec
     }
 }

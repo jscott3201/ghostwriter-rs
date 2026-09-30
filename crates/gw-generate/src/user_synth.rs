@@ -217,6 +217,10 @@ pub async fn evaluate<E: Embedder + ?Sized>(
     threshold: f64,
 ) -> Result<UserTurnVerdict> {
     let text = candidate.text();
+    candidate
+        .contract
+        .validate()
+        .map_err(|reason| GenerateError::Invariant(reason.into()))?;
     candidate.validate_framing()?;
 
     let embedding = embedder.embed(&text).await.map_err(GenerateError::Embed)?;
@@ -304,6 +308,9 @@ mod tests {
             message: user_message(text),
             seed: UserSeed::default(),
             contract: VerificationContract {
+                answer_policy: Some(gw_schema::VerificationPolicy::Absent),
+                execution_policy: Some(gw_schema::VerificationPolicy::Absent),
+                required_tests: vec![],
                 kind,
                 oracle: Oracle::None,
                 answer_marker: None,
