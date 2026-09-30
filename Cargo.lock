@@ -1300,6 +1300,7 @@ dependencies = [
  "anyhow",
  "clap",
  "figment",
+ "futures",
  "gw-engine",
  "gw-eval",
  "gw-generate",

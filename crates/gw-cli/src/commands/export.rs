@@ -1,8 +1,8 @@
 //! The `gen export` handler — PURE (no providers): scan a [`Store`] and write admitted records to a
 //! Parquet shard.
 //!
-//! [`export_parquet`] filters to admitted records
-//! (`judging.verdict == Admit`) internally, so this scans the store (optionally restricted to one
+//! [`export_parquet`] requires both an Admit judging verdict and a selected lifecycle state
+//! (Admitted, Formatted, or Exported), so this scans the store (optionally restricted to one
 //! run) and hands the whole set to the exporter; the returned [`ExportManifest`](gw_schema::ExportManifest)
 //! (`n_records` / `n_admitted` / `build_inputs_hash`) is printed as JSON so a build pipeline can
 //! record exactly what was written.

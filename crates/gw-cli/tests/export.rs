@@ -153,6 +153,8 @@ async fn export_without_run_filter_exports_every_admitted_record() {
         ))
         .await
         .unwrap();
+    admit(&store, "a1").await;
+    admit(&store, "b1").await;
     drop(store);
 
     // No run_id filter → both runs' admitted records are exported.

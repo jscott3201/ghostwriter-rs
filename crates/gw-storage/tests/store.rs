@@ -543,11 +543,13 @@ async fn sqlx_query_record_hash(store: &Store, id: &str) -> (String,) {
 
 #[tokio::test]
 async fn parquet_export_round_trips() {
-    let recs = vec![
+    let mut recs = vec![
         record("admit-1", "run-1", Some(Verdict::Admit), Some(0.95)),
         record("admit-2", "run-1", Some(Verdict::Admit), Some(0.88)),
         record("reject-1", "run-1", Some(Verdict::Reject), Some(0.10)),
     ];
+    recs[0].lifecycle.state = LifecycleState::Admitted;
+    recs[1].lifecycle.state = LifecycleState::Admitted;
     let (bytes, manifest) = gw_storage::export_parquet_bytes(
         &recs,
         TrlFormat::ChatML,
@@ -625,6 +627,8 @@ async fn export_content_hash_is_order_independent() {
     // Give them stable record hashes so the shard hash is meaningful.
     let mut a = a;
     let mut b = b;
+    a.lifecycle.state = LifecycleState::Admitted;
+    b.lifecycle.state = LifecycleState::Admitted;
     a.hashes.record_hash = gw_storage::record_hash(&a).unwrap();
     b.hashes.record_hash = gw_storage::record_hash(&b).unwrap();
 
@@ -642,6 +646,7 @@ async fn export_content_hash_is_order_independent() {
     )
     .await
     .unwrap();
+    assert_eq!((m1.n_admitted, m2.n_admitted), (2, 2));
     assert_eq!(m1.build_inputs_hash, m2.build_inputs_hash);
 }
 

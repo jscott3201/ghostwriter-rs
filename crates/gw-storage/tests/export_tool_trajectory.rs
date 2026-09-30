@@ -160,7 +160,10 @@ fn tool_record(record_id: &str, run_id: &str, verdict: Option<Verdict>) -> Train
             ..Default::default()
         },
         reasoning_quality: None,
-        lifecycle: Lifecycle::default(),
+        lifecycle: Lifecycle {
+            state: LifecycleState::Admitted,
+            ..Default::default()
+        },
         hashes: Default::default(),
         cost: Default::default(),
     }
@@ -411,10 +414,9 @@ async fn clean_messages_json_is_the_column_policy() {
 #[tokio::test]
 async fn lifecycle_advance_and_resume_export_without_loss() {
     let store = seeded_store().await;
-    store
-        .put(&tool_record("rec-e", "run-e", Some(Verdict::Admit)))
-        .await
-        .unwrap();
+    let mut record = tool_record("rec-e", "run-e", Some(Verdict::Admit));
+    record.lifecycle.state = LifecycleState::AssistantGenerated;
+    store.put(&record).await.unwrap();
     store
         .advance_lifecycle("rec-e", LifecycleState::Verified, None)
         .await
@@ -450,8 +452,8 @@ async fn lifecycle_advance_and_resume_export_without_loss() {
     assert_eq!(turns[4].tool_call_id.as_deref(), Some("read-a"));
 }
 
-/// Admission is still the only gate, and the manifest counts stay exact: the input set is counted,
-/// the admitted subset is written, and no other verdict is admitted by accident.
+/// A selected lifecycle alone is insufficient: no other verdict is admitted by accident, and the
+/// manifest counts the input set and exported subset separately.
 #[tokio::test]
 async fn only_admit_verdicts_are_written() {
     let records = vec![
@@ -510,24 +512,94 @@ async fn only_admit_verdicts_are_written() {
     }
 }
 
-/// The two admission layers, stated once so the split stays deliberate: the storage exporter filters
-/// on the JUDGE VERDICT only, and the engine narrows the input to lifecycle-admitted records before
-/// handing it over (then reports the whole-run population as `n_records`). A record that carries an
-/// Admit verdict but a non-admitted lifecycle state is written by the exporter — it is the engine's
-/// pre-filter, not this one, that keeps it out of a real shard. Both layers are covered here and in
-/// `gw-engine`'s shard-export suite.
+/// A passing grade is evidence, not selection: retained losers and unfinished records stay out even
+/// when individually admissible. Exercise every lifecycle against every persisted verdict, including
+/// contradictory imported records, so a caller cannot bypass either half of the export contract.
 #[tokio::test]
-async fn storage_gate_is_the_verdict_and_lifecycle_narrowing_belongs_to_the_engine() {
-    let mut rejected_lifecycle = tool_record("stale", "run-e", Some(Verdict::Admit));
-    rejected_lifecycle.lifecycle.state = LifecycleState::Rejected;
-    let (_, manifest) =
-        export_parquet_bytes(&[rejected_lifecycle], TrlFormat::Gemma4, CotPolicy::Masked)
+async fn sft_export_requires_an_admit_verdict_and_selected_lifecycle() {
+    use LifecycleState::*;
+    let states = [
+        Seeded,
+        UserSynthesized,
+        AssistantGenerated,
+        Verified,
+        Judged,
+        Revising,
+        NeedsReview,
+        Admitted,
+        Rejected,
+        Formatted,
+        Exported,
+        Error,
+    ];
+    let verdicts = [
+        None,
+        Some(Verdict::Admit),
+        Some(Verdict::Reject),
+        Some(Verdict::NeedsReview),
+    ];
+    let mut records = Vec::new();
+    for state in states {
+        for verdict in verdicts {
+            let mut record = tool_record(&format!("{state:?}-{verdict:?}"), "run-e", verdict);
+            record.lifecycle.state = state;
+            records.push(record);
+        }
+    }
+    let (bytes, manifest) = export_parquet_bytes(&records, TrlFormat::Gemma4, CotPolicy::Masked)
+        .await
+        .unwrap();
+    assert_eq!(manifest.n_records, 48);
+    assert_eq!(manifest.n_admitted, 3);
+    let (ids, _, _) = export_and_decode(&records).await;
+    assert_eq!(
+        ids,
+        [
+            "Admitted-Some(Admit)",
+            "Formatted-Some(Admit)",
+            "Exported-Some(Admit)"
+        ]
+    );
+
+    // Excluded records affect the scanned count, never the shard bytes or content identity.
+    let selected: Vec<_> = ids
+        .iter()
+        .map(|id| records.iter().find(|r| &r.record_id == id).unwrap().clone())
+        .collect();
+    let (selected_bytes, selected_manifest) =
+        export_parquet_bytes(&selected, TrlFormat::Gemma4, CotPolicy::Masked)
             .await
             .unwrap();
+    assert_eq!(bytes, selected_bytes);
     assert_eq!(
-        manifest.n_admitted, 1,
-        "the storage gate is verdict-only; lifecycle narrowing happens upstream"
+        manifest.build_inputs_hash,
+        selected_manifest.build_inputs_hash
     );
+    assert_eq!(selected_manifest.n_records, 3);
+}
+
+/// Cancellation can leave every individually admissible sibling at Judged, before selection. No
+/// winner may be inferred from grades, aggregate scores, or the fact that all siblings are present.
+#[tokio::test]
+async fn unsettled_sibling_group_exports_no_rows() {
+    let mut records = [
+        tool_record("c0", "run-e", Some(Verdict::Admit)),
+        tool_record("c1", "run-e", Some(Verdict::Admit)),
+    ];
+    for record in &mut records {
+        record.lifecycle.state = LifecycleState::Judged;
+        record.hashes.record_hash = gw_storage::record_hash(record).unwrap();
+    }
+    let (bytes, manifest) = export_parquet_bytes(&records, TrlFormat::Gemma4, CotPolicy::Masked)
+        .await
+        .unwrap();
+    let (empty_bytes, empty_manifest) =
+        export_parquet_bytes(&[], TrlFormat::Gemma4, CotPolicy::Masked)
+            .await
+            .unwrap();
+    assert_eq!((manifest.n_records, manifest.n_admitted), (2, 0));
+    assert_eq!(bytes, empty_bytes);
+    assert_eq!(manifest.build_inputs_hash, empty_manifest.build_inputs_hash);
 }
 
 /// What the export does NOT carry, stated rather than left for a consumer to discover.
