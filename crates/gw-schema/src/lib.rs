@@ -75,11 +75,15 @@ mod numeric_reward;
 mod numeric_reward_task;
 mod prepared_sft;
 mod prepared_sft_frame;
+mod prepared_sft_profile;
 mod prepared_sft_validation;
 pub use prepared_sft::*;
 pub use prepared_sft_frame::{
     MAX_PREPARED_SFT_BYTES, PREPARED_SFT_HASH_DOMAIN, PREPARED_SFT_MAGIC, PreparedSftFrame,
     decode_prepared_sft_frame, encode_prepared_sft_frame,
+};
+pub use prepared_sft_profile::{
+    PreparedSftProfile, PreparedSftProfileName, PreparedSftRenderControls,
 };
 mod reward_batch;
 pub use numeric_reward::*;

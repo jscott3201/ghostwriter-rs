@@ -19,6 +19,7 @@ fn imported_python_builds_preserve_order_source_and_long_examples() {
         ("prepared-all.gwsft", 4),
         ("prepared-empty.gwsft", 0),
         ("prepared-long.gwsft", 4),
+        ("prepared-gemma.gwsft", 4),
     ] {
         let data = fixture(name);
         let frame = decode_prepared_sft_frame(&data).unwrap();
@@ -135,14 +136,50 @@ fn shared_independent_corpus_rejects_whole_build_without_partial_import() {
         "../../../adapters/trl/tests/prepared_cases.json"
     ))
     .unwrap();
-    let data = fixture("prepared-all.gwsft");
-    for case in cases {
-        let result = verify_prepared_sft_snapshot(mutation(&data, &case));
-        assert_eq!(
-            result.is_ok(),
-            case["rust_accept"].as_bool().unwrap(),
-            "{}: {result:?}",
-            case["name"]
+    for name in ["prepared-all.gwsft", "prepared-gemma.gwsft"] {
+        let data = fixture(name);
+        for case in &cases {
+            let result = verify_prepared_sft_snapshot(mutation(&data, case));
+            assert_eq!(
+                result.is_ok(),
+                case["rust_accept"].as_bool().unwrap(),
+                "{name} {}: {result:?}",
+                case["name"]
+            );
+        }
+    }
+}
+
+#[test]
+fn gemma_profile_rejects_rehashed_control_and_policy_changes() {
+    let data = fixture("prepared-gemma.gwsft");
+    for (pointer, value) in [
+        (
+            "/manifest/recipe/preparation_profile/name",
+            serde_json::json!("other"),
+        ),
+        (
+            "/manifest/recipe/preparation_profile/controls/enable_thinking",
+            serde_json::json!(false),
+        ),
+        (
+            "/manifest/recipe/tokenizer/revision",
+            serde_json::json!("0".repeat(40)),
+        ),
+        (
+            "/manifest/recipe/dependencies/transformers",
+            serde_json::json!("4.56.2"),
+        ),
+        (
+            "/manifest/recipe/tokenizer_policy/backend_sha256",
+            serde_json::json!("0".repeat(64)),
+        ),
+        ("/examples/0/input_ids/0", serde_json::json!(1)),
+    ] {
+        let case = serde_json::json!({"op": "replace", "pointer": pointer, "value": value});
+        assert!(
+            verify_prepared_sft_snapshot(mutation(&data, &case)).is_err(),
+            "{pointer}"
         );
     }
 }

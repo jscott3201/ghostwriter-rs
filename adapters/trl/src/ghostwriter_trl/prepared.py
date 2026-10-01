@@ -9,7 +9,8 @@ import tempfile
 import blake3
 
 from .artifact import ContractError, VerifiedSnapshot, strict_json, verify_snapshot
-from .build import build, identity
+from .build import build, identity, source_identity
+from .profiles import QWEN, controls
 
 MAGIC = b"GWSFT001"
 HASH_DOMAIN = "ghostwriter.prepared-sft-input.v1"
@@ -63,13 +64,15 @@ def _unframe(data: bytes) -> tuple[str, bytes, bytes]:
     return digest.hex(), data[HEADER_BYTES:boundary], data[boundary:]
 
 
-def prepare(snapshot: VerifiedSnapshot, tokenizer, *, cot: str, turns: str, max_length: int) -> bytes:
+def prepare(snapshot: VerifiedSnapshot, tokenizer, *, cot: str, turns: str, max_length: int,
+            profile: str = QWEN, enable_thinking: bool | None = None) -> bytes:
     """Produce a complete input identity before any trainer or optimization operation.
 
     The original source is embedded rather than trusting a portable report supplied by a caller.
     This returns bytes to save; consumption requires ``verify_prepared`` or ``read_prepared``.
     """
-    examples, manifest = build(snapshot, tokenizer, cot=cot, turns=turns, max_length=max_length)
+    examples, manifest = build(snapshot, tokenizer, cot=cot, turns=turns, max_length=max_length,
+                               profile=profile, enable_thinking=enable_thinking)
     report = snapshot.report
     source = {key: report[key] for key in ("byte_length", "snapshot_blake3")}
     source["artifact_id"] = report["artifact"]["artifact_id"]
@@ -168,8 +171,15 @@ def verify_prepared(data: bytes, gw: Path, tokenizer) -> VerifiedPrepared:
         raise ContractError("prepared verifier source receipt mismatch")
     try:
         recipe = payload["manifest"]["recipe"]
+        if recipe["version"] != 2 or recipe["adapter_source_sha256"] != source_identity():
+            raise ContractError("incompatible installed preparation recipe/source; native historical inspection remains available")
+        profile = recipe["preparation_profile"]
+        settings = controls(profile["name"], profile["controls"]["enable_thinking"])
+        if profile != {"name": profile["name"], "controls": settings}:
+            raise ContractError("unsupported prepared rendering controls")
         examples, manifest = build(snapshot, tokenizer, cot=recipe["cot_policy"],
-                                   turns=recipe["multi_turn_loss"], max_length=recipe["max_length"])
+                                   turns=recipe["multi_turn_loss"], max_length=recipe["max_length"],
+                                   profile=profile["name"], enable_thinking=settings["enable_thinking"])
         replay_runtime = manifest["recipe"]["runtime"]
         # Runtime is recorded producer provenance. Replay uses the installed pins but must not
         # replace historical IDs merely because the consumer OS or Python patch differs.

@@ -6,6 +6,7 @@ import platform
 from . import __version__
 from .artifact import ContractError, VerifiedSnapshot, strict_json
 from .projection import prepare_target, project_messages
+from .profiles import QWEN, controls
 from .screening import consumer_screening
 from .tokenizer import PACKAGE, check_dependencies, tokenizer_manifest, tokenizer_policy, validate_tokenizer
 
@@ -16,11 +17,17 @@ def identity(value) -> str:
 
 
 def source_identity() -> str:
-    """Bind the build to the installed adapter code and bundled policy/dependency identities."""
-    return identity({path.name: sha256(path.read_bytes()).hexdigest() for path in sorted(PACKAGE.iterdir()) if path.suffix in {".py", ".json"}})
+    """Bind all shared preparation and recursive profile source/policies from the installed package.
+
+    The separate optimizer/checkpoint package is not consumed by preparation or dataloader replay.
+    """
+    paths = [*PACKAGE.iterdir(), *(PACKAGE / "profiles").rglob("*")]
+    return identity({str(path.relative_to(PACKAGE)): sha256(path.read_bytes()).hexdigest()
+                     for path in sorted(paths) if path.is_file() and path.suffix in {".py", ".json"}})
 
 
-def build(snapshot: VerifiedSnapshot, tokenizer, *, cot: str, turns: str, max_length: int) -> tuple[list[dict], dict]:
+def build(snapshot: VerifiedSnapshot, tokenizer, *, cot: str, turns: str, max_length: int,
+          profile: str = QWEN, enable_thinking: bool | None = None) -> tuple[list[dict], dict]:
     """Explicitly expand assistant prefixes; rejected targets remain counted and identified."""
     if type(snapshot) is not VerifiedSnapshot:
         raise ContractError("source must be an actual verified-origin snapshot")
@@ -31,12 +38,14 @@ def build(snapshot: VerifiedSnapshot, tokenizer, *, cot: str, turns: str, max_le
     verification_report = snapshot.report
     source_artifact = verification_report["artifact"]
     screening = consumer_screening(source_artifact, cot, turns)
-    dependencies = check_dependencies()
-    validate_tokenizer(tokenizer)
-    pinned_tokenizer = tokenizer_manifest()
+    dependencies = check_dependencies(profile)
+    validate_tokenizer(tokenizer, profile)
+    settings = controls(profile, enable_thinking)
+    pinned_tokenizer = tokenizer_manifest(profile)
     recipe = {
-        "version": 1, "adapter_version": __version__, "adapter_source_sha256": source_identity(),
-        "dependencies": dependencies, "tokenizer": pinned_tokenizer, "tokenizer_policy": tokenizer_policy(),
+        "version": 2, "adapter_version": __version__, "adapter_source_sha256": source_identity(),
+        "preparation_profile": {"name": profile, "controls": settings},
+        "dependencies": dependencies, "tokenizer": pinned_tokenizer, "tokenizer_policy": tokenizer_policy(profile),
         "runtime": {"python": platform.python_version(), "implementation": platform.python_implementation(), "system": platform.system(), "machine": platform.machine()},
         "tokenizer_target": {"repository": pinned_tokenizer["repository"], "revision": pinned_tokenizer["revision"]},
         "cot_policy": cot, "multi_turn_loss": turns,
@@ -90,7 +99,7 @@ def build(snapshot: VerifiedSnapshot, tokenizer, *, cot: str, turns: str, max_le
                 "component_id": member["component_id"],
                 "export_projection_id": projections[(member["record"]["run_id"], member["record"]["record_id"])]}
         try:
-            messages = project_messages(strict_json(row["messages_json"]), tokenizer, cot)
+            messages = project_messages(strict_json(row["messages_json"]), tokenizer, cot, profile=profile)
         except ContractError as error:
             rejections.append({"record_id": row["record_id"], "target_index": None, "reason": str(error)})
             continue
@@ -100,7 +109,8 @@ def build(snapshot: VerifiedSnapshot, tokenizer, *, cot: str, turns: str, max_le
         candidate_targets += len(targets)
         for target in targets:
             try:
-                example = prepare_target(messages[:target + 1], tokenizer, cot, max_length)
+                example = prepare_target(messages[:target + 1], tokenizer, cot, max_length,
+                                         profile=profile, enable_thinking=settings["enable_thinking"])
             except ContractError as error:
                 rejections.append({"record_id": row["record_id"], "target_index": target, "reason": str(error)})
                 continue

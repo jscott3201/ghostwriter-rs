@@ -3,7 +3,8 @@ from dataclasses import asdict, dataclass
 import unicodedata
 
 from .artifact import ContractError
-from .tokenizer import source_control_literals
+from .profiles import GEMMA, QWEN, controls
+from .tokenizer import official_renderer, source_control_literals
 
 
 @dataclass(frozen=True)
@@ -16,13 +17,13 @@ class Span:
     message_index: int
 
 
-def project_messages(messages: list, tokenizer, cot: str) -> list[dict]:
+def project_messages(messages: list, tokenizer, cot: str, *, profile: str = QWEN) -> list[dict]:
     """Accept only unambiguous text trajectories and redundant ordered plaintext reasoning."""
     if cot not in {"supervised", "masked", "stripped"}:
         raise ContractError("unsupported reasoning policy")
     if not isinstance(messages, list) or not messages:
         raise ContractError("empty or invalid conversation")
-    controls = source_control_literals()
+    literals = source_control_literals(profile)
     projected = []
     for index, message in enumerate(messages):
         if not isinstance(message, dict) or set(message) - {
@@ -57,7 +58,7 @@ def project_messages(messages: list, tokenizer, cot: str) -> list[dict]:
             if "".join(texts) != reasoning:
                 raise ContractError("reasoning details differ from flat text")
         for text in (content, reasoning or ""):
-            if any(control in text for control in controls):
+            if any(control in text for control in literals):
                 raise ContractError("literal template/control token in source text")
         projected.append({"role": role, "content": content, "reasoning_content": "" if cot == "stripped" else reasoning or ""})
     roles = [message["role"] for message in projected]
@@ -69,8 +70,8 @@ def project_messages(messages: list, tokenizer, cot: str) -> list[dict]:
     return projected
 
 
-def render_ledger(messages: list[dict], cot: str) -> tuple[str, list[Span]]:
-    """Implement the qualified alternating text subset of the exact Qwen template."""
+def render_ledger(messages: list[dict], cot: str, *, profile: str = QWEN, enable_thinking: bool | None = None) -> tuple[str, list[Span]]:
+    """Own each character through the selected model-specific, officially checked ledger."""
     pieces, spans, position = [], [], 0
 
     def emit(text, kind, supervised, index):
@@ -80,19 +81,9 @@ def render_ledger(messages: list[dict], cot: str) -> tuple[str, list[Span]]:
             spans.append(Span(position, position + len(text), kind, supervised, index))
             position += len(text)
 
-    target = len(messages) - 1
-    for index, message in enumerate(messages):
-        role = message["role"]
-        emit(f"<|im_start|>{role}\n", "header", False, index)
-        if index == target:
-            emit("<think>\n", "reasoning_wrapper", cot == "supervised", index)
-            emit(message["reasoning_content"].strip("\n"), "reasoning", cot == "supervised", index)
-            emit("\n</think>\n\n", "reasoning_wrapper", cot == "supervised", index)
-            emit(message["content"].lstrip("\n"), "answer", True, index)
-        else:
-            emit(message["content"], "context", False, index)
-        emit("<|im_end|>", "end", index == target, index)
-        emit("\n", "separator", False, index)
+    from .profiles import gemma, qwen
+    settings = controls(profile, enable_thinking)
+    (gemma if profile == GEMMA else qwen).render(messages, cot, settings, emit)
     return "".join(pieces), spans
 
 
@@ -157,10 +148,12 @@ def label_tokens(input_ids: list[int], offsets: list[tuple[int, int]], spans: li
     return labels, answer_tokens, kinds
 
 
-def prepare_target(messages: list[dict], tokenizer, cot: str, max_length: int) -> dict:
+def prepare_target(messages: list[dict], tokenizer, cot: str, max_length: int, *, profile: str = QWEN,
+                   enable_thinking: bool | None = None) -> dict:
     """Render once, prove exact official equivalence, and tokenize the complete text once."""
-    text, spans = render_ledger(messages, cot)
-    official = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
+    text, spans = render_ledger(messages, cot, profile=profile, enable_thinking=enable_thinking)
+    official = official_renderer(tokenizer, profile).apply_chat_template(messages, tokenize=False,
+                                                                        **controls(profile, enable_thinking))
     if text != official:
         raise ContractError("span ledger differs from pinned official rendering")
     encoded = tokenizer(text, add_special_tokens=False, split_special_tokens=False, truncation=False, return_offsets_mapping=True)

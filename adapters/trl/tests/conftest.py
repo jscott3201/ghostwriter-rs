@@ -4,6 +4,12 @@ from pathlib import Path
 import pytest
 
 from ghostwriter_trl.tokenizer import load_tokenizer
+from .prepared_fixtures import current_fixtures
+
+
+@pytest.fixture(scope="session")
+def profile():
+    return "qwen3_text_v1"
 
 
 @pytest.fixture(scope="session")
@@ -23,5 +29,11 @@ def gw():
 
 
 @pytest.fixture(scope="session")
-def fixture_dir():
+def historical_fixture_dir():
     return Path(__file__).parent / "fixtures"
+
+
+@pytest.fixture(scope="session")
+def fixture_dir(historical_fixture_dir, gw, tokenizer, profile, tmp_path_factory):
+    return current_fixtures(tmp_path_factory.mktemp("prepared-current"), historical_fixture_dir,
+                            gw, tokenizer, profile)
