@@ -100,6 +100,7 @@ pub async fn dispatch(cli: Cli) -> anyhow::Result<CommandOutcome> {
                 .map(|()| CommandOutcome::Success),
         },
         Command::Eval(eval_cmd) => match eval_cmd {
+            EvalCommand::Screen(args) => commands::screening::screen(args),
             EvalCommand::FitCalibration(args) => commands::calibration::fit(args),
             EvalCommand::AuditSeparation(args) => commands::eval::audit_separation(args).await,
             EvalCommand::Promote(args) => commands::eval::promote_cmd(args).await,

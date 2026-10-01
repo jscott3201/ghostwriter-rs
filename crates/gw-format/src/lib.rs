@@ -103,6 +103,6 @@ mod validate;
 pub use error::{FormatError, Result, ToolCallRecovery, ToolSignal};
 pub use ingest::{ingest_openrouter, strip_channel_tokens};
 pub use preference::{PreferenceMessages, project_preference_messages};
-pub use projection::{SftProjection, project_sft};
+pub use projection::{SftProjection, SftTrainingUnit, project_sft, project_sft_units};
 pub use render::render;
 pub use tool_links::validate_tool_links;

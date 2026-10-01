@@ -20,6 +20,52 @@ use gw_schema::{CotPolicy, MultiTurnLoss, Role, TrainingRecord, TrlFormat};
 use crate::error::{FormatError, Result};
 use crate::render::render;
 
+/// One complete emitted training example ending at an assistant selected for loss. This pure
+/// prefix layout matches `assistant_prefix_v1`; final-only contributes only the final target.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SftTrainingUnit {
+    /// Index of the selected assistant in the original ordered conversation.
+    pub target_index: usize,
+    /// Canonical renderer output for the entire prefix including that target.
+    pub rendered: String,
+}
+
+/// Render each selected complete training unit through the shared renderer. This does not
+/// tokenize, assign labels, certify model-specific supervision, or check record admission.
+///
+/// # Errors
+/// Rejects an empty/nonterminal conversation or any prefix rejected by the canonical renderer.
+pub fn project_sft_units(
+    record: &TrainingRecord,
+    target: TrlFormat,
+    cot: CotPolicy,
+    turns: MultiTurnLoss,
+) -> Result<Vec<SftTrainingUnit>> {
+    if record.messages.last().map(|message| message.role) != Some(Role::Assistant) {
+        return Err(FormatError::Projection(
+            "training units require a terminal assistant target".into(),
+        ));
+    }
+    let mut indices: Vec<_> = record
+        .messages
+        .iter()
+        .enumerate()
+        .filter_map(|(index, message)| (message.role == Role::Assistant).then_some(index))
+        .collect();
+    if turns == MultiTurnLoss::FinalTurnOnly {
+        indices = indices.into_iter().rev().take(1).collect();
+    }
+    indices
+        .into_iter()
+        .map(|target_index| {
+            Ok(SftTrainingUnit {
+                target_index,
+                rendered: render(&record.messages[..=target_index], target, cot)?,
+            })
+        })
+        .collect()
+}
+
 /// An SFT projection: the rendered training text plus the loss/masking metadata a trainer needs.
 ///
 /// The rendered bytes already reflect [`CotPolicy::Stripped`] (reasoning dropped) and render

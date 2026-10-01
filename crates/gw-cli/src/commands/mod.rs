@@ -14,4 +14,5 @@ pub mod eval;
 pub mod export;
 pub mod replay;
 pub mod run;
+pub mod screening;
 pub mod tui;

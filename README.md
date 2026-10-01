@@ -60,10 +60,10 @@ Ten crates in a strictly **acyclic** workspace — each tier depends only on the
 | `gw-engine` | The headless orchestrator: the lifecycle state machine and sharded executor. |
 | `gw-cli` | The `gw` command-line entrypoint. |
 | `gw-tui` | A live [ratatui](https://ratatui.rs) dashboard over the engine event stream. |
-| `gw-eval` | Off-path, model-free dataset diagnostics and promotion gating. |
+| `gw-eval` | Off-path, model-free dataset diagnostics, lexical screening plans and promotion gating. |
 
 The dependency spine: `schema → {format, providers, storage} → {generate, judge} → engine → {cli, tui}`,
-with `gw-eval` consuming only `schema` + `storage`.
+with `gw-eval` consuming `schema`, `storage` and the pure `format` projection layer.
 
 ---
 
@@ -688,6 +688,7 @@ gw gen tui      The same run with the live ratatui dashboard.
 gw gen export   Export admitted records from a store to a Parquet shard (no providers).
 gw gen replay   Resume a started run from its persisted checkpoints.
 gw eval fit-calibration    Offline group-equal judge fitting from supplied evidence (JSON).
+gw eval screen             Frozen lexical groups/splits for a declared supplied corpus (JSON).
 gw eval audit-separation   Score diagnostics and optional independent outcome evidence (JSON).
 gw eval promote            Variance-aware promotion gate over two eval_results.json (JSON).
 ```
@@ -809,6 +810,99 @@ a provider:
 
 Both accept `--check` to opt into decision-bearing process exits (`0` pass · `1` operational error ·
 `2` gate rejects) for CI.
+
+### Frozen source screening plans
+
+```sh
+gw eval screen --records records.json --declaration screening.json --protected protected.json > plan.json
+gw eval screen --records records.json --declaration screening.json --protected protected.json --check-plan plan.json
+```
+
+This provider-free command reads ordinary `TrainingRecord[]`, a strict version 1
+`ScreeningDeclaration`, and local `ProtectedScreeningSet[]` manifests. It opens no database,
+loads no provider configuration, and acquires no benchmark contents. The pure Rust APIs are
+`gw_eval::screening::prepare_screening`, `validate_screening_plan`, and
+`protected_screening_content_digest`; the input/report types live in `gw-schema`.
+
+Declare a nonempty `runs.run_ids` set and the complete expected source-item/revision and sibling
+memberships. IDs are sorted canonically; duplicates reject. Every supplied record in those runs
+enters the population, including Rejected records and relatives excluded from output. The separate
+`output` selects candidate record IDs from one declared run. Required parents must resolve
+unambiguously within the declared corpus. Missing task, source, parent or sibling evidence makes
+the plan incomplete; observed completion counts alone do not assert that no relative is missing.
+Records outside the declared runs are outside the claim. `supplied_files_only` explicitly means
+that current database membership has not been checked.
+
+Each protected manifest supplies a canonical set ID, immutable source revision, recomputed typed
+content digest, item identities and actual local contents, reviewed permission for screening, and
+field/language/text-media coverage. The ten canonical protected sets in `DecontamConfig` remain
+required; `additional_protected_sets` adds to that union. Missing sets, unresolved rights, missing
+coverage and unsupported media/encrypted reasoning produce incomplete coverage. These are supplied
+assertions, not independent verification of rights, language or real benchmark completeness.
+Unknown protected message/part/tool/reasoning fields reject. Protected payload text is omitted
+from the emitted plan; match evidence carries only stable identifiers and integer counts.
+
+The pinned `lexical-screen-v1` recipe lowercases ASCII A–Z and splits only on U+0009–U+000D,
+U+0020, U+0085, U+00A0, U+1680, U+2000–U+200A, U+2028, U+2029, U+202F, U+205F and U+3000.
+It discards empty tokens and preserves punctuation, signs, other case, accents and Unicode forms.
+Turns, content parts, flat reasoning, reasoning details and supported tool fields remain separate
+segments. Tool-argument and tool-definition object keys are independently screened text, while
+retaining their exact structural meaning. Keys and values never share a shingle; evidence uses
+deterministic member coordinates without copying protected key text. No shingle spans a segment
+boundary. For each segment pair, a shared contiguous run of
+`min_overlap_tokens` is required, then **any** n in the inclusive `ngram` range may qualify when
+distinct-shingle intersection/union is at least `jaccard_threshold`. Empty intersections do not
+match; repetitions add no set weight. The defaults `[8,13]`, minimum overlap 5, and threshold 0.8
+are unqualified software parameters: the five-token gate adds no five-gram detector. Short
+non-prompt segments have no shingle comparison. A whole nonempty structured prompt with user text
+can match exactly regardless of length.
+
+Grouping uses declared task/source/parent/sibling edges, any equal complete emitted training
+example, and any pair of matching complete selected-target prompts. A lexical prompt edge requires
+the same role/turn/part/tool-link structure and every corresponding text segment to match exactly
+or by the shingle rule. A shared system instruction, reasoning fragment or short numeric answer
+alone cannot create an edge. `all_assistant` contributes each full prefix before its selected
+target; `final_turn_only` contributes only the final target's prefix. The shared format layer renders
+complete examples under the pinned target/CoT/turn policies. Protected matching still examines all
+captured supported source segments, including historical reasoning; it quarantines existing
+components without merging otherwise unrelated records. Split conflicts quarantine the entire
+component, including excluded relatives.
+
+V1 ceilings are 64 MiB total text, 1 MiB and 65,536 tokens per segment, 100,000 segments,
+2,000,000 stored distinct shingles, and 1,000,000 candidate comparisons. Structural unit checks
+also consume the comparison budget. A separate `shingle_token_work` ceiling of 64,000,000 sums
+`window_count * n` before processing each segment/length pair, including repeated windows and
+the overlap gate. This bounds work even when repeated text creates few distinct shingles. Exact
+indexes store start positions into token arrays, avoiding copied long tuples. Limits may be lowered
+but not raised; exceeding a bound makes the result incomplete. Nothing is truncated or silently
+dropped. These are operational limits, not empirical threshold qualification or a guarantee against
+every allocation failure.
+
+Thresholds use the strict finite binary64 codec: 0.8 is `{"binary64":"3fe999999999999a"}`.
+Decimal alternatives, duplicate tags and nonfinite values reject. Signed zero and adjacent finite
+values retain their bits through typed and JSON-Value replay. Counts stay integers; arbitrary
+payload strings and ordinary record parsing retain their existing semantics.
+
+The frozen report contains separate captured-input, policy, protected-input, grouping/split and
+complete-plan identities, full population bindings, component memberships, protected coverage,
+quarantine/exclusion counts and available task/domain/difficulty/teacher/length strata. Unknown
+metadata remains explicit. Bindings include full typed messages and tools (including reasoning
+detail IDs, indices, signatures and formats), task declarations, parent links, sibling fields,
+persisted verdict and selected eligibility, while excluding publication-generated history/timestamps. `--check-plan`
+recomputes the full report from the actual inputs: parsing and self-reported hashes confer no
+authority. `--previous previous-plan.json` additionally revalidates the predecessor and retains its
+group/split assignments when new members join. A bridge between previously separate groups is an
+explicit persistent conflict. Predecessor chains are limited to 16 plans.
+
+Exit status is `0` for complete lexical coverage with no quarantined component, `2` for incomplete
+or quarantined results, and `1` for malformed/invalid input or failed exact plan verification.
+`complete_no_match` describes the captured canonical source and pinned export policy only.
+`semantic_status` is always `not_run`, and effective tokenizer/template prompt separation remains
+`unknown`: a student template may omit historical reasoning retained by source prefixes. Unsupported
+semantic/embedding policy fields reject. This command changes no production admission, export,
+artifact or receipt behavior; existing unscreened v2/v3 artifacts retain their contracts. Actual
+semantic recall, false-positive rates, real protected coverage and historical model exposure remain
+unqualified. Screening cannot prove that a teacher or base model never saw a benchmark in pretraining.
 
 ### Offline judge calibration
 
