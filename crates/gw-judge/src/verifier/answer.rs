@@ -5,7 +5,9 @@
 //! unchanged. SQL/schema
 //! string inequality stays Undecided; the task's answer policy determines its admission consequence.
 
-use gw_schema::{NumericComparison, VerificationContract, VerificationKind, parse_finite_decimal};
+#[cfg(test)]
+use gw_schema::NumericComparison;
+use gw_schema::{VerificationContract, VerificationKind, VerificationOutcome};
 
 /// The three-state outcome of a rule-based answer comparison. Distinct from a plain `bool` so the
 /// `Undecided` case (a parse failure or unavailable oracle) remains distinct from `NonMatch`.
@@ -27,29 +29,6 @@ fn normalize_answer(s: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ")
         .to_ascii_lowercase()
-}
-
-/// All arguments are finite and tolerance nonnegative. Binary64 subtraction gives symmetric
-/// rounded distance; an overflowing distance is infinity and exceeds the finite bound.
-fn within_tolerance(actual: f64, expected: f64, bound: f64) -> bool {
-    (actual - expected).abs() <= bound
-}
-
-fn compare_numeric(answer: &str, expected: &str, settings: &NumericComparison) -> AnswerComparison {
-    let Some(actual) = settings.extract(answer).and_then(parse_finite_decimal) else {
-        return AnswerComparison::Undecided;
-    };
-    let Some(expected) = parse_finite_decimal(expected) else {
-        return AnswerComparison::Undecided;
-    };
-    let Ok(bound) = settings.bound(expected) else {
-        return AnswerComparison::Undecided;
-    };
-    if within_tolerance(actual, expected, bound) {
-        AnswerComparison::Match
-    } else {
-        AnswerComparison::NonMatch
-    }
 }
 
 /// Split a set/ranking answer into normalized tokens on commas and whitespace, dropping empties.
@@ -103,12 +82,23 @@ pub(super) fn compare_answer(
         return AnswerComparison::Undecided;
     };
     match contract.kind {
-        VerificationKind::NumericMatch => contract
-            .numeric
-            .as_ref()
-            .map_or(AnswerComparison::Undecided, |settings| {
-                compare_numeric(answer, expected, settings)
-            }),
+        VerificationKind::NumericMatch => {
+            contract
+                .numeric
+                .as_ref()
+                .map_or(
+                    AnswerComparison::Undecided,
+                    |settings| match crate::evaluate_numeric_answer(
+                        answer,
+                        Some(expected),
+                        settings,
+                    ) {
+                        VerificationOutcome::Pass => AnswerComparison::Match,
+                        VerificationOutcome::Fail => AnswerComparison::NonMatch,
+                        VerificationOutcome::Unknown => AnswerComparison::Undecided,
+                    },
+                )
+        }
         VerificationKind::SetMatch => compare_set(answer, expected),
         // SchemaShape / SqlResultMatch have no cheap complete comparator yet → conservative, and a
         // non-match routes to rescue (Undecided), never a hard reject.

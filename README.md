@@ -226,6 +226,29 @@ Missing legacy metadata and integrity failures exit with status 1 and emit no su
 See the adapter guide for the pinned environment, rejection limits, and unresolved split/lineage
 qualification.
 
+### Fresh numeric rewards
+
+The same [external TRL adapter](adapters/trl/README.md#fresh-numeric-rewards) can evaluate fresh
+numeric completions against a frozen corpus of reviewed tasks. Export the corpus directly from
+task documents, then verify the captured bytes:
+
+```sh
+gw reward export --tasks examples/reviewed-numeric-tasks.json > numeric-corpus.json
+gw reward verify --stdin < numeric-corpus.json
+```
+
+Export validates every document and cross-document task/group declaration before selecting unique
+declared Train tasks in source order. The self-contained artifact retains the prompt, literal
+oracle, numeric semantics, source, rights, group, split, and review observations. The reward callback
+passes only user messages and separate task references to TRL; teacher records are not inputs.
+
+`gw reward evaluate --stdin` uses the shared pure numeric evaluator for a complete bound batch.
+Factual Pass maps to `1.0`, decisive Fail to `0.0`, and Unknown to a null reward. The first Python
+callback aborts the entire batch on Unknown, timeout, stale bindings, or incomplete output before
+TRL receives numeric rewards. Its pinned CPU qualification exercises the real GRPO data loader
+and reward dispatcher with synthetic completions, with model computation disabled. Real corpus
+quality, split qualification, eligible student lineage, and a GRPO learning comparison remain open.
+
 ### Pure preference preparation
 
 `gw_engine::prepare_preference_pair` validates two records against a versioned judge-ranking
