@@ -4,7 +4,7 @@
 //! blinding. One envelope carries one metric and reference protocol for every outcome. Strict
 //! decoding rejects per-candidate contract overrides and unsupported reference sources.
 
-use gw_schema::TrainingRecord;
+pub use gw_schema::CandidateBinding;
 use serde::{Deserialize, Serialize};
 
 use crate::{EvalError, Result};
@@ -113,39 +113,6 @@ pub enum DigestAlgorithm {
 pub enum SamplingAssumption {
     /// Distinct prompt hashes represent independent draws from the declared evaluation population.
     IndependentPrompts,
-}
-
-/// Exact identity of one declared candidate.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CandidateBinding {
-    /// Stable record identity.
-    pub record_id: String,
-    /// Run identity, checked independently of the content hash.
-    pub run_id: String,
-    /// Training area, checked independently of the content hash.
-    pub training_area: String,
-    /// Full recomputed prompt hash.
-    pub prompt_hash: String,
-    /// Full recomputed [`gw_storage::record_hash`], covering the record's content projection.
-    /// This hash excludes mutable lifecycle, judging and generation metadata by storage contract.
-    pub record_hash: String,
-}
-
-impl CandidateBinding {
-    /// Bind a record using freshly computed hashes, without trusting its stored hash fields.
-    ///
-    /// # Errors
-    /// Returns [`EvalError::Storage`] if canonical content serialization fails.
-    pub fn from_record(record: &TrainingRecord) -> Result<Self> {
-        Ok(Self {
-            record_id: record.record_id.clone(),
-            run_id: record.provenance.run_id.clone(),
-            training_area: record.training_area.clone(),
-            prompt_hash: gw_storage::prompt_hash(&record.messages)?,
-            record_hash: gw_storage::record_hash(record)?,
-        })
-    }
 }
 
 /// One candidate's independent outcome under the envelope's single metric/reference contract.

@@ -687,6 +687,7 @@ gw gen run      Headless run: generate → grade → admit → persist; prints t
 gw gen tui      The same run with the live ratatui dashboard.
 gw gen export   Export admitted records from a store to a Parquet shard (no providers).
 gw gen replay   Resume a started run from its persisted checkpoints.
+gw eval fit-calibration    Offline group-equal judge fitting from supplied evidence (JSON).
 gw eval audit-separation   Score diagnostics and optional independent outcome evidence (JSON).
 gw eval promote            Variance-aware promotion gate over two eval_results.json (JSON).
 ```
@@ -808,6 +809,66 @@ a provider:
 
 Both accept `--check` to opt into decision-bearing process exits (`0` pass · `1` operational error ·
 `2` gate rejects) for CI.
+
+### Offline judge calibration
+
+```sh
+gw eval fit-calibration --config panel.toml --records candidates.json --evidence calibration.json
+```
+
+This command resolves the configured area, rubric and ordered judges through the production request
+builder. It reads a JSON array of complete `TrainingRecord` values and a strict version 1
+`CalibrationEvidence` document, then prints a `CalibrationReport`. It makes no provider calls and
+needs no credentials or database. Configuration layering remains defaults → TOML → `GW_` environment.
+Request/control validation and duplicate effective-judge rejection apply; automatic-admission
+feasibility is not a prerequisite for descriptive fitting. The records file is a lookup pool with
+unique `(run_id, record_id)` pairs. The evidence's `fit` and `assessment` rows define the entire
+measured population; unreferenced pool records are neither evaluated nor bound in the snapshot.
+
+Prepare declarations with `gw_judge::ResolvedCalibrationPanel::new`, and bind already-collected raw
+response text with its `observation` method. `gw_storage::capture_candidate_binding` recomputes full
+candidate/run/area/prompt/content identities. These helpers establish request applicability only;
+they do not attest historical collection, successful termination, served model weights, independent
+tasks, blinding, or truthful labels. The evidence accepts only `supplied_unverified` runtime
+provenance. The panel declaration is separate from each candidate-specific request contract; every
+request is rebuilt from the complete ordered message sequence using the production renderer.
+
+The evidence declares one versioned higher-is-better [0,1] reference target/protocol, an explicit
+nonnegative `beta`, a versioned map to globally scoped prompt groups, and disjoint `fit` and
+`assessment` populations. Equal prompt hashes must share a group across runs. Each declared
+candidate needs a known label and exactly one usable observation from each ordered judge. Unknown
+labels, uncertain verdicts and missing/failed collection make the population incomplete; rows and
+judges are never silently dropped. Payload text is parsed using production JSON extraction,
+normalization and verdict rules. A supplied normalized score must match that result exactly.
+
+The `group_mean_squared_score_error_v1` recipe first averages squared quality-score errors within
+each group, then averages groups equally. Weights are proportional to
+`exp(-beta * (loss - minimum_loss))`; `beta = 0` is an explicit equal-weight control. The backend is
+pinned to `libm = 0.2.16`, with sequential accumulation in canonical group/candidate order and
+explicit panel order for weight normalization. Zero/underflowed or nonfinite weights reject. This
+is score fitting, with no probability-calibration interpretation or reputation fallback.
+
+Every declared floating-point field uses a finite binary64 bit object, such as
+`{"binary64":"3fe0000000000000"}` for 0.5; decimal alternatives, duplicate tags, unknown keys,
+malformed bit objects and nonfinite encodings reject. Optional unknown values remain explicit. Full production request JSON
+and exact `raw.response` text remain opaque strings through persistence and hashing. Integer
+versions, counts, seeds and caps remain integers. Ordinary record JSON is unchanged.
+
+A complete snapshot seals the canonical evidence, exact losses/weights, group/candidate counts,
+zero exclusions, frozen-weight descriptive assessment, the declared constant-rho assumption, and
+`computed_unqualified` status. Fit identity excludes held-out inputs/results, whole-corpus
+provenance containers and rho; the complete identity binds them. Held-out labels cannot influence
+fitted weights. `gw_judge::verify_calibration_snapshot` refits and compares exact saved bits and
+identities, rejecting mismatches without a tolerance or automatic rewrite.
+
+Exit codes are `0` for `computed_unqualified`, `2` for `incomplete_evidence`, and `1` for invalid
+input or an operational error. Semantic invalidity includes an `invalid_evidence` report;
+malformed JSON/configuration fails before a report is emitted. Invalid/incomplete reports contain
+no snapshot. There is no quality-qualified status or runtime snapshot adoption in this command.
+Actual held-out quality, robustness, and empirical correlation remain unmeasured. Saved-bit replay
+is distinct from target/toolchain/build-specific refitting checks: this recipe supports fixed Rust
+exp dispatch on aarch64 and x86_64, while exact test results qualify only the configurations where
+the fixtures actually run. Other architectures reject this recipe.
 
 ### Independent selector outcomes
 

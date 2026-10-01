@@ -13,6 +13,8 @@ workspace = true
 
 [dependencies]
 gw-schema.workspace = true
+gw-format.workspace = true
+libm = { version = "=0.2.16", default-features = false }
 gw-providers.workspace = true
 gw-storage.workspace = true
 serde = { workspace = true, features = ["derive"] }

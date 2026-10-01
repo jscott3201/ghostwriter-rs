@@ -301,7 +301,7 @@ fn match_records<'a>(
             );
             continue;
         };
-        let Ok(actual) = CandidateBinding::from_record(record) else {
+        let Ok(actual) = gw_storage::capture_candidate_binding(record) else {
             invalid(
                 report,
                 OutcomeReason::RecordHashFailed {

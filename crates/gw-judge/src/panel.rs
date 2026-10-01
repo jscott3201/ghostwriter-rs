@@ -21,10 +21,11 @@
 
 use std::collections::BTreeMap;
 
+#[cfg(test)]
+use crate::interpretation::{normalize_score, parse_verdict};
 use futures::StreamExt;
 use gw_providers::{ChatRequest, Provider, ReasoningParam, StreamDelta};
 use gw_schema::{Content, JudgeVote, Message, ReasoningEffort, Role};
-use serde::Deserialize;
 
 use crate::decision::Verdict;
 use crate::error::{JudgeError, Result};
@@ -40,7 +41,7 @@ pub enum JudgeScoring {
 
 /// Version of the response extraction, score normalization, verdict parsing, and grade audit
 /// interpretation. Bump whenever those semantics change so prior cached grades cannot survive it.
-pub(crate) const JUDGE_INTERPRETATION_VERSION: u32 = 1;
+pub const JUDGE_INTERPRETATION_VERSION: u32 = 1;
 
 /// Default explicit judge reasoning budget. Judges need enough reasoning to inspect a trace, but
 /// unlike teachers they must preserve content headroom for the verdict JSON.
@@ -268,77 +269,11 @@ impl Grade {
     }
 }
 
-/// The minimal JSON contract a judge is asked to emit (so the panel can parse it deterministically).
-/// A structurally invalid response returns [`JudgeError::JudgeParse`] and is not cached.
-#[derive(Debug, Deserialize)]
-struct JudgeResponse {
-    /// `0..1` (or `1..10` — normalized by [`normalize_score`]).
-    score: f64,
-    /// `"accept" | "revise" | "reject" | "uncertain"`.
-    verdict: String,
-    #[serde(default)]
-    confidence: Option<f64>,
-    /// Predicted panel-mean score (the SP/BTS meta-prediction).
-    #[serde(default)]
-    meta_prediction: Option<f64>,
-    #[serde(default)]
-    dimensions: Option<BTreeMap<String, f64>>,
-    #[serde(default)]
-    rationale: Option<String>,
-}
-
-/// Normalize a raw JSON score onto `[0, 1]`: values above 1 are divided by 10, then the result is
-/// clamped to `[0, 1]`. Non-finite values become zero. This is the existing normalization policy,
-/// shared by scores and meta-predictions; it does not derive scores from token probabilities.
-fn normalize_score(raw: f64) -> f64 {
-    if !raw.is_finite() {
-        return 0.0;
-    }
-    let s = if raw > 1.0 { raw / 10.0 } else { raw };
-    s.clamp(0.0, 1.0)
-}
-
-/// Parse a judge verdict token to the per-grade [`Verdict`]; an unknown token is `Uncertain`.
-fn parse_verdict(token: &str) -> Verdict {
-    match token.trim().to_ascii_lowercase().as_str() {
-        "accept" | "admit" => Verdict::Accept,
-        "revise" => Verdict::Revise,
-        "reject" => Verdict::Reject,
-        _ => Verdict::Uncertain,
-    }
-}
-
-/// Extract the JSON object body from a judge completion, tolerating the two most common LLM output
-/// shapes: a fenced ```json … ``` block and a prose preamble/suffix around the object. Strips a
-/// leading/trailing markdown code fence, then returns the substring from the FIRST `{` to the LAST
-/// `}` (the outermost object). Returns `None` if no brace pair is present at all.
-fn extract_json(text: &str) -> Option<&str> {
-    // Drop a leading ```json / ``` fence and a trailing ``` fence if present.
-    let mut t = text.trim();
-    if let Some(rest) = t.strip_prefix("```") {
-        // Skip an optional language tag on the opening fence line (e.g. ```json\n…).
-        let after_tag = rest.find('\n').map_or(rest, |nl| &rest[nl + 1..]);
-        t = after_tag
-            .trim_end()
-            .strip_suffix("```")
-            .unwrap_or(after_tag);
-        t = t.trim();
-    }
-    // Extract the outermost {...} so a prose preamble/suffix around the object still parses.
-    let start = t.find('{')?;
-    let end = t.rfind('}')?;
-    if end > start {
-        Some(&t[start..=end])
-    } else {
-        None
-    }
-}
-
 /// Parse the accumulated judge response text into a [`Grade`]. A SUCCESSFUL deserialize (including a
 /// judge that legitimately voted `"uncertain"`) returns `Ok`; a STRUCTURAL parse failure on a
 /// non-empty body returns [`JudgeError::JudgeParse`] (V2) so the caller does NOT freeze a degenerate
 /// `0.0`/`Uncertain` grade in the cache and the engine can retry — mirroring the empty-completion
-/// path. Markdown-fenced JSON and a prose-wrapped object are tolerated via [`extract_json`].
+/// path. Markdown-fenced JSON and a prose-wrapped object are tolerated by the shared interpretation helper.
 ///
 /// # Errors
 /// Returns [`JudgeError::JudgeParse`] if neither the raw text nor the extracted `{...}` body
@@ -349,21 +284,15 @@ fn parse_grade(judge: &PanelJudge, response_text: &str) -> Result<Grade> {
         "scoring_used": JudgeScoring::JsonScore.as_str(),
         "interpretation_version": JUDGE_INTERPRETATION_VERSION,
     });
-    // Try the trimmed body first, then the fence/prose-stripped {...} extraction.
-    let parsed = serde_json::from_str::<JudgeResponse>(response_text.trim()).or_else(|first_err| {
-        match extract_json(response_text) {
-            Some(body) => serde_json::from_str::<JudgeResponse>(body),
-            None => Err(first_err),
-        }
-    });
+    let parsed = crate::interpret_judge_response(response_text);
     match parsed {
         Ok(r) => Ok(Grade {
             effective_contract: None,
             judge_model: judge.slug.clone(),
-            score: normalize_score(r.score),
-            verdict: parse_verdict(&r.verdict),
-            confidence: r.confidence.unwrap_or(0.0).clamp(0.0, 1.0),
-            meta_prediction: r.meta_prediction.map(normalize_score),
+            score: r.score,
+            verdict: r.verdict,
+            confidence: r.confidence,
+            meta_prediction: r.meta_prediction,
             dimensions: r.dimensions,
             rationale: r.rationale,
             raw,

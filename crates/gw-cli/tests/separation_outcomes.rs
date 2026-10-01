@@ -47,7 +47,7 @@ impl Fixture {
         let store = seed_store(&db, "run-1", &records).await;
         let corpus: Vec<_> = records
             .iter()
-            .map(|record| CandidateBinding::from_record(record).unwrap())
+            .map(|record| gw_storage::capture_candidate_binding(record).unwrap())
             .collect();
         let outcomes = corpus
             .iter()

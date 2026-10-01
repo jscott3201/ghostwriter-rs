@@ -9,6 +9,7 @@
 
 mod accounting;
 pub mod artifact;
+pub mod calibration;
 pub mod eval;
 pub mod export;
 pub mod replay;

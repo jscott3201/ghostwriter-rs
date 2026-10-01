@@ -307,11 +307,7 @@ async fn grade_and_consense(
 ) -> Result<GradeOutcome> {
     area.assess_admission()?;
     let content_hash = record_hash(rec)?;
-    let candidate_render = gw_format::render(
-        &rec.messages,
-        TrlFormat::OpenAiMessages,
-        CotPolicy::Supervised,
-    )?;
+    let candidate_render = gw_judge::render_judge_candidate(&rec.messages)?;
 
     let panel = grade_panel_cached(
         &clients.store,

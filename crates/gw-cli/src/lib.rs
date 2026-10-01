@@ -14,6 +14,7 @@
 //! | `gw gen tui`             | live   | same run WITH the ratatui dashboard over the event stream |
 //! | `gw gen export`          | pure   | admitted records → a Parquet shard (`gw_storage::Store::publish_export`) |
 //! | `gw gen replay`          | live   | resume a run from its persisted shard checkpoints         |
+//! | `gw eval fit-calibration` | pure | supplied offline observations and reference labels → unqualified snapshot |
 //! | `gw eval audit-separation`| pure  | score diagnostics and independent outcome comparison     |
 //! | `gw eval promote`        | pure   | variance-aware promotion gate over two `eval_results.json` |
 //! | `gw artifact verify --stdin` | pure | verify one immutable Parquet snapshot and report its raw digest |
@@ -43,7 +44,7 @@ use crate::cli::{ArtifactCommand, Cli, Command, EvalCommand, GenCommand};
 pub enum CommandOutcome {
     /// The command completed successfully, or a gate command rejected while `--check` was off.
     Success,
-    /// The command ran successfully and an opt-in `--check` gate rejected.
+    /// A completed gate rejected, or offline calibration evidence is incomplete.
     GateRejected,
 }
 
@@ -99,6 +100,7 @@ pub async fn dispatch(cli: Cli) -> anyhow::Result<CommandOutcome> {
                 .map(|()| CommandOutcome::Success),
         },
         Command::Eval(eval_cmd) => match eval_cmd {
+            EvalCommand::FitCalibration(args) => commands::calibration::fit(args),
             EvalCommand::AuditSeparation(args) => commands::eval::audit_separation(args).await,
             EvalCommand::Promote(args) => commands::eval::promote_cmd(args).await,
         },
