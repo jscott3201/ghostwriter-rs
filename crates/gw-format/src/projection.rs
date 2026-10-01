@@ -41,20 +41,7 @@ pub fn project_sft_units(
     cot: CotPolicy,
     turns: MultiTurnLoss,
 ) -> Result<Vec<SftTrainingUnit>> {
-    if record.messages.last().map(|message| message.role) != Some(Role::Assistant) {
-        return Err(FormatError::Projection(
-            "training units require a terminal assistant target".into(),
-        ));
-    }
-    let mut indices: Vec<_> = record
-        .messages
-        .iter()
-        .enumerate()
-        .filter_map(|(index, message)| (message.role == Role::Assistant).then_some(index))
-        .collect();
-    if turns == MultiTurnLoss::FinalTurnOnly {
-        indices = indices.into_iter().rev().take(1).collect();
-    }
+    let indices = gw_schema::sft_source_targets(&record.messages, target, turns)?;
     indices
         .into_iter()
         .map(|target_index| {

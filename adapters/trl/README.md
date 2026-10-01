@@ -169,6 +169,48 @@ The manifest keeps provenance/rights and model execution lineage (#39/#45), grou
 split qualification (#41), contamination screening, and held-out training benefit
 explicitly unknown where unproven. No bypass or evaluation adapter is included.
 
+## Source-screened inputs
+
+`gw gen export-screened` publishes metadata version 3 over the existing reviewed-task columns.
+Its witness retains the complete text-free source-screening plan, declared run corpus, protected
+input identities and coverage, population bindings, exclusions and emitted component members.
+The actual command reruns the pure planner against captured database/protected inputs and checks
+all declared database membership inside publication transactions. Its `transaction_checked`
+witness is separate from the nested planner's `supplied_files_only` report.
+
+The strengthened frozen plan uses version 2, and its publication witness uses version 2 inside
+artifact metadata version 3. Declarations, protected manifests and the lexical recipe retain their
+v1 grammar. Each population binding includes a digest of all exported typed message fields
+(including reasoning-detail metadata and tool turns), task declarations/contract, area and verdict.
+The artifact verifier recomputes that digest from each row and checks its record hash and Train
+split against the captured plan. Policy limits and complete protected-summary requirements share
+the same pure validator used during planning. Earlier screened plans/artifacts lack this binding
+and must be regenerated; raw metadata version 1 with v2/v3 columns remains supported unchanged.
+Top-level tool definitions remain in the full raw input identity and are not added to the columns.
+The frozen plan also retains the complete population's required field union, including excluded
+records and tool definitions. Every protected summary must cover that union; independently decoded
+rows must fit its declared fields and the same supported source shapes used by planning. Media,
+encrypted reasoning, non-object arguments, invalid tool links, and unsupported training prefixes
+cannot claim complete screening. The shared pure checks preserve the formatter's existing tool
+and clean-field rules; calls without results retain their existing acceptance behavior.
+
+The adapter verifies the same captured bytes through Rust and checks strict version-specific
+metadata. Screened inputs currently require `open_ai_messages` with exactly matching CoT and turn
+policies. `all_assistant` requires `assistant_prefix_v1`; `final_turn_only` requires
+`full_conversation_final_v1`. These checks run before row decoding, including zero-row inputs.
+Gemma4 and mismatched policies fail before an output directory is created. Raw metadata version 1
+retains its historical consumer behavior.
+
+Each expanded example uses the frozen connected component as its group, retains the original
+`declared_task.group`, and carries plan, policy, input, population and component identities.
+Those identities enter the recipe, example and build identities. The manifest reports the supplied
+source lexical result and transaction population check while retaining `semantic_screening=not_run`
+and `effective_prompt_separation=unknown`. The pinned Qwen template can omit historical reasoning
+and collapse source-distinct final prompts. The tested collision does not upgrade that claim.
+Effective separation would require the entire held-out/excluded corpus, which this Train-only
+artifact does not supply. Tool support and empirical contamination/benefit qualification remain
+outside this adapter's current evidence.
+
 ## Tests and fixture provenance
 
 ```sh
@@ -194,4 +236,16 @@ Rust source:
 ```sh
 GW_REGENERATE_TRL_FIXTURES="$PWD/adapters/trl/tests/fixtures" \
   cargo nextest run -p gw-storage -E 'test(snapshot_)' --locked --profile ci
+```
+
+Screened fixtures additionally pass through the actual Rust CLI, full trusted planner rerun and
+SQLite publication/recovery. They cover prefix/final layouts, empty output, incompatible targets,
+cross-task components, and source-distinct prompts that collide under the pinned template. Python
+independently mutates witness versions, membership, components and qualification claims. The actual
+installed CLI reaches the real collator and SFTTrainer dataloader with both supported layouts.
+Regenerate only these synthetic fixtures with:
+
+```sh
+GW_REGENERATE_SCREENED_TRL_FIXTURES="$PWD/adapters/trl/tests/fixtures" \
+  cargo nextest run -p gw-cli -E 'binary(screened_export)' --locked --profile ci
 ```

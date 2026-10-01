@@ -300,7 +300,7 @@ fn changed_contents_claimed_hashes_and_forged_reports_cannot_certify_themselves(
     forged.edges.clear();
     forged.plan_id = String::new();
     forged.plan_id =
-        gw_storage::canonical_json_hash(&serde_json::json!(["frozen-screening-plan-v1", &forged]))
+        gw_storage::canonical_json_hash(&serde_json::json!(["frozen-screening-plan-v2", &forged]))
             .unwrap();
     assert!(validate_screening_plan(&rows, &sets, &forged).is_err());
     assert!(prepare_screening(&rows, &declared, &sets, Some(&forged)).is_err());

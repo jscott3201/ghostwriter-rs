@@ -95,12 +95,27 @@ fn prepare(
     let mut projections = vec![];
     let mut protected_projections = vec![];
     let mut bounded = true;
-    for record in &records {
+    let classifications: Vec<_> = records
+        .iter()
+        .map(|record| {
+            classify_screening_training_source(
+                &record.messages,
+                record.tools.as_deref(),
+                policy.target,
+                policy.multi_turn_loss,
+            )
+        })
+        .collect();
+    let fields: BTreeSet<_> = classifications
+        .iter()
+        .flat_map(|shape| shape.required_fields.iter().copied())
+        .collect();
+    for (record, classification) in records.iter().zip(classifications) {
         let owner = format!(
             "record/{}",
             intake::hash("screening-record-coordinate-v1", &intake::key(record))?
         );
-        match projection::project_record(record, &owner, policy, &mut index) {
+        match projection::project_record(record, &owner, policy, classification, &mut index) {
             Ok(projected) => {
                 for reason in &projected.unsupported {
                     incomplete.push(intake::issue(reason, intake::subject(record)));
@@ -114,7 +129,6 @@ fn prepare(
             }
         }
     }
-    let fields: BTreeSet<_> = index.segments.iter().map(|segment| segment.field).collect();
     let mut protected_inputs =
         intake::protected_coverage(&protected, policy, &fields, &mut incomplete)?;
     if bounded {
@@ -193,6 +207,14 @@ fn prepare(
     edges.dedup();
     matches.sort();
     matches.dedup();
+    if incomplete.is_empty() {
+        validate_complete_screening_protected(
+            policy,
+            &fields.iter().copied().collect::<Vec<_>>(),
+            &protected_inputs,
+        )
+        .map_err(|reason| ScreeningError(reason.into()))?;
+    }
     incomplete.sort();
     incomplete.dedup();
     let (groups, grouping_id) = screening_groups::groups(&records, &edges, previous, &matches)?;
@@ -264,7 +286,7 @@ fn prepare(
     };
     let policy_id = intake::hash("screening-policy-v1", policy)?;
     let screening_input_id = intake::hash(
-        "screening-captured-population-v1",
+        "screening-captured-population-v2",
         &(&declaration, &bindings),
     )?;
     let protected_input_id = intake::hash(
@@ -275,7 +297,7 @@ fn prepare(
             .collect::<Vec<_>>(),
     )?;
     let mut plan = FrozenScreeningPlan {
-        version: SCREENING_VERSION,
+        version: SCREENING_PLAN_VERSION,
         counts: ScreeningCounts {
             population_records: bindings.len() as u64,
             groups: groups.len() as u64,
@@ -288,6 +310,7 @@ fn prepare(
         },
         declaration,
         population: bindings,
+        required_fields: fields.into_iter().collect(),
         screening_input_id,
         policy_id,
         protected_inputs,
@@ -308,7 +331,7 @@ fn prepare(
         previous: previous.cloned().map(Box::new),
         plan_id: String::new(),
     };
-    plan.plan_id = intake::hash("frozen-screening-plan-v1", &plan)?;
+    plan.plan_id = intake::hash("frozen-screening-plan-v2", &plan)?;
     Ok(plan)
 }
 

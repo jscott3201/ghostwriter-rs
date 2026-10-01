@@ -102,7 +102,11 @@ mod record_mutations;
 mod records;
 mod run_manifest;
 mod runledger;
+mod screened_publication;
+mod screening_binding;
+mod screening_witness;
 pub use run_manifest::RunMode;
+pub use screening_binding::capture_screening_input;
 mod startup;
 mod store;
 #[cfg(test)]
