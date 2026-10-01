@@ -74,6 +74,7 @@ mod observation;
 mod observed_sse;
 mod request;
 mod retry;
+pub mod serving_profile;
 mod sse;
 
 use std::pin::Pin;
