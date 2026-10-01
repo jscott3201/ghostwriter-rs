@@ -4,7 +4,7 @@ use gw_schema::{ExportArtifact, ExportOptions, ExportScope, LifecycleState, Trai
 use serde::{Deserialize, Serialize};
 
 use crate::artifact::{ExportPlan, Member, integrity, projected_hash, validate_rows};
-use crate::export::{Projected, is_sft_eligible, project};
+use crate::export::{Projected, is_selected_admitted, project};
 use crate::publication::publication_error;
 use crate::{Result, Store, now_rfc3339};
 
@@ -259,7 +259,7 @@ async fn selected_records(
         // Validate every receipt state and purpose before restoring, writing, or acknowledging.
         // Historical NULL ordinals remain valid under the shared history contract.
         crate::record_data::check_history(tx, &record).await?;
-        if record.record_id != member.record_id || !is_sft_eligible(&record) {
+        if record.record_id != member.record_id || !is_selected_admitted(&record) {
             return Err(integrity("selected export record is no longer eligible"));
         }
         if let ExportScope::Run { run_id } = &artifact.scope

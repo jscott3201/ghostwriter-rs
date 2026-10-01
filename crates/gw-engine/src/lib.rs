@@ -74,6 +74,7 @@ mod event;
 mod executor;
 mod grade;
 mod plan;
+mod preference;
 mod priors;
 mod revise;
 mod seed;
@@ -97,6 +98,7 @@ pub use grade::{
 };
 pub use gw_schema::AccountingPolicy;
 pub use plan::{CapturedSeedPlan, PreparedRun};
+pub use preference::prepare_preference_pair;
 pub use seed::{InMemorySeedSource, SeedItem, SeedSource, record_id};
 pub use sibling::{GroupOutcome, run_group};
 pub use step::{drive, drive_to_judged, evidence_key, is_terminal, step};

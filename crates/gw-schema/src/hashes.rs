@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 /// `lifecycle.history`). `completion_hash` deliberately excludes `reasoning`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub struct Hashes {
-    /// blake3 of canonicalized prompt messages (also the DPO pairing key / sibling group id).
+    /// blake3 of non-assistant prompt messages (sibling grouping only, not full-prefix proof).
     #[serde(default)]
     pub prompt_hash: String,
     /// blake3 of assistant content (EXCLUDES reasoning, so same answer / different CoT collapses).

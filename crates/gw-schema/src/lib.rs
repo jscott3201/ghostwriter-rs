@@ -15,7 +15,7 @@
 //! invariants of the contract in its shape:
 //!
 //! - **(a)** reasoning is a first-class sibling of `content`, never inlined (`Message`,
-//!   `PreferenceSide`).
+//!   `PreferenceRecord`).
 //! - **(f)** admission is never a plain mean — the schema stores only the inputs/outputs of
 //!   the harness-side consensus compute (`Judging`).
 //! - **`reasoning_effort` is `xhigh`, never `max`** — `ReasoningEffort` has no `Max` variant.
@@ -44,6 +44,7 @@ mod message;
 mod model_identity;
 mod numeric;
 mod preference;
+mod preference_numbers;
 mod provenance;
 mod rating;
 mod reasoning_quality;
@@ -120,7 +121,12 @@ pub use export::{
 };
 
 // --- §6.3 DPO preference export ---
-pub use preference::{PreferenceRecord, PreferenceSide};
+pub use preference::{
+    PREFERENCE_VERSION, PreferenceAssessment, PreferenceBindingStatus, PreferenceDirection,
+    PreferenceEvidence, PreferencePolicy, PreferenceRecord, PreferenceSource,
+    PreferenceSourceSnapshot, PreferenceTermination, PreferenceTiePolicy,
+    PreferenceUncertaintyPolicy,
+};
 
 // --- §5.3 decontamination config ---
 pub use decontam::{CANONICAL_PROTECTED_BENCHMARKS, DecontamConfig};

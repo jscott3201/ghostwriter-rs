@@ -350,7 +350,9 @@ pub async fn export_parquet_bytes(
 
 /// Judging records the individual grade; lifecycle records whether selection admitted the trace.
 /// Both are required so retained siblings and interrupted selection cannot enter an SFT dataset.
-pub(crate) fn is_sft_eligible(record: &TrainingRecord) -> bool {
+/// Preference preparation reuses this predicate for its chosen side without admitting negatives
+/// into SFT export.
+pub fn is_selected_admitted(record: &TrainingRecord) -> bool {
     record.judging.verdict == Some(Verdict::Admit)
         && matches!(
             record.lifecycle.state,

@@ -54,7 +54,7 @@ Ten crates in a strictly **acyclic** workspace — each tier depends only on the
 | `gw-schema` | Canonical serde data contract (no I/O). Everything depends on it. |
 | `gw-providers` | Streaming OpenAI-compatible client with chain-of-thought capture, GCRA rate limiting, and retries. |
 | `gw-storage` | Run / queue / provenance state (SQLite) and columnar Parquet export. |
-| `gw-format` | Chat-template rendering and the SFT / preference export projection. |
+| `gw-format` | Chat-template rendering, SFT projection and structural preference message projection. |
 | `gw-generate` | Gates provided user turns and generates teacher assistant responses. |
 | `gw-judge` | The deterministic verifier and the model judge-panel grading + admission. |
 | `gw-engine` | The headless orchestrator: the lifecycle state machine and sharded executor. |
@@ -206,6 +206,33 @@ You get one `out/dataset.parquet` file. Its footer records the target template, 
 `--dataset-version`, record counts, selection scope and artifact identity. The command prints the
 same manifest as JSON. It records a local publication receipt without changing generation run status
 or record lifecycle. Historical sidecars are ignored and left untouched.
+
+### Pure preference preparation
+
+`gw_engine::prepare_preference_pair` validates two records against a versioned judge-ranking
+assessment captured with `gw_storage::capture_preference_source`. It requires distinct record IDs,
+matching run and task identities, equal complete original prefixes, a selected admitted chosen
+record, supported verification authority, decisive grades, and a score gap strictly above the
+configured margin. Supplied source snapshots must match the actual records. Preference evidence
+encodes finite floating-point values as exact binary64 bit objects so JSON save-and-load preserves
+score identity; ordinary training-record JSON stays unchanged. Missing content hashes
+are recomputed; populated stale hashes are rejected. The score margin is a declared rule whose
+quality still needs empirical validation.
+
+The result contains explicit `prompt`, `chosen`, and `rejected` message arrays, source evidence,
+and separate content and decision identities. Reasoning remains separate from answer content.
+Supervised and stripped reasoning are supported; stripped removes reasoning from all three arrays
+while retaining the original messages in the evidence. Ordered plaintext reasoning details are
+supported only when their concatenation exactly equals the flat reasoning; training arrays emit
+that reasoning once. Tools, multimodal content, summary/encrypted or mismatched reasoning details,
+masked reasoning, and identical projected completions are rejected.
+
+This API performs no provider or store I/O. It validates terminal assistant message shape; source
+records do not capture stop/length metadata, so termination remains unknown. Receipt-to-output and
+decision-execution provenance remain explicitly unbound. A protocol revision is a declaration,
+not proof of which execution produced a grade. There is no DPO publication command or adapter
+qualification yet. SFT artifacts exclude retained rejected siblings and cannot serve as pair proof;
+real tokenizer loading and policy/reference likelihood masks still need separate qualification.
 
 ### Artifact publication and recovery
 

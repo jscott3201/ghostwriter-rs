@@ -13,7 +13,7 @@ use gw_schema::{
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use serde::{Deserialize, Serialize};
 
-use crate::export::{Projected, export_schema, is_sft_eligible, project, shard_content_hash};
+use crate::export::{Projected, export_schema, is_selected_admitted, project, shard_content_hash};
 use crate::{Result, StorageError};
 
 /// The sole authoritative custom footer entry. Adjacent files are never consulted.
@@ -52,7 +52,7 @@ impl ExportPlan {
         }
         let mut rows: Vec<Projected> = records
             .iter()
-            .filter(|r| is_sft_eligible(r))
+            .filter(|r| is_selected_admitted(r))
             .map(|record| project(record, ExportSchemaVersion::CURRENT))
             .collect::<Result<_>>()?;
         rows.sort_by(|a, b| a.record_id.cmp(&b.record_id));
