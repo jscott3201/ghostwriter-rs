@@ -75,3 +75,14 @@ def qualify_handoff(examples: list[dict], tokenizer) -> dict:
         "pretrained_weights": False, "forward_passes": 0, "optimizer_steps": 0,
         "shifted_answer_tokens": sum(len(e["shifted_answer_token_indices"]) for e in examples),
     }
+
+
+def qualify_prepared_handoff(prepared, tokenizer) -> dict:
+    """Consume only a whole immutable build loaded through actual verification and replay.
+
+    Handoff evidence cites the already-fixed input identity and never changes it.
+    """
+    from .prepared import VerifiedPrepared
+    if type(prepared) is not VerifiedPrepared:
+        raise ContractError("handoff source must be an actual verified and replayed prepared input")
+    return {"build_id": prepared.build_id, **qualify_handoff(prepared.examples, tokenizer)}

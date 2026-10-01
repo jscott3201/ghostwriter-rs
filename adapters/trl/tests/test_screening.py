@@ -2,6 +2,7 @@
 import copy
 import json
 import os
+from pathlib import Path
 import subprocess
 import sys
 
@@ -154,7 +155,7 @@ def test_screened_snapshot_path_and_nested_metadata_edits_cannot_rewrite_authori
     examples, manifest = build(snapshot, tokenizer, cot="masked", turns="all_assistant", max_length=2048)
     assert snapshot.data == original and path.read_bytes() == replacement
     assert len(examples) == 4
-    assert manifest["source_verification"] == snapshot.report
+    assert manifest["recipe"]["screening"]["plan_id"] == snapshot.report["artifact"]["screening"]["plan"]["plan_id"]
     before = copy.deepcopy(manifest)
     exposed["artifact"]["screening"] = None
     assert manifest == before
@@ -169,12 +170,16 @@ def test_installed_screened_cli_reaches_actual_collator_and_trainer_dataloader(g
         "--turns", turns, "--max-length", "2048", "--output", str(output), "--qualify-handoff",
     ], cwd=tmp_path, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
-    manifest = json.loads((output / "manifest.json").read_text())
+    from ghostwriter_trl.prepared import read_prepared
+    from ghostwriter_trl.tokenizer import load_tokenizer
+    loaded = read_prepared(output / "prepared.gwsft", gw, load_tokenizer(Path(os.environ["GW_TRL_TOKENIZER"])))
+    manifest = loaded.manifest
+    handoff = json.loads((output / "handoff.json").read_text())
     assert json.loads(result.stdout)["examples"] == count
-    assert manifest["trainer_handoff"]["real_collator"]["rows"] == count
-    assert manifest["trainer_handoff"]["real_sft_trainer_dataloader"]["rows"] == count
-    assert manifest["trainer_handoff"]["real_sft_trainer_dataloader"]["nonpadding_preserved"]
-    assert manifest["trainer_handoff"]["forward_passes"] == manifest["trainer_handoff"]["optimizer_steps"] == 0
+    assert handoff["real_collator"]["rows"] == count
+    assert handoff["real_sft_trainer_dataloader"]["rows"] == count
+    assert handoff["real_sft_trainer_dataloader"]["nonpadding_preserved"]
+    assert handoff["forward_passes"] == handoff["optimizer_steps"] == 0
     assert manifest["qualification_limits"]["effective_prompt_separation"] == "unknown"
 
 

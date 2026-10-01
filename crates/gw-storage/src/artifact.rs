@@ -230,23 +230,38 @@ pub struct ArtifactSnapshotReport {
 /// # Errors
 /// Returns the same integrity failures as [`verify_artifact`], and rejects missing legacy metadata.
 pub fn verify_artifact_snapshot(snapshot: Vec<u8>) -> Result<ArtifactSnapshotReport> {
+    Ok(verify_snapshot_with_rows(snapshot)?.0)
+}
+
+pub(crate) fn verify_snapshot_with_rows(
+    snapshot: Vec<u8>,
+) -> Result<(ArtifactSnapshotReport, Vec<Projected>)> {
     let byte_length = snapshot.len() as u64;
     let snapshot_blake3 = blake3::hash(&snapshot).to_hex().to_string();
-    let ArtifactVerification::Verified(artifact) = verify_reader(bytes::Bytes::from(snapshot))?
-    else {
+    let (verification, rows) = verify_reader_with_rows(bytes::Bytes::from(snapshot))?;
+    let ArtifactVerification::Verified(artifact) = verification else {
         return Err(integrity(
             "snapshot verification requires authoritative artifact metadata",
         ));
     };
-    Ok(ArtifactSnapshotReport {
-        report_version: 1,
-        artifact,
-        byte_length,
-        snapshot_blake3,
-    })
+    Ok((
+        ArtifactSnapshotReport {
+            report_version: 1,
+            artifact,
+            byte_length,
+            snapshot_blake3,
+        },
+        rows,
+    ))
 }
 
 fn verify_reader<R: ChunkReader + 'static>(reader: R) -> Result<ArtifactVerification> {
+    Ok(verify_reader_with_rows(reader)?.0)
+}
+
+fn verify_reader_with_rows<R: ChunkReader + 'static>(
+    reader: R,
+) -> Result<(ArtifactVerification, Vec<Projected>)> {
     let builder = ParquetRecordBatchReaderBuilder::try_new(reader)?;
     let entries: Vec<_> = builder
         .metadata()
@@ -257,7 +272,7 @@ fn verify_reader<R: ChunkReader + 'static>(reader: R) -> Result<ArtifactVerifica
         .filter(|entry| entry.key == ARTIFACT_METADATA_KEY)
         .collect();
     if entries.is_empty() {
-        return Ok(ArtifactVerification::MissingLegacyMetadata);
+        return Ok((ArtifactVerification::MissingLegacyMetadata, Vec::new()));
     }
     if entries.len() != 1 {
         return Err(integrity("duplicate authoritative footer metadata"));
@@ -283,7 +298,7 @@ fn verify_reader<R: ChunkReader + 'static>(reader: R) -> Result<ArtifactVerifica
     if footer_count < 0 || footer_count as u64 != artifact.manifest.n_admitted {
         return Err(integrity("footer row count does not match the manifest"));
     }
-    Ok(ArtifactVerification::Verified(artifact))
+    Ok((ArtifactVerification::Verified(artifact), rows))
 }
 
 pub(crate) fn validate_rows(artifact: &ExportArtifact, rows: &[Projected]) -> Result<()> {

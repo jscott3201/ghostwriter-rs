@@ -1,0 +1,244 @@
+[
+  {
+    "name": "unchanged",
+    "op": "none",
+    "rust_accept": true,
+    "python_accept": true
+  },
+  {
+    "name": "later-masked-token-id",
+    "op": "replace",
+    "pointer": "/examples/3/input_ids/1",
+    "value": 0,
+    "rust_accept": true,
+    "python_accept": false
+  },
+  {
+    "name": "later-label",
+    "op": "replace",
+    "pointer": "/examples/3/labels/1",
+    "value": 0,
+    "rust_accept": false,
+    "python_accept": false
+  },
+  {
+    "name": "later-attention",
+    "op": "replace",
+    "pointer": "/examples/3/attention_mask/1",
+    "value": 0,
+    "rust_accept": false,
+    "python_accept": false
+  },
+  {
+    "name": "later-source-record",
+    "op": "replace",
+    "pointer": "/examples/3/source/record_id",
+    "value": "missing",
+    "rust_accept": false,
+    "python_accept": false
+  },
+  {
+    "name": "later-source-messages",
+    "op": "replace",
+    "pointer": "/examples/3/source/messages_json",
+    "value": "[]",
+    "rust_accept": false,
+    "python_accept": false
+  },
+  {
+    "name": "later-source-hash",
+    "op": "replace",
+    "pointer": "/examples/3/source/record_hash",
+    "value": "0000000000000000000000000000000000000000000000000000000000000000",
+    "rust_accept": false,
+    "python_accept": false
+  },
+  {
+    "name": "later-component",
+    "op": "replace",
+    "pointer": "/examples/3/source/screening/component_id",
+    "value": "0000000000000000000000000000000000000000000000000000000000000000",
+    "rust_accept": false,
+    "python_accept": false
+  },
+  {
+    "name": "later-example-count",
+    "op": "replace",
+    "pointer": "/examples/3/supervised_tokens",
+    "value": 0,
+    "rust_accept": false,
+    "python_accept": false
+  },
+  {
+    "name": "shifted-summary-count",
+    "op": "replace",
+    "pointer": "/manifest/effective_shifted_supervised_token_count",
+    "value": 0,
+    "rust_accept": false,
+    "python_accept": false
+  },
+  {
+    "name": "later-ownership",
+    "op": "replace",
+    "pointer": "/examples/3/ownership_offsets/1/0",
+    "value": 9999999,
+    "rust_accept": false,
+    "python_accept": false
+  },
+  {
+    "name": "target-count",
+    "op": "replace",
+    "pointer": "/manifest/candidate_target_count",
+    "value": 0,
+    "rust_accept": false,
+    "python_accept": false
+  },
+  {
+    "name": "source-byte-count",
+    "op": "replace",
+    "pointer": "/source/byte_length",
+    "value": 1,
+    "rust_accept": false,
+    "python_accept": false
+  },
+  {
+    "name": "invented-source-report",
+    "op": "replace",
+    "pointer": "/source",
+    "value": {
+      "artifact_id": "0000000000000000000000000000000000000000000000000000000000000000",
+      "byte_length": 1,
+      "snapshot_blake3": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "rust_accept": false,
+    "python_accept": false
+  },
+  {
+    "name": "producer-recipe-hash",
+    "op": "replace",
+    "pointer": "/manifest/recipe_id",
+    "value": "0000000000000000000000000000000000000000000000000000000000000000",
+    "rust_accept": true,
+    "python_accept": false
+  },
+  {
+    "name": "policy-mismatch",
+    "op": "replace",
+    "pointer": "/manifest/recipe/cot_policy",
+    "value": "stripped",
+    "rust_accept": false,
+    "python_accept": false
+  },
+  {
+    "name": "semantic-promotion",
+    "op": "replace",
+    "pointer": "/manifest/qualification_limits/semantic_screening",
+    "value": "passed",
+    "rust_accept": false,
+    "python_accept": false
+  },
+  {
+    "name": "unsupported-version",
+    "op": "replace",
+    "pointer": "/version",
+    "value": 2,
+    "rust_accept": false,
+    "python_accept": false
+  },
+  {
+    "name": "duplicate-example",
+    "op": "duplicate_example",
+    "rust_accept": false,
+    "python_accept": false
+  },
+  {
+    "name": "missing-example",
+    "op": "missing_example",
+    "rust_accept": false,
+    "python_accept": false
+  },
+  {
+    "name": "reordered-examples",
+    "op": "reorder_examples",
+    "rust_accept": false,
+    "python_accept": false
+  },
+  {
+    "name": "self-consistent-reordered-examples",
+    "op": "reorder_and_refs",
+    "rust_accept": true,
+    "python_accept": false
+  },
+  {
+    "name": "missing-required-null",
+    "op": "missing_null",
+    "rust_accept": false,
+    "python_accept": false
+  },
+  {
+    "name": "duplicate-json-field",
+    "op": "duplicate_field",
+    "rust_accept": false,
+    "python_accept": false
+  },
+  {
+    "name": "nested-duplicate-json-field",
+    "op": "nested_duplicate_field",
+    "rust_accept": false,
+    "python_accept": false
+  },
+  {
+    "name": "integer-as-float",
+    "op": "float",
+    "rust_accept": false,
+    "python_accept": false
+  },
+  {
+    "name": "integer-as-boolean",
+    "op": "boolean",
+    "rust_accept": false,
+    "python_accept": false
+  },
+  {
+    "name": "invalid-utf8",
+    "op": "utf8",
+    "rust_accept": false,
+    "python_accept": false
+  },
+  {
+    "name": "trailing-byte",
+    "op": "trailing",
+    "rust_accept": false,
+    "python_accept": false
+  },
+  {
+    "name": "truncated-frame",
+    "op": "truncated",
+    "rust_accept": false,
+    "python_accept": false
+  },
+  {
+    "name": "oversized-length",
+    "op": "length",
+    "rust_accept": false,
+    "python_accept": false
+  },
+  {
+    "name": "unsupported-framing-version",
+    "op": "magic",
+    "rust_accept": false,
+    "python_accept": false
+  },
+  {
+    "name": "stale-payload-digest",
+    "op": "stale",
+    "rust_accept": false,
+    "python_accept": false
+  },
+  {
+    "name": "corrupt-embedded-source",
+    "op": "source",
+    "rust_accept": false,
+    "python_accept": false
+  }
+]

@@ -95,6 +95,10 @@ mod cache;
 mod error;
 mod export;
 mod preference;
+mod prepared_sft;
+pub use prepared_sft::{
+    PreparedSftVerificationReport, VerifiedPreparedSft, verify_prepared_sft_snapshot,
+};
 mod publication;
 mod receipts;
 mod record_data;
