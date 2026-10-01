@@ -904,6 +904,59 @@ artifact or receipt behavior; existing unscreened v2/v3 artifacts retain their c
 semantic recall, false-positive rates, real protected coverage and historical model exposure remain
 unqualified. Screening cannot prove that a teacher or base model never saw a benchmark in pretraining.
 
+### Transactional source-screened export
+
+```sh
+gw gen export-screened --db gw-run.sqlite --plan plan.json --protected protected.json \
+  --out out/screened.parquet
+```
+
+The command captures the local protected contents once, queries every record in the plan's declared
+runs, and reruns the complete pure planner against those captured inputs. It closes the initial read
+transaction before the expensive rerun. Publication then rechecks the entire population and its
+input bindings inside the SQLite write transaction. Added or removed members and changed inputs in
+excluded records invalidate the plan. An unrelated run or a valid excluded aggregate-only update
+leaves the screening identity unchanged; damaged stored projections or history always reject.
+
+A complete plan may quarantine some components. The artifact emits exactly its eligible Train
+output members; incomplete plans fail, including empty selections. The output-run record count,
+requested candidate count, emitted row count and complete multi-run population count remain distinct.
+Metadata version 3 uses the existing reviewed-task columns and binds the full text-free plan,
+protected identities/coverage, exclusions, selected components and policy/layout. The publication
+witness says `transaction_checked`; the nested planner report retains `supplied_files_only`.
+The JSON result includes the publication ID and complete artifact qualification.
+
+The strengthened frozen plan uses version 2, and its publication witness uses version 2 inside
+artifact metadata version 3. Declarations, protected manifests and the lexical recipe retain their
+v1 grammar. Each population binding includes a digest of all exported typed message fields
+(including reasoning-detail metadata and tool turns), task declarations/contract, area and verdict.
+The artifact verifier recomputes that digest from each row and checks its record hash and Train
+split against the captured plan. Policy limits and complete protected-summary requirements share
+the same pure validator used during planning. Earlier screened plans/artifacts lack this binding
+and must be regenerated; raw metadata version 1 with v2/v3 columns remains supported unchanged.
+Top-level tool definitions remain in the full raw input identity and are not added to the columns.
+The frozen plan also retains the complete population's required field union, including excluded
+records and tool definitions. Every protected summary must cover that union; independently decoded
+rows must fit its declared fields and the same supported source shapes used by planning. Media,
+encrypted reasoning, non-object arguments, invalid tool links, and unsupported training prefixes
+cannot claim complete screening. The shared pure checks preserve the formatter's existing tool
+and clean-field rules; calls without results retain their existing acceptance behavior.
+
+Publication keeps the same staging/readback/rename/acknowledgment protocol as raw export. Explicit
+recovery uses `gw gen export --db gw-run.sqlite --resume-publication <id>` and needs no protected files;
+it rechecks the full current population even when the receipt was already acknowledged. A changed
+population cannot be acknowledged or republished. Implicit retry requires the same raw/screened
+flavor and frozen plan. Standalone export preserves record lifecycle; the shared
+`Store::publish_screened_export` API also supports engine acknowledgment. Automatic engine exports
+continue to use raw metadata version 1. Its historical v2/v3 column contracts and identities remain
+unchanged. The filesystem rename and SQLite acknowledgment are separate boundaries.
+
+The [TRL adapter](adapters/trl/README.md) accepts screened OpenAI-message inputs only when the
+reasoning, turn and layout policies match exactly, including empty artifacts. Expanded examples
+inherit connected component IDs and retain declared task groups separately. Semantic screening is
+still `not_run`, and effective tokenizer/template separation is `unknown`. These source checks do
+not establish empirical contamination recall or held-out training benefit.
+
 ### Offline judge calibration
 
 ```sh

@@ -13,6 +13,7 @@ use std::fmt;
 
 use thiserror::Error;
 
+pub use gw_schema::ToolSignal;
 use gw_schema::{Role, TrlFormat};
 
 /// Everything that can go wrong rendering, ingesting, or projecting a record.
@@ -101,20 +102,35 @@ pub enum FormatError {
     ToolIdentity(String),
 }
 
-/// One conversation signal a tool-dropping target cannot represent (INVARIANT i).
-///
-/// These are the three independent carriers of a tool trajectory, kept as distinct values so the
-/// diagnostic says exactly what the refused render would have lost — and so a test can assert the
-/// trigger set rather than a prose sentence.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ToolSignal {
-    /// An assistant turn declares `tool_calls` (the call itself: name + arguments).
-    ToolCalls,
-    /// A turn carries a `tool_call_id` — the explicit result link (INVARIANT i).
-    ToolCallId,
-    /// A turn is a [`Role::Tool`] result turn, which exists only to answer a call. On a dropping
-    /// target it becomes an ordinary `user` / `tool` text turn, so the pairing is gone.
-    ToolRole,
+impl From<gw_schema::RenderSourceIssue> for FormatError {
+    fn from(issue: gw_schema::RenderSourceIssue) -> Self {
+        match issue {
+            gw_schema::RenderSourceIssue::ControlToken { role, token } => {
+                Self::ControlTokenInContent { role, token }
+            }
+            gw_schema::RenderSourceIssue::UnsupportedTools {
+                target,
+                signals,
+                index,
+            } => Self::UnsupportedToolCalls {
+                target,
+                signals,
+                index,
+                recovery: ToolCallRecovery::CanonicalExportAndOfficialTemplate,
+            },
+        }
+    }
+}
+
+impl From<gw_schema::SftSourceIssue> for FormatError {
+    fn from(issue: gw_schema::SftSourceIssue) -> Self {
+        match issue {
+            gw_schema::SftSourceIssue::MissingTerminalAssistant => {
+                Self::Projection("training units require a terminal assistant target".into())
+            }
+            gw_schema::SftSourceIssue::Render(issue) => issue.into(),
+        }
+    }
 }
 
 /// How to obtain a tool-faithful training target when a target template refuses the trajectory.

@@ -7,92 +7,22 @@
 //! stage leaked channel markup — rendering it would double-frame and break the round-trip — so we
 //! reject it with [`FormatError::ControlTokenInContent`].
 
-use gw_schema::{Content, Message, Role};
-
 use crate::error::{FormatError, Result};
+use gw_schema::Message;
+pub(crate) use gw_schema::{content_text_parts as content_str, first_control_token};
 
-/// Every chat control token any target template (or recognized provider) emits. If one of these
-/// appears in a CLEAN field (`content` / `reasoning`), an upstream stage leaked channel markup.
-///
-/// Order matters only for the reported token when several overlap (longer/more-specific first), so
-/// the most descriptive marker is named.
-pub(crate) const CONTROL_TOKENS: &[&str] = &[
-    // ChatML / Qwen / DeepSeek
-    "<think>",
-    "</think>",
-    "<|im_start|>",
-    "<|im_end|>",
-    // Gemma-4 (asymmetric)
-    "<|channel>",
-    "<channel|>",
-    "<|channel|>",
-    "<|turn>",
-    "<turn|>",
-    "<|think|>",
-    "<bos>",
-    // Harmony
-    "<|start|>",
-    "<|end|>",
-    "<|message|>",
-    "<|return|>",
-];
-
-/// The first control token contained in `text`, if any.
-pub(crate) fn first_control_token(text: &str) -> Option<&'static str> {
-    CONTROL_TOKENS
-        .iter()
-        .copied()
-        .find(|tok| text.contains(tok))
-}
-
-/// Validate that every message's clean fields (`content` text + `reasoning`) are free of control
-/// tokens, BEFORE rendering any target.
-///
-/// # Errors
-///
-/// Returns [`FormatError::ControlTokenInContent`] (naming the token + the role) on the first leak.
+/// Validate the shared clean-field prerequisites before formatting.
 pub(crate) fn validate_clean(messages: &[Message]) -> Result<()> {
-    for msg in messages {
-        check_field(content_str(&msg.content).as_deref(), msg.role)?;
-        if let Some(reasoning) = msg.reasoning.as_deref() {
-            check_field(Some(reasoning), msg.role)?;
-        }
-    }
-    Ok(())
-}
-
-/// Reject `field` if it contains any control token.
-fn check_field(field: Option<&str>, role: Role) -> Result<()> {
-    if let Some(text) = field
-        && let Some(token) = first_control_token(text)
-    {
+    if let Some((role, token)) = gw_schema::first_clean_field_violation(messages) {
         return Err(FormatError::ControlTokenInContent { token, role });
     }
     Ok(())
 }
 
-/// The concatenated clean text of a [`Content`] (text parts only), for scanning. An explicitly
-/// absent value ([`Content::Null`]) has no text to scan, so it yields `None`.
-pub(crate) fn content_str(content: &Content) -> Option<String> {
-    match content {
-        Content::Text(s) => Some(s.clone()),
-        Content::Parts(parts) => Some(
-            parts
-                .iter()
-                .filter_map(|p| match p {
-                    gw_schema::ContentPart::Text { text } => Some(text.as_str()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join(""),
-        ),
-        Content::Null => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gw_schema::{CLEAN_FIELD_CONTROL_TOKENS as CONTROL_TOKENS, Content, Role};
 
     fn msg(role: Role, content: &str, reasoning: Option<&str>) -> Message {
         Message {

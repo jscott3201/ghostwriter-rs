@@ -40,111 +40,10 @@ fn unique<T: Ord>(values: &mut [T]) -> Result<(), ScreeningError> {
     }
     Ok(())
 }
-fn strings(values: &mut [String]) -> Result<(), ScreeningError> {
-    for value in values.iter() {
-        nonblank(value)?;
-    }
-    unique(values)
-}
-fn record_ids(values: &mut [ScreeningRecordId]) -> Result<(), ScreeningError> {
-    for value in values.iter() {
-        nonblank(&value.run_id)?;
-        nonblank(&value.record_id)?;
-    }
-    unique(values)
-}
 pub(crate) fn canonical_declaration(
     input: &ScreeningDeclaration,
 ) -> Result<ScreeningDeclaration, ScreeningError> {
-    let mut declaration = input.clone();
-    if declaration.version != SCREENING_VERSION {
-        return Err(invalid("unsupported screening version"));
-    }
-    strings(&mut declaration.runs.run_ids)?;
-    if declaration.runs.run_ids.is_empty() {
-        return Err(invalid("declared run set must be nonempty"));
-    }
-    nonblank(&declaration.output.run_id)?;
-    if !declaration
-        .runs
-        .run_ids
-        .contains(&declaration.output.run_id)
-    {
-        return Err(invalid("output run is outside declared corpus"));
-    }
-    strings(&mut declaration.output.record_ids)?;
-    let policy = &mut declaration.policy;
-    if policy.recipe != LEXICAL_SCREEN_RECIPE
-        || policy.ngram[0] == 0
-        || policy.ngram[0] > policy.ngram[1]
-        || policy.ngram[1] > 65_536
-        || policy.min_overlap_tokens == 0
-        || policy.min_overlap_tokens > 65_536
-        || !policy.jaccard_threshold.is_finite()
-        || !(0.0..=1.0).contains(&policy.jaccard_threshold)
-    {
-        return Err(invalid("unsupported or invalid lexical policy"));
-    }
-    let ceilings = ScreeningLimits::default();
-    let bounds = [
-        (policy.limits.total_text_bytes, ceilings.total_text_bytes),
-        (policy.limits.segment_bytes, ceilings.segment_bytes),
-        (policy.limits.segment_tokens, ceilings.segment_tokens),
-        (policy.limits.segments, ceilings.segments),
-        (policy.limits.distinct_shingles, ceilings.distinct_shingles),
-        (
-            policy.limits.shingle_token_work,
-            ceilings.shingle_token_work,
-        ),
-        (policy.limits.comparisons, ceilings.comparisons),
-    ];
-    if bounds
-        .into_iter()
-        .any(|(limit, max)| limit == 0 || limit > max)
-    {
-        return Err(invalid(
-            "resource limits exceed supported v1 bounds or are zero",
-        ));
-    }
-    strings(&mut policy.additional_protected_sets)?;
-    strings(&mut policy.required_languages)?;
-    if policy.required_languages.is_empty() {
-        return Err(invalid("required languages must be explicitly declared"));
-    }
-    for task in &mut declaration.expected_tasks {
-        nonblank(&task.namespace)?;
-        nonblank(&task.item)?;
-        nonblank(&task.revision)?;
-        record_ids(&mut task.records)?;
-    }
-    declaration.expected_tasks.sort_by(|a, b| {
-        (&a.namespace, &a.item, &a.revision).cmp(&(&b.namespace, &b.item, &b.revision))
-    });
-    if declaration.expected_tasks.windows(2).any(|p| {
-        (&p[0].namespace, &p[0].item, &p[0].revision)
-            == (&p[1].namespace, &p[1].item, &p[1].revision)
-    }) {
-        return Err(invalid("duplicate expected source item revision"));
-    }
-    for group in &mut declaration.siblings {
-        nonblank(&group.run_id)?;
-        nonblank(&group.sibling_group_id)?;
-        record_ids(&mut group.records)?;
-        if group.records.iter().any(|r| r.run_id != group.run_id) {
-            return Err(invalid("sibling declarations cannot cross run identities"));
-        }
-    }
-    declaration
-        .siblings
-        .sort_by(|a, b| (&a.run_id, &a.sibling_group_id).cmp(&(&b.run_id, &b.sibling_group_id)));
-    if declaration
-        .siblings
-        .windows(2)
-        .any(|p| (&p[0].run_id, &p[0].sibling_group_id) == (&p[1].run_id, &p[1].sibling_group_id))
-    {
-        return Err(invalid("duplicate sibling declaration"));
-    }
-    Ok(declaration)
+    canonical_screening_declaration(input).map_err(invalid)
 }
 
 pub(crate) fn population<'a>(
@@ -170,23 +69,13 @@ pub(crate) fn bindings(
     records: &[&TrainingRecord],
     policy: &ScreeningPolicy,
 ) -> Result<Vec<ScreeningInputBinding>, ScreeningError> {
-    records.iter().map(|record| {
-        let mut parents=record.provenance.parent_ids.clone();strings(&mut parents)?;
-        let record_hash=gw_storage::record_hash(record).map_err(|error|ScreeningError(error.to_string()))?;
-        // Selected eligibility is stable across admitted -> formatted -> exported acknowledgment.
-        // Publication-generated history, times, dataset versions and cached hash fields are absent.
-        // Bind full typed shapes: legacy record hashes omit some reasoning-detail metadata.
-        let screening_input_id=hash("screening-record-input-v1",&serde_json::json!({
-            "record":key(record),"record_hash":record_hash,"task":record.task_provenance,
-            "messages":record.messages,"tools":record.tools,
-            "verification_contract":record.verification_contract,"parents":parents,
-            "siblings":{"group":record.generation.sibling_group_id,"index":record.generation.completion_index,"count":record.generation.n_completions},
-            "eligible":gw_storage::is_selected_admitted(record),"verdict":record.judging.verdict,
-            "teacher":record.provenance.teacher,
-            "policy":policy
-        }))?;
-        Ok(ScreeningInputBinding {record:key(record),record_hash,screening_input_id})
-    }).collect()
+    records
+        .iter()
+        .map(|record| {
+            gw_storage::capture_screening_input(record, policy)
+                .map_err(|error| ScreeningError(error.to_string()))
+        })
+        .collect()
 }
 
 fn edge(
@@ -401,9 +290,7 @@ pub(crate) fn canonical_protected(
                 "unsupported protected manifest/normalization version",
             ));
         }
-        strings(&mut set.coverage.languages)?;
-        strings(&mut set.coverage.media)?;
-        unique(&mut set.coverage.fields)?;
+        set.coverage = set.coverage.canonicalized().map_err(invalid)?;
         set.items.sort_by(|a, b| a.item_id.cmp(&b.item_id));
         if protected_screening_content_digest(&set.items)? != set.content_digest {
             return Err(invalid(
@@ -426,11 +313,7 @@ pub(crate) fn protected_coverage(
     fields: &BTreeSet<ScreeningField>,
     incomplete: &mut Vec<ScreeningIssue>,
 ) -> Result<Vec<ProtectedScreeningIdentity>, ScreeningError> {
-    let required: BTreeSet<_> = CANONICAL_PROTECTED_BENCHMARKS
-        .iter()
-        .map(|id| (*id).to_owned())
-        .chain(policy.additional_protected_sets.iter().cloned())
-        .collect();
+    let required = policy.required_protected_sets();
     for id in &required {
         if !sets.iter().any(|set| &set.canonical_id == id) {
             incomplete.push(issue("missing_protected_set", id.clone()));

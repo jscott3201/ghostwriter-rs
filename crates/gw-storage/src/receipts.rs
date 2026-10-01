@@ -42,6 +42,7 @@ impl Store {
         destination: &str,
         purpose: ExportPurpose,
         options: &ExportOptions,
+        screening_plan: Option<&str>,
     ) -> Result<Option<Receipt>> {
         let rows: Vec<(String, String, String)> = sqlx::query_as(
             "SELECT publication_id, artifact_json, members_json FROM export_receipts \
@@ -61,6 +62,12 @@ impl Store {
         };
         let artifact: ExportArtifact = serde_json::from_str(&artifact_json)
             .map_err(|error| publication_error(&publication_id, error.into()))?;
+        if artifact.screening.as_ref().map(|w| w.plan.plan_id.as_str()) != screening_plan {
+            return Err(publication_error(
+                &publication_id,
+                integrity("pending publication has different raw/screened flavor or plan"),
+            ));
+        }
         if artifact.scope != options.scope
             || artifact.manifest.target != options.target
             || artifact.manifest.cot_policy != options.cot_policy
@@ -251,6 +258,7 @@ async fn selected_records(
     artifact: &ExportArtifact,
     members: &[Member],
 ) -> Result<Vec<TrainingRecord>> {
+    crate::screened_publication::check_population(tx, artifact).await?;
     let mut records = Vec::with_capacity(members.len());
     for member in members {
         let record = crate::record_data::load(tx, &member.record_id)

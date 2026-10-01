@@ -13,7 +13,7 @@ pub enum LexicalScreeningStatus {
     /// Required coverage, lineage, supported payload or bounded work was incomplete.
     Incomplete,
 }
-/// Semantic screening has no implementation or empirical qualification in v1.
+/// Semantic screening has no implementation or empirical qualification in this lexical recipe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SemanticScreeningStatus {
@@ -58,6 +58,9 @@ pub struct ScreeningInputBinding {
     pub record: ScreeningRecordId,
     /// Recomputed existing full content binding.
     pub record_hash: String,
+    /// Exact exported typed conversation, task declarations/contract, area and verdict digest.
+    /// Covers reasoning-detail metadata and tool turns; aggregate/cost/history remain excluded.
+    pub export_projection_id: String,
     /// Actual message/tool shapes plus task/lineage/sibling/policy/eligibility binding;
     /// excludes publication history/timestamps.
     pub screening_input_id: String,
@@ -194,7 +197,7 @@ pub struct ScreeningCounts {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FrozenScreeningPlan {
-    /// Supported plan version.
+    /// Supported plan version; must equal [`crate::SCREENING_PLAN_VERSION`].
     pub version: u32,
     /// Descriptive counts over this exact plan.
     pub counts: ScreeningCounts,
@@ -202,6 +205,9 @@ pub struct FrozenScreeningPlan {
     pub declaration: ScreeningDeclaration,
     /// Canonical population IDs and per-record input bindings.
     pub population: Vec<ScreeningInputBinding>,
+    /// Canonical union of text-field classes present in the entire captured population, including
+    /// excluded records and top-level tool definitions. Every complete protected set must cover it.
+    pub required_fields: Vec<crate::ScreeningField>,
     /// Identity over declaration and exact captured population inputs.
     pub screening_input_id: String,
     /// Policy identity independent of record/protected input content.
@@ -236,7 +242,7 @@ pub struct FrozenScreeningPlan {
     pub exclusions: Vec<ScreeningExclusion>,
     /// Available task/domain/difficulty/teacher/length strata for every population member.
     pub strata: Vec<ScreeningRecordStratum>,
-    /// Validated predecessor. Retains stable group assignments; v1 limits chains to 16 plans.
+    /// Validated predecessor. Retains stable group assignments; chains are limited to 16 plans.
     pub previous: Option<Box<FrozenScreeningPlan>>,
     /// Complete report identity, excluding only this self-reference.
     pub plan_id: String,

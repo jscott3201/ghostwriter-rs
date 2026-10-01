@@ -36,7 +36,6 @@ struct Collector<'a> {
     owner: &'a str,
     index: &'a mut TextIndex,
     limits: &'a ScreeningLimits,
-    unsupported: Vec<&'static str>,
 }
 impl Collector<'_> {
     fn text(
@@ -139,7 +138,6 @@ impl Collector<'_> {
                             shapes.push(json!({"type":"text","value":value}));
                         }
                         _ => {
-                            self.unsupported.push("unsupported_media");
                             shapes.push(
                                 serde_json::to_value(part).map_err(|_| "part_serialization")?,
                             );
@@ -177,9 +175,7 @@ impl Collector<'_> {
                             &mut segments,
                         )?
                     }
-                    ReasoningDetail::Encrypted { .. } => {
-                        self.unsupported.push("encrypted_reasoning")
-                    }
+                    ReasoningDetail::Encrypted { .. } => {}
                 }
             }
         }
@@ -201,9 +197,6 @@ impl Collector<'_> {
                     &call.function.name,
                     &mut segments,
                 )?;
-                if !call.function.arguments.is_object() {
-                    self.unsupported.push("nonobject_tool_arguments");
-                }
                 shape["tool_calls"][call_index]["function"]["arguments"] = self.json_text(
                     &call.function.arguments,
                     &format!("{local}/arguments"),
@@ -232,13 +225,13 @@ pub(crate) fn project_record(
     record: &TrainingRecord,
     owner: &str,
     policy: &ScreeningPolicy,
+    classification: ScreeningSourceShape,
     index: &mut TextIndex,
 ) -> Result<RecordProjection, &'static str> {
     let mut collect = Collector {
         owner,
         index,
         limits: &policy.limits,
-        unsupported: vec![],
     };
     let messages = record
         .messages
@@ -256,9 +249,7 @@ pub(crate) fn project_record(
             &mut tool_segments,
         )?,
     };
-    if gw_format::validate_tool_links(&record.messages).is_err() {
-        collect.unsupported.push("invalid_tool_links");
-    }
+    let mut unsupported = classification.unsupported_reasons;
     let rendered = match gw_format::project_sft_units(
         record,
         policy.target,
@@ -267,7 +258,9 @@ pub(crate) fn project_record(
     ) {
         Ok(units) => units,
         Err(_) => {
-            collect.unsupported.push("unsupported_training_projection");
+            if !unsupported.contains(&"unsupported_training_projection") {
+                unsupported.push("unsupported_training_projection");
+            }
             vec![]
         }
     };
@@ -287,10 +280,17 @@ pub(crate) fn project_record(
     }).collect();
     let mut segments: Vec<_> = messages.into_iter().flat_map(|m| m.segments).collect();
     segments.extend(tool_segments);
+    let actual_fields: std::collections::BTreeSet<_> = segments
+        .iter()
+        .map(|&index| collect.index.segments[index].field)
+        .collect();
+    if actual_fields.into_iter().collect::<Vec<_>>() != classification.required_fields {
+        return Err("source_field_classification_mismatch");
+    }
     Ok(RecordProjection {
         units,
         segments,
-        unsupported: collect.unsupported,
+        unsupported,
     })
 }
 
@@ -301,11 +301,13 @@ pub(crate) fn project_protected(
     policy: &ScreeningPolicy,
     index: &mut TextIndex,
 ) -> Result<ProtectedProjection, &'static str> {
+    let mut all = item.prompt.clone();
+    all.extend(item.responses.iter().cloned());
+    let mut unsupported = classify_screening_source(&all, None).unsupported_reasons;
     let mut collect = Collector {
         owner,
         index,
         limits: &policy.limits,
-        unsupported: vec![],
     };
     let prompt = item
         .prompt
@@ -324,7 +326,7 @@ pub(crate) fn project_protected(
         has_user_text: prompt.iter().any(|m| m.user_text),
     };
     if !unit.has_user_text {
-        collect.unsupported.push("incomplete_protected_prompt");
+        unsupported.push("incomplete_protected_prompt");
     }
     let mut segments = prompt_segments;
     for (i, message) in item.responses.iter().enumerate() {
@@ -332,16 +334,14 @@ pub(crate) fn project_protected(
         let response = collect.message(message, item.prompt.len() + i)?;
         segments.extend(response.segments);
     }
-    let mut all = item.prompt.clone();
-    all.extend(item.responses.iter().cloned());
-    if gw_format::validate_tool_links(&all).is_err() {
-        collect.unsupported.push("invalid_protected_tool_links");
+    if gw_schema::validate_tool_links(&all).is_err() {
+        unsupported.push("invalid_protected_tool_links");
     }
     Ok(ProtectedProjection {
         set_id: set_id.into(),
         item_id: item.item_id.clone(),
         prompt: unit,
         segments,
-        unsupported: collect.unsupported,
+        unsupported,
     })
 }

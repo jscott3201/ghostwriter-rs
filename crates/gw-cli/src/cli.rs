@@ -58,6 +58,8 @@ pub enum GenCommand {
     Tui(RunArgs),
     /// Export admitted records from a store to a Parquet shard (pure: no providers).
     Export(ExportArgs),
+    /// Publish a fully rerun source-screening plan with transaction-checked population evidence.
+    ExportScreened(ScreenedExportArgs),
     /// Resume a previously-started run from its persisted shard checkpoints (thin re-entry).
     Replay(ReplayArgs),
 }
@@ -405,4 +407,24 @@ mod tests {
         use clap::CommandFactory;
         Cli::command().debug_assert();
     }
+}
+
+/// Explicit source-screened local export. No provider configuration or network calls are needed.
+#[derive(Debug, clap::Args, PartialEq)]
+pub struct ScreenedExportArgs {
+    /// Source SQLite store.
+    #[arg(long)]
+    pub db: std::path::PathBuf,
+    /// Frozen source plan to rerun against the complete declared database population.
+    #[arg(long)]
+    pub plan: std::path::PathBuf,
+    /// Local protected contents; captured once before validation.
+    #[arg(long)]
+    pub protected: std::path::PathBuf,
+    /// Destination self-contained Parquet artifact.
+    #[arg(long)]
+    pub out: std::path::PathBuf,
+    /// Optional dataset version; rendering and supervision come from the frozen plan.
+    #[arg(long)]
+    pub dataset_version: Option<semver::Version>,
 }

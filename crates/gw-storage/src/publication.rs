@@ -69,7 +69,9 @@ impl Store {
             .to_str()
             .ok_or_else(|| integrity("export destination is not valid UTF-8"))?
             .to_string();
-        let pending = self.pending_export(&destination, purpose, &options).await?;
+        let pending = self
+            .pending_export(&destination, purpose, &options, None)
+            .await?;
         let recovering = pending.is_some();
         let (plan, receipt) = if let Some(receipt) = pending {
             let plan = self
@@ -116,7 +118,7 @@ impl Store {
         result.map_err(|error| publication_error(publication_id, error))
     }
 
-    async fn finish_publication(
+    pub(crate) async fn finish_publication(
         &self,
         plan: ExportPlan,
         receipt: Receipt,
@@ -184,7 +186,7 @@ pub(crate) fn publication_error(id: &str, source: StorageError) -> StorageError 
     }
 }
 
-fn destination_path(dst: &Path) -> Result<PathBuf> {
+pub(crate) fn destination_path(dst: &Path) -> Result<PathBuf> {
     let file_name = dst
         .file_name()
         .ok_or_else(|| integrity("export destination needs a filename"))?;

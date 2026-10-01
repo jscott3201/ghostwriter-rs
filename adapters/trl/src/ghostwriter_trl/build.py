@@ -6,6 +6,7 @@ import platform
 from . import __version__
 from .artifact import ContractError, VerifiedSnapshot, strict_json
 from .projection import prepare_target, project_messages
+from .screening import consumer_screening
 from .tokenizer import PACKAGE, check_dependencies, tokenizer_manifest, tokenizer_policy, validate_tokenizer
 
 
@@ -27,10 +28,11 @@ def build(snapshot: VerifiedSnapshot, tokenizer, *, cot: str, turns: str, max_le
         raise ContractError("explicit supported reasoning and assistant-turn policies are required")
     if type(max_length) is not int or max_length < 1:
         raise ContractError("max_length must be a positive integer")
-    dependencies = check_dependencies()
-    validate_tokenizer(tokenizer)
     verification_report = snapshot.report
     source_artifact = verification_report["artifact"]
+    screening = consumer_screening(source_artifact, cot, turns)
+    dependencies = check_dependencies()
+    validate_tokenizer(tokenizer)
     pinned_tokenizer = tokenizer_manifest()
     recipe = {
         "version": 1, "adapter_version": __version__, "adapter_source_sha256": source_identity(),
@@ -43,10 +45,26 @@ def build(snapshot: VerifiedSnapshot, tokenizer, *, cot: str, turns: str, max_le
         "labels": "unshifted_causal_lm", "add_special_tokens": False,
         "truncation": False,
     }
+    if screening is not None:
+        recipe["screening"] = {key: screening["plan"][key] for key in (
+            "plan_id", "policy_id", "screening_input_id", "protected_input_id", "grouping_id",
+        )}
+        recipe["screening"]["population_id"] = screening["population_id"]
     recipe_id = identity(recipe)
     rows = snapshot.rows()
     if len(rows) != source_artifact["manifest"]["n_admitted"]:
         raise ContractError("PyArrow row count differs from verified artifact")
+    components = {} if screening is None else {
+        member["record"]["record_id"]: member for member in screening["members"]
+    }
+    if screening is not None and (
+            len(components) != len(screening["members"])
+            or set(components) != {row["record_id"] for row in rows}):
+        raise ContractError("screened row membership mismatch")
+    projections = {} if screening is None else {
+        (binding["record"]["run_id"], binding["record"]["record_id"]): binding["export_projection_id"]
+        for binding in screening["plan"]["population"]
+    }
     examples, rejections = [], []
     candidate_targets, accepted_records = 0, set()
     for row in rows:
@@ -64,6 +82,13 @@ def build(snapshot: VerifiedSnapshot, tokenizer, *, cot: str, turns: str, max_le
             if declarations["split"]["role"] != "train":
                 rejections.append({"record_id": row["record_id"], "target_index": None, "reason": "declared held-out task role is excluded from SFT training preparation"})
                 continue
+        if screening is not None:
+            member = components[row["record_id"]]
+            source["group_kind"] = "screened_connected_component"
+            source["group_id"] = member["component_id"]
+            source["screening"] = {**recipe["screening"], "record": member["record"],
+                "component_id": member["component_id"],
+                "export_projection_id": projections[(member["record"]["run_id"], member["record"]["record_id"])]}
         try:
             messages = project_messages(strict_json(row["messages_json"]), tokenizer, cot)
         except ContractError as error:
@@ -107,5 +132,13 @@ def build(snapshot: VerifiedSnapshot, tokenizer, *, cot: str, turns: str, max_le
             "heldout_training_benefit": "unknown",
         },
     }
+    if screening is not None:
+        manifest["qualification_limits"].update({
+            "grouped_split_qualification": "declared_train_components_source_screened",
+            "contamination_screening": screening["plan"]["lexical_status"],
+            "screening_population": screening["population_check"],
+            "screening_lexical_scope": screening["plan"]["lexical_scope"],
+            "semantic_screening": "not_run", "effective_prompt_separation": "unknown",
+        })
     manifest["build_id"] = identity(manifest)
     return examples, manifest

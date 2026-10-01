@@ -67,3 +67,48 @@ pub async fn export(args: ExportArgs) -> anyhow::Result<()> {
     println!("{json}");
     Ok(())
 }
+
+/// Rerun the pure planner over captured database rows and protected contents, then publish locally.
+///
+/// # Errors
+/// Rejects invalid or stale input, incomplete screening, population races or publication failures.
+pub async fn screened(args: crate::cli::ScreenedExportArgs) -> anyhow::Result<()> {
+    let plan: gw_schema::FrozenScreeningPlan = serde_json::from_slice(
+        &std::fs::read(&args.plan).context("reading frozen screening plan")?,
+    )
+    .context("parsing strict frozen screening plan")?;
+    let protected: Vec<gw_schema::ProtectedScreeningSet> = serde_json::from_slice(
+        &std::fs::read(&args.protected).context("capturing local protected contents")?,
+    )
+    .context("parsing strict protected manifests")?;
+    let options = ExportOptions {
+        target: plan.declaration.policy.target,
+        cot_policy: plan.declaration.policy.cot_policy,
+        dataset_version: args.dataset_version,
+        scope: ExportScope::Run {
+            run_id: plan.declaration.output.run_id.clone(),
+        },
+    };
+    let store = Store::open(&args.db)
+        .await
+        .context("opening screening publication store")?;
+    let publication = store
+        .publish_screened_export(
+            options,
+            plan,
+            &args.out,
+            ExportPurpose::Standalone,
+            move |records, candidate| {
+                gw_eval::screening::validate_screening_plan(records, &protected, candidate)
+                    .map_err(|error| gw_storage::StorageError::Export(error.to_string()))
+            },
+        )
+        .await?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "publication_id":publication.publication_id,"artifact":publication.artifact
+        }))?
+    );
+    Ok(())
+}

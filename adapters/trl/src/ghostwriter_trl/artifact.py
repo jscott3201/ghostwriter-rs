@@ -92,12 +92,19 @@ def verify_snapshot(data: bytes, gw: Path) -> VerifiedSnapshot:
     if report["snapshot_blake3"] != blake3.blake3(data).hexdigest():
         raise ContractError("verifier snapshot digest mismatch")
     artifact = report["artifact"]
-    if not isinstance(artifact, dict) or set(artifact) != {
-        "metadata_version", "artifact_id", "scope", "manifest",
-    }:
+    if not isinstance(artifact, dict) or type(artifact.get("metadata_version")) is not int:
         raise ContractError("unexpected verified artifact envelope")
-    if type(artifact["metadata_version"]) is not int or artifact["metadata_version"] != 1:
+    version = artifact["metadata_version"]
+    keys = {"metadata_version", "artifact_id", "scope", "manifest"}
+    if version == 3:
+        keys.add("screening")
+    elif version != 1:
         raise ContractError("unsupported artifact metadata version")
+    if set(artifact) != keys:
+        raise ContractError("unexpected version-specific artifact envelope")
+    if version == 3:
+        from .screening import validate_screening_shape
+        validate_screening_shape(artifact)
     identity = artifact["artifact_id"]
     if not isinstance(identity, str) or len(identity) != 64 or any(c not in "0123456789abcdef" for c in identity):
         raise ContractError("invalid artifact identity")

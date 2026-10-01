@@ -95,6 +95,9 @@ pub async fn dispatch(cli: Cli) -> anyhow::Result<CommandOutcome> {
             GenCommand::Export(args) => commands::export::export(args)
                 .await
                 .map(|()| CommandOutcome::Success),
+            GenCommand::ExportScreened(args) => commands::export::screened(args)
+                .await
+                .map(|()| CommandOutcome::Success),
             GenCommand::Replay(args) => commands::replay::replay(args)
                 .await
                 .map(|()| CommandOutcome::Success),

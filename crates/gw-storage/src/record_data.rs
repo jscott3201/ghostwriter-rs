@@ -152,3 +152,28 @@ pub(crate) async fn check_history(
     }
     Ok(())
 }
+
+/// Capture every row of each declared run in one caller-owned transaction, before eligibility.
+pub(crate) async fn screening_population(
+    tx: &mut Transaction<'_, Sqlite>,
+    runs: &[String],
+) -> Result<Vec<TrainingRecord>> {
+    let mut records = Vec::new();
+    for run in runs {
+        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT {COLUMNS} FROM records WHERE run_id = ? ORDER BY record_id"
+        )))
+        .bind(run)
+        .fetch_all(&mut **tx)
+        .await?;
+        for row in rows {
+            let record = decode(&row)?;
+            check_history(tx, &record).await?;
+            records.push(record);
+        }
+    }
+    records.sort_by(|a, b| {
+        (&a.provenance.run_id, &a.record_id).cmp(&(&b.provenance.run_id, &b.record_id))
+    });
+    Ok(records)
+}

@@ -26,3 +26,4 @@ gw-schema.workspace = true
 gw-storage.workspace = true
 tokio.workspace = true
 semver.workspace = true
+sqlx.workspace = true

@@ -7,8 +7,8 @@
 //!
 //! The stored `content` is ALWAYS clean final-answer text. Channel tokens (`<think>`,
 //! `<|channel>`, `<turn|>`, …) are PRODUCED here by the renderer from the separate `reasoning`
-//! field — never read out of `content`. Before rendering ANY target, [`render`] calls
-//! [`validate_clean`](crate::validate) and FAILS LOUD with [`FormatError::ControlTokenInContent`]
+//! field — never read out of `content`. Before rendering any target, [`render`] uses the shared
+//! clean-field predicates and returns [`crate::FormatError::ControlTokenInContent`]
 //! if a clean field already contains a control token (an upstream leak that would not round-trip).
 //!
 //! The render→ingest **identity** holds for the TOKEN-STREAM targets only
@@ -37,7 +37,7 @@
 //! [`Harmony`](TrlFormat::Harmony). Rendering one there would emit prose in which the call, its
 //! arguments and — worst — WHICH call each tool result answers have all been dropped: a training
 //! set whose tool turn is indistinguishable from an answer. So [`render`] refuses FIRST, before
-//! any target dispatch, with [`FormatError::UnsupportedToolCalls`] naming the route, the dropped
+//! any target dispatch, with [`crate::FormatError::UnsupportedToolCalls`] naming the route, the dropped
 //! signal, the first offending message and the recovery path.
 //!
 //! The two tool-faithful routes are [`OpenAiMessages`](TrlFormat::OpenAiMessages) (the OpenAI wire
@@ -57,52 +57,9 @@ mod sharegpt;
 
 use gw_schema::{Content, CotPolicy, Message, Role, TrlFormat};
 
-use crate::error::{FormatError, Result, ToolCallRecovery, ToolSignal};
+use crate::error::Result;
 
-/// The targets that carry every tool signal VERBATIM: the OpenAI message objects and the TRL
-/// prompt/completion shape, whose `prompt` / `completion` turns ARE OpenAI message objects. They
-/// are never refused by the tool guard.
-///
-/// The remaining targets ([`Gemma4`](TrlFormat::Gemma4), [`ChatML`](TrlFormat::ChatML),
-/// [`ShareGpt`](TrlFormat::ShareGpt), [`Harmony`](TrlFormat::Harmony)) have no slot for
-/// `tool_calls`, no `tool_call_id` and no tool-turn semantics, so a tool trajectory must not be
-/// rendered into them.
-const fn preserves_tool_signals(target: TrlFormat) -> bool {
-    matches!(
-        target,
-        TrlFormat::OpenAiMessages | TrlFormat::TrlPromptCompletion
-    )
-}
-
-/// The first message carrying a tool signal, plus the FULL set of signals the conversation carries.
-///
-/// Returns `None` for a conversation that declares no tool fields at all (the text-only case, which
-/// must keep rendering exactly as before on every target).
-pub(crate) fn first_tool_violation(messages: &[Message]) -> Option<(usize, Vec<ToolSignal>)> {
-    let mut first: Option<usize> = None;
-    let mut signals: Vec<ToolSignal> = Vec::new();
-    for (index, msg) in messages.iter().enumerate() {
-        let mut here: Vec<ToolSignal> = Vec::new();
-        if msg.tool_calls.is_some() {
-            here.push(ToolSignal::ToolCalls);
-        }
-        if msg.tool_call_id.is_some() {
-            here.push(ToolSignal::ToolCallId);
-        }
-        if msg.role == Role::Tool {
-            // A result turn exists only to answer a call. On a dropping target it is emitted as an
-            // ordinary text turn, so which call it answers stops being recoverable.
-            here.push(ToolSignal::ToolRole);
-        }
-        for signal in here {
-            first.get_or_insert(index);
-            if !signals.contains(&signal) {
-                signals.push(signal);
-            }
-        }
-    }
-    first.map(|index| (index, signals))
-}
+pub(crate) use gw_schema::first_tool_signal as first_tool_violation;
 
 /// Render `messages` into `target`, applying `cot` to the reasoning region.
 ///
@@ -145,16 +102,8 @@ pub(crate) fn first_tool_violation(messages: &[Message]) -> Option<(usize, Vec<T
 /// to render, [`crate::FormatError::Serde`] if a structured target fails to serialize, and
 /// [`crate::FormatError::UnsupportedRole`] if a message carries a role the target cannot place.
 pub fn render(messages: &[Message], target: TrlFormat, cot: CotPolicy) -> Result<String> {
-    crate::validate::validate_clean(messages)?;
-    if !preserves_tool_signals(target)
-        && let Some((index, signals)) = first_tool_violation(messages)
-    {
-        return Err(FormatError::UnsupportedToolCalls {
-            target,
-            signals,
-            index,
-            recovery: ToolCallRecovery::CanonicalExportAndOfficialTemplate,
-        });
+    if let Some(issue) = gw_schema::render_source_issue(messages, target) {
+        return Err(issue.into());
     }
     match target {
         TrlFormat::Gemma4 => gemma4::render(messages, cot),
@@ -210,7 +159,7 @@ pub(crate) fn is_assistant(role: Role) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gw_schema::ContentPart;
+    use gw_schema::{ContentPart, ToolSignal, preserves_tool_signals};
 
     #[test]
     fn content_text_flattens_parts() {

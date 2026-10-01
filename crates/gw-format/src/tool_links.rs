@@ -2,7 +2,7 @@
 //!
 //! A tool trajectory is a RELATION, not a list of independent turns: an assistant turn declares N
 //! [`ToolCall`](gw_schema::ToolCall)s and each is answered by exactly one
-//! [`Role::Tool`] turn. The only faithful binding is the explicit
+//! [`gw_schema::Role::Tool`] turn. The only faithful binding is the explicit
 //! [`Message::tool_call_id`] result link — a function *name* is a weak fallback that breaks the
 //! moment a trajectory calls the same tool twice.
 //!
@@ -17,19 +17,8 @@
 //! trajectory can be unrepresentable for a target (refused by
 //! [`FormatError::UnsupportedToolCalls`]) while also having a sound identity, and vice versa.
 
-use std::collections::BTreeSet;
-
-use gw_schema::{Message, Role};
-
 use crate::error::{FormatError, Result};
-
-/// One declared call: its function name, its optional id, and the index of the message that
-/// declared it (so ordering can be checked without cloning).
-struct DeclaredCall<'a> {
-    name: &'a str,
-    id: Option<&'a str>,
-    message_index: usize,
-}
+use gw_schema::Message;
 
 /// Check every tool-result link in one conversation.
 ///
@@ -64,121 +53,12 @@ struct DeclaredCall<'a> {
 ///
 /// Returns [`FormatError::ToolIdentity`] naming the offending message index and the reason.
 pub fn validate_tool_links(messages: &[Message]) -> Result<()> {
-    let declared = declared_calls(messages);
-    assert_ids_unique(&declared)?;
-
-    let mut answered: BTreeSet<&str> = BTreeSet::new();
-    for (index, message) in messages.iter().enumerate() {
-        if message.role != Role::Tool {
-            continue;
-        }
-        match message.tool_call_id.as_deref() {
-            Some(id) => check_explicit_link(&declared, &answered, index, id)?,
-            None => check_implicit_link(&declared, index, message)?,
-        }
-        if let Some(id) = message.tool_call_id.as_deref() {
-            answered.insert(id);
-        }
-    }
-    Ok(())
-}
-
-/// Every declared call in the conversation, in message order.
-fn declared_calls(messages: &[Message]) -> Vec<DeclaredCall<'_>> {
-    messages
-        .iter()
-        .enumerate()
-        .filter_map(|(index, message)| {
-            let calls = message.tool_calls.as_ref()?;
-            Some(calls.iter().map(move |call| DeclaredCall {
-                name: &call.function.name,
-                id: call.id.as_deref(),
-                message_index: index,
-            }))
-        })
-        .flatten()
-        .collect()
-}
-
-/// Reject two declared calls sharing one id — the link would be ambiguous for every result.
-fn assert_ids_unique(declared: &[DeclaredCall<'_>]) -> Result<()> {
-    let mut seen: BTreeSet<&str> = BTreeSet::new();
-    for call in declared {
-        if let Some(id) = call.id
-            && !seen.insert(id)
-        {
-            return Err(FormatError::ToolIdentity(format!(
-                "duplicate tool call id `{id}`: the result link for that id is ambiguous"
-            )));
-        }
-    }
-    Ok(())
-}
-
-/// A result carrying an explicit id: it must resolve to exactly one call declared EARLIER, and no
-/// earlier result may have answered it already.
-fn check_explicit_link<'a>(
-    declared: &[DeclaredCall<'a>],
-    answered: &BTreeSet<&'a str>,
-    index: usize,
-    id: &'a str,
-) -> Result<()> {
-    let Some(call) = declared.iter().find(|c| c.id == Some(id)) else {
-        return Err(FormatError::ToolIdentity(format!(
-            "messages[{index}] (tool result) declares tool_call_id `{id}`, \
-             which no assistant tool_call in this conversation declares"
-        )));
-    };
-    if call.message_index >= index {
-        return Err(FormatError::ToolIdentity(format!(
-            "messages[{index}] (tool result) answers tool_call_id `{id}` before the call is \
-             declared — the captured trajectory is partial, not merely reordered"
-        )));
-    }
-    if answered.contains(id) {
-        return Err(FormatError::ToolIdentity(format!(
-            "messages[{index}] is a second result for tool_call_id `{id}`; \
-             each declared call is answered exactly once"
-        )));
-    }
-    Ok(())
-}
-
-/// A result with NO explicit id: acceptable only if exactly one declared call shares its name AND
-/// that call has an id. Zero candidates is a dangling name; two or more is the repeated-name case
-/// this invariant exists to refuse to guess.
-fn check_implicit_link(
-    declared: &[DeclaredCall<'_>],
-    index: usize,
-    message: &Message,
-) -> Result<()> {
-    let name = message.name.as_deref().unwrap_or_default();
-    let candidates: Vec<&DeclaredCall<'_>> = declared.iter().filter(|c| c.name == name).collect();
-    match candidates.as_slice() {
-        [] => Err(FormatError::ToolIdentity(format!(
-            "messages[{index}] is a tool result with no tool_call_id and no `name` (or a name \
-             matching no call), so it cannot be linked to any call in this conversation"
-        ))),
-        [only] if only.id.is_none() => Err(FormatError::ToolIdentity(format!(
-            "messages[{index}] is a tool result with no tool_call_id; the only `{name}` call in \
-             this conversation declares no id, so no result link exists to record"
-        ))),
-        [only] if only.message_index >= index => Err(FormatError::ToolIdentity(format!(
-            "messages[{index}] is a tool result for `{name}` that appears before the call is \
-             declared — the captured trajectory is partial"
-        ))),
-        [_only] => Ok(()),
-        many => Err(FormatError::ToolIdentity(format!(
-            "messages[{index}] is a tool result with no tool_call_id, but {} calls named `{name}` \
-             are declared — refusing to guess which one it answers",
-            many.len()
-        ))),
-    }
+    gw_schema::validate_tool_links(messages).map_err(FormatError::ToolIdentity)
 }
 
 #[cfg(test)]
 mod tests {
-    use gw_schema::{Content, FunctionCall, ToolCall};
+    use gw_schema::{Content, FunctionCall, Role, ToolCall};
 
     use super::*;
 

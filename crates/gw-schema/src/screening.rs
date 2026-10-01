@@ -3,8 +3,10 @@
 use crate::{CotPolicy, Message, MultiTurnLoss, TrlFormat};
 use serde::{Deserialize, Serialize};
 
-/// Supported frozen screening declaration and report version.
+/// Supported screening declaration and protected-manifest version.
 pub const SCREENING_VERSION: u32 = 1;
+/// Frozen plan version with independently recomputable exported-semantics input bindings.
+pub const SCREENING_PLAN_VERSION: u32 = 2;
 /// Exact normalization, shingle and grouping software recipe.
 pub const LEXICAL_SCREEN_RECIPE: &str = "lexical-screen-v1";
 

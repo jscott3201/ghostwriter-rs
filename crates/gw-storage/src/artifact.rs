@@ -75,6 +75,7 @@ impl ExportPlan {
             artifact_id: String::new(),
             scope: options.scope,
             manifest,
+            screening: None,
         };
         artifact.artifact_id = artifact_identity(&artifact, &rows)?;
         Ok(Self { rows, artifact })
@@ -164,10 +165,18 @@ pub(crate) fn projected_hash(row: &Projected, version: ExportSchemaVersion) -> R
 }
 
 pub(crate) fn artifact_identity(artifact: &ExportArtifact, rows: &[Projected]) -> Result<String> {
-    let mut hash = Hasher::new_derive_key("ghostwriter.export.artifact.v1");
+    let domain = match (artifact.metadata_version, &artifact.screening) {
+        (1, None) => "ghostwriter.export.artifact.v1",
+        (3, Some(_)) => "ghostwriter.export.artifact.v3-screened-projection",
+        _ => return Err(integrity("unsupported export metadata shape/version")),
+    };
+    let mut hash = Hasher::new_derive_key(domain);
     hash.update(&artifact.metadata_version.to_be_bytes());
     frame(&mut hash, &canonical_metadata_json(&artifact.scope)?);
     frame(&mut hash, &canonical_metadata_json(&artifact.manifest)?);
+    if let Some(screening) = &artifact.screening {
+        frame(&mut hash, &canonical_metadata_json(screening)?);
+    }
     hash.update(&(rows.len() as u64).to_be_bytes());
     for row in rows {
         frame(
@@ -259,9 +268,6 @@ fn verify_reader<R: ChunkReader + 'static>(reader: R) -> Result<ArtifactVerifica
             .as_deref()
             .ok_or_else(|| integrity("missing footer metadata value"))?,
     )?;
-    if artifact.metadata_version != ExportArtifact::CURRENT_VERSION {
-        return Err(integrity("unsupported export metadata version"));
-    }
     let version = artifact.manifest.column_schema_version;
     if builder.schema().fields() != export_schema(version)?.fields() {
         return Err(integrity(
@@ -282,6 +288,7 @@ fn verify_reader<R: ChunkReader + 'static>(reader: R) -> Result<ArtifactVerifica
 
 pub(crate) fn validate_rows(artifact: &ExportArtifact, rows: &[Projected]) -> Result<()> {
     export_schema(artifact.manifest.column_schema_version)?;
+    crate::screening_witness::validate(artifact, rows)?;
     if artifact.manifest.n_admitted != rows.len() as u64
         || artifact.manifest.n_records < artifact.manifest.n_admitted
     {
@@ -386,3 +393,7 @@ mod tests;
 #[cfg(test)]
 #[path = "snapshot_tests.rs"]
 mod snapshot_tests;
+
+#[cfg(test)]
+#[path = "screened_artifact_tests.rs"]
+mod screened_tests;

@@ -141,7 +141,14 @@ fn content_identity_is_order_independent_and_includes_full_manifest_and_scope() 
             6 => metadata.manifest.decontam_index_id = Some("index".into()),
             7 => metadata.manifest.multi_turn_loss = MultiTurnLoss::FinalTurnOnly,
             8 => metadata.manifest.diversity = Some(Default::default()),
-            _ => metadata.metadata_version += 1,
+            _ => {
+                metadata.metadata_version = ExportArtifact::SCREENED_VERSION;
+                assert!(
+                    artifact_identity(&metadata, &base.rows).is_err(),
+                    "screened metadata requires its version-specific witness"
+                );
+                continue;
+            }
         }
         assert_ne!(
             artifact_identity(&metadata, &base.rows).unwrap(),
