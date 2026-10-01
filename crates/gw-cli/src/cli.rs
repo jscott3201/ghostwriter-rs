@@ -68,6 +68,12 @@ pub enum RewardCommand {
 /// Provider-free artifact commands.
 #[derive(Debug, Subcommand, PartialEq)]
 pub enum ArtifactCommand {
+    /// Inspect one complete full-SFT checkpoint without importing Python or running a model.
+    VerifyCheckpoint {
+        /// Require one captured binary stream; no archive paths are opened.
+        #[arg(long, required = true)]
+        stdin: bool,
+    },
     /// Verify one complete prepared SFT build, including its captured Parquet source.
     VerifyPrepared {
         /// Require explicit binary stdin input; no source or bundle path is reopened.

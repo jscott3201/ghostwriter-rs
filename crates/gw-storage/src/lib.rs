@@ -92,13 +92,16 @@ mod artifact;
 mod attempts;
 pub use admission::{AttemptAdmission, LaunchRequest};
 mod cache;
+mod checkpoint_tensors;
 mod error;
 mod export;
 mod preference;
 mod prepared_sft;
+mod training_checkpoint;
 pub use prepared_sft::{
     PreparedSftVerificationReport, VerifiedPreparedSft, verify_prepared_sft_snapshot,
 };
+pub use training_checkpoint::{TrainingCheckpointReport, verify_training_checkpoint};
 mod publication;
 mod receipts;
 mod record_data;
