@@ -56,6 +56,18 @@ impl VerificationContract {
         let execution = self
             .execution_policy
             .ok_or("verification contract lacks explicit execution policy")?;
+        if let Oracle::CodingSuite { suite } = &self.oracle {
+            suite.validate()?;
+            if answer != Absent
+                || execution != Authoritative
+                || self.kind != VerificationKind::None
+                || self.required_tests != suite.case_ids
+            {
+                return Err(
+                    "coding contract requires authoritative exact suite coverage and absent answer axis",
+                );
+            }
+        }
         if self.kind == VerificationKind::NumericMatch {
             let numeric = self
                 .numeric
@@ -128,6 +140,11 @@ pub enum VerificationKind {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "oracle")]
 pub enum Oracle {
+    /// Redacted complete coding suite; private inputs/expected outputs remain in reviewed intake.
+    CodingSuite {
+        /// Public callable requirements and content-derived suite/case identities.
+        suite: crate::CodingSuiteBinding,
+    },
     /// Oracle answer computed by executing a reference query/tool in the sandbox (REMEDIATION ITEM 3).
     SandboxExecution {
         tool_or_sql: String,

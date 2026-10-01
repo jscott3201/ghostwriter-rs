@@ -95,6 +95,15 @@ recovery cannot guarantee remote exactly-once execution.
 `Error` is terminal-until-requeue: a faulted record carries its last error and attempt count, and a
 re-run picks it back up.
 
+### Local coding evaluation
+
+`gw eval coding` evaluates a reviewed saved Python function using a cached, pinned
+local Docker recipe and the native deterministic verifier. `gw eval coding-replay`
+validates a self-contained saved declaration and executes its captured code again.
+The controller keeps expected results outside candidate containers; training exports
+retain redacted suite bindings. See the [owned coding controls](examples/coding/README.md)
+for exact task/value contracts, supported runtime, limits, and qualification commands.
+
 ### Judge scoring and cache reuse
 
 Judges return a JSON score and verdict. The implemented method is `json_score`; the audit records
