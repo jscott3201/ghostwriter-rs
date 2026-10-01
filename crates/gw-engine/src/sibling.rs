@@ -278,7 +278,7 @@ async fn classify_sibling_fault(
 
 /// Park ONE faulting sibling at [`LifecycleState::Error`] (F1) and emit [`EngineEvent::RecordErrored`],
 /// returning the parked terminal envelope. If the sibling never persisted (the fault hit during
-/// generation before the first `put`), a minimal stub (via [`crate::executor::error_stub`]) is
+/// generation before initial insertion), a minimal stub (via [`crate::executor::error_stub`]) is
 /// persisted first so the failure is queryable and counted. NO-CLOBBER: if the record somehow already
 /// carries HEALTHY PROGRESS it is left intact (returned as-is) — a fault can never overwrite a good
 /// record. The error message is recorded (never carries a secret — the wrapped errors are safe to log).
@@ -291,7 +291,7 @@ async fn park_sibling_errored(
     area: &AreaConfig,
 ) -> Result<TrainingRecord> {
     let msg = err.to_string();
-    match clients.store.get(rid).await {
+    let persisted = match clients.store.get(rid).await {
         // NO-CLOBBER: a record already at healthy progress (or a non-Error terminal) is never parked.
         Ok(existing) if !is_sibling_parkable(existing.lifecycle.state) => {
             clients.events.emit(EngineEvent::RecordErrored {
@@ -300,24 +300,27 @@ async fn park_sibling_errored(
             });
             return Ok(existing);
         }
-        Ok(_) => {}
+        Ok(existing) => {
+            clients
+                .store
+                .advance_lifecycle(&existing, LifecycleState::Error, Some(&msg))
+                .await?
+        }
         Err(gw_storage::StorageError::NotFound(_)) => {
-            // The fault struck before generation persisted anything: persist a minimal stub at `Seeded`
-            // (the candidate's prompt is known) so the failure is queryable + counted, then park it.
+            // Create the missing stub and park it in the same transaction.
             let stub = crate::executor::error_stub(area, clients, run_id, rid, &seed.candidate);
-            clients.store.put(&stub).await?;
+            clients
+                .store
+                .insert_record_and_transition(&stub, LifecycleState::Error, Some(&msg))
+                .await?
         }
         Err(e) => return Err(e.into()),
-    }
-    clients
-        .store
-        .advance_lifecycle(rid, LifecycleState::Error, Some(&msg))
-        .await?;
+    };
     clients.events.emit(EngineEvent::RecordErrored {
         record_id: rid.to_string(),
         error: msg,
     });
-    Ok(clients.store.get(rid).await?)
+    Ok(persisted.record)
 }
 
 /// `true` when a sibling at `state` may be PARKED at `Error` (F1). The faulting sibling is parked from
@@ -423,16 +426,14 @@ async fn generate_and_persist(
     let _ = group.shard; // shard rode into the record id; nothing else to stamp here.
 
     // Persist at AssistantGenerated (the expensive CoT is written before the next transition).
-    group.clients.store.put(&rec).await?;
-    group.clients.events.emit(EngineEvent::StateAdvanced {
-        record_id: rec.record_id.clone(),
-        to: LifecycleState::AssistantGenerated,
-    });
-
-    // Re-read so the returned envelope matches what was persisted.
-    Ok(GenerationOutcome::Generated(
-        group.clients.store.get(rid).await?,
-    ))
+    let persisted = group.clients.store.insert_record(&rec).await?;
+    if persisted.status == gw_storage::RecordWriteStatus::Applied {
+        group.clients.events.emit(EngineEvent::StateAdvanced {
+            record_id: rec.record_id.clone(),
+            to: LifecycleState::AssistantGenerated,
+        });
+    }
+    Ok(GenerationOutcome::Generated(persisted.record))
 }
 
 async fn generate_assistant_with_truncation_retry(
@@ -482,7 +483,7 @@ async fn generate_assistant_with_truncation_retry(
 }
 
 /// The canonical `sibling_group_id == prompt_hash` for a record, computed via the same hashing
-/// `gw-storage::put` uses (so the group id agrees with the dedup key). The `store` argument is unused
+/// `gw-storage record writes` uses (so the group id agrees with the dedup key). The `store` argument is unused
 /// at runtime but pins the dependency that owns the canonical hash; the computation is pure.
 fn sibling_group_id(rec: &TrainingRecord, _store: &Store) -> Result<String> {
     Ok(prompt_hash(&rec.messages)?)
@@ -605,19 +606,21 @@ async fn retain_remaining_judged(
         }
         if is_admissible(sib, area)? {
             // OVERRIDE a non-winning admissible sibling to a retained Rejected (one admit per group).
-            clients
+            let persisted = clients
                 .store
                 .advance_lifecycle(
-                    &sib.record_id,
+                    sib,
                     LifecycleState::Rejected,
                     Some("best_of_k_retained: not the admitted sibling"),
                 )
                 .await?;
-            clients.events.emit(EngineEvent::StateAdvanced {
-                record_id: sib.record_id.clone(),
-                to: LifecycleState::Rejected,
-            });
-            *sib = clients.store.get(&sib.record_id).await?;
+            if persisted.status == gw_storage::RecordWriteStatus::Applied {
+                clients.events.emit(EngineEvent::StateAdvanced {
+                    record_id: sib.record_id.clone(),
+                    to: LifecycleState::Rejected,
+                });
+            }
+            *sib = persisted.record;
         } else {
             // Natural non-admitted outcome (Reject / Escalate→NeedsReview): reconcile + drive normally.
             *sib = drive(sib.clone(), clients, area, cancel).await?;

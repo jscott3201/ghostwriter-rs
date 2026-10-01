@@ -41,7 +41,7 @@ pub enum EngineError {
     #[error("judge error: {0}")]
     Judge(#[from] JudgeError),
 
-    /// A persistence operation (record `put` / `advance_lifecycle` / cache / checkpoint) failed.
+    /// A persistence operation (guarded record insertion/transition, cache or checkpoint) failed.
     /// Carries the [`StorageError`] verbatim. A persistence fault is load-bearing — the engine never
     /// proceeds to the next transition on a failed persist (persist-after-every-transition).
     #[error("storage error: {0}")]

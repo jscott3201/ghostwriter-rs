@@ -120,7 +120,7 @@ async fn resume_without_output_does_not_count_legacy_exported_readiness() {
     // Old engines advanced readiness to Exported without publishing an artifact.
     store
         .advance_lifecycle(
-            &record.record_id,
+            &store.get(&record.record_id).await.unwrap(),
             LifecycleState::Exported,
             Some("legacy readiness-only export"),
         )

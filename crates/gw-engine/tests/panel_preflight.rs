@@ -262,7 +262,11 @@ async fn replay_rejects_changing_review_only_to_automatic_admission() {
         );
         // Recreate a crash after judging, before lifecycle reconciliation. Intent is already durable.
         store
-            .advance_lifecycle(&rec.record_id, LifecycleState::Judged, None)
+            .advance_lifecycle(
+                &store.get(&rec.record_id).await.unwrap(),
+                LifecycleState::Judged,
+                None,
+            )
             .await
             .unwrap();
     }
@@ -373,6 +377,8 @@ async fn direct_judge_step_preflights_but_verifier_reject_remains_authoritative(
         .as_mut()
         .unwrap()
         .outcome = gw_schema::VerificationOutcome::Fail;
+    store.replace_record_for_import(&rec).await.unwrap();
+    let rec = store.get(&rid).await.unwrap();
     let judged = step(rec, &cl, &invalid).await.unwrap();
     assert_eq!(judged.judging.verdict, Some(gw_schema::Verdict::Reject));
     let rejected = step(judged, &cl, &invalid).await.unwrap();

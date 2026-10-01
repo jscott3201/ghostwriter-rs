@@ -226,7 +226,7 @@ async fn export_and_decode(
 async fn exported_trajectory_decodes_back_to_the_identical_conversation() {
     let store = seeded_store().await;
     store
-        .put(&tool_record("rec-e", "run-e", Some(Verdict::Admit)))
+        .replace_record_for_import(&tool_record("rec-e", "run-e", Some(Verdict::Admit)))
         .await
         .unwrap();
 
@@ -251,7 +251,7 @@ async fn exported_trajectory_decodes_back_to_the_identical_conversation() {
 async fn canonical_column_keeps_every_structural_field() {
     let store = seeded_store().await;
     store
-        .put(&tool_record("rec-e", "run-e", Some(Verdict::Admit)))
+        .replace_record_for_import(&tool_record("rec-e", "run-e", Some(Verdict::Admit)))
         .await
         .unwrap();
     let scanned = store
@@ -417,13 +417,21 @@ async fn lifecycle_advance_and_resume_export_without_loss() {
     let store = seeded_store().await;
     let mut record = tool_record("rec-e", "run-e", Some(Verdict::Admit));
     record.lifecycle.state = LifecycleState::AssistantGenerated;
-    store.put(&record).await.unwrap();
+    store.replace_record_for_import(&record).await.unwrap();
     store
-        .advance_lifecycle("rec-e", LifecycleState::Verified, None)
+        .advance_lifecycle(
+            &store.get("rec-e").await.unwrap(),
+            LifecycleState::Verified,
+            None,
+        )
         .await
         .unwrap();
     store
-        .advance_lifecycle("rec-e", LifecycleState::Admitted, Some("passed gate"))
+        .advance_lifecycle(
+            &store.get("rec-e").await.unwrap(),
+            LifecycleState::Admitted,
+            Some("passed gate"),
+        )
         .await
         .unwrap();
     store
@@ -629,7 +637,7 @@ async fn unsettled_sibling_group_exports_no_rows() {
 async fn export_records_what_it_cannot_preserve() {
     let store = seeded_store().await;
     store
-        .put(&tool_record("rec-e", "run-e", Some(Verdict::Admit)))
+        .replace_record_for_import(&tool_record("rec-e", "run-e", Some(Verdict::Admit)))
         .await
         .unwrap();
     let scanned = store

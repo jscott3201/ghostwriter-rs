@@ -294,7 +294,7 @@ async fn resumed_item_does_not_dedup_against_its_own_admitted_vector() {
     let live = clients_with_embedder(store.clone(), teacher, judge, Arc::new(SameVectorEmbedder));
     let engine = Engine::new(live, area_k1(one_judge(), lenient_thresholds()), 1);
     register_run(&store, &engine, "resume-own", &source).await;
-    store.put(&prior).await.unwrap();
+    store.replace_record_for_import(&prior).await.unwrap();
     engine
         .run("resume-own", &source, CancellationToken::new())
         .await
@@ -338,7 +338,7 @@ async fn pre_cancelled_resume_stops_prior_seeding_before_embed() {
     cancel.cancel();
     let engine = Engine::new(clients, area_k1(one_judge(), lenient_thresholds()), 1);
     register_run(&store, &engine, "cancel-seeding", &source).await;
-    store.put(&prior).await.unwrap();
+    store.replace_record_for_import(&prior).await.unwrap();
     let report = engine.run("cancel-seeding", &source, cancel).await.unwrap();
     assert!(!report.completed);
 }

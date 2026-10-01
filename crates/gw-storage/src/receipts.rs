@@ -1,8 +1,6 @@
 //! The SQLite half of export publication: immutable intent and one atomic acknowledgment.
 
-use gw_schema::{
-    ExportArtifact, ExportOptions, ExportScope, LifecycleState, StateTransition, TrainingRecord,
-};
+use gw_schema::{ExportArtifact, ExportOptions, ExportScope, LifecycleState, TrainingRecord};
 use serde::{Deserialize, Serialize};
 
 use crate::artifact::{ExportPlan, Member, integrity, projected_hash, validate_rows};
@@ -194,19 +192,39 @@ impl Store {
                 let already: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM lifecycle_history WHERE record_id = ?1 AND state = 'exported' AND detail = ?2")
                     .bind(&record.record_id).bind(&detail).fetch_one(&mut *tx).await?;
                 if already.0 == 0 {
-                    record.lifecycle.attempts = record.lifecycle.attempts.saturating_add(1);
-                    record.lifecycle.history.push(StateTransition {
-                        state: LifecycleState::Exported,
-                        at: at.clone(),
-                        attempt: record.lifecycle.attempts,
-                    });
-                    sqlx::query("INSERT INTO lifecycle_history (record_id, state, at, detail) VALUES (?1, 'exported', ?2, ?3)")
-                        .bind(&record.record_id).bind(&at).bind(&detail).execute(&mut *tx).await?;
+                    let start = record.lifecycle.history.len();
+                    let mutation_id = crate::canonical_json_hash(&serde_json::json!({
+                        "encoding":"record-publication-v1", "record_id":record.record_id,
+                        "artifact_id":receipt.artifact.artifact_id
+                    }))?;
+                    crate::record_mutations::append(
+                        &mut record,
+                        LifecycleState::Exported,
+                        Some(&detail),
+                        &at,
+                    )?;
+                    crate::record_mutations::remember(
+                        &mut tx,
+                        &record.record_id,
+                        &mutation_id,
+                        "publication",
+                        start..record.lifecycle.history.len(),
+                        &at,
+                    )
+                    .await?;
+                    crate::record_data::history(
+                        &mut tx,
+                        &record,
+                        start,
+                        Some(&mutation_id),
+                        Some(&detail),
+                    )
+                    .await?;
                 }
                 record.lifecycle.state = LifecycleState::Exported;
                 record.lifecycle.error = None;
-                sqlx::query("UPDATE records SET lifecycle_state = 'exported', record_json = ?1, updated_at = ?2 WHERE record_id = ?3")
-                    .bind(serde_json::to_string(&record)?).bind(&at).bind(&record.record_id).execute(&mut *tx).await?;
+                let record = crate::record_data::normalize(&record)?;
+                crate::record_data::write(&mut tx, &record, &at).await?;
                 if already.0 == 0 {
                     advanced.push(record.record_id);
                 }
@@ -235,15 +253,12 @@ async fn selected_records(
 ) -> Result<Vec<TrainingRecord>> {
     let mut records = Vec::with_capacity(members.len());
     for member in members {
-        let json: Option<(String,)> =
-            sqlx::query_as("SELECT record_json FROM records WHERE record_id = ?1")
-                .bind(&member.record_id)
-                .fetch_optional(&mut **tx)
-                .await?;
-        let Some((json,)) = json else {
-            return Err(integrity("selected export record no longer exists"));
-        };
-        let record: TrainingRecord = serde_json::from_str(&json)?;
+        let record = crate::record_data::load(tx, &member.record_id)
+            .await?
+            .ok_or_else(|| integrity("selected export record no longer exists"))?;
+        // Validate every receipt state and purpose before restoring, writing, or acknowledging.
+        // Historical NULL ordinals remain valid under the shared history contract.
+        crate::record_data::check_history(tx, &record).await?;
         if record.record_id != member.record_id || !is_sft_eligible(&record) {
             return Err(integrity("selected export record is no longer eligible"));
         }

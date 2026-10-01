@@ -254,11 +254,10 @@ async fn verify(
     // advance the lifecycle. Persisting the report is what makes a crash-resume of THIS edge
     // re-verify to the same verdict from data alone, and it leaves the operator an audit trail of
     // which report decided the record.
-    let mut updated = rec;
+    let mut updated = rec.clone();
     updated.execution_evidence = execution_evidence;
     updated.verification = grade.verification;
-    persist_envelope_and_advance(&updated, clients, LifecycleState::Verified, None).await?;
-    reload(updated, clients).await
+    persist_and_emit(&rec, &updated, clients, LifecycleState::Verified, None).await
 }
 
 /// `Verified → Judged`: grade the panel (cached) + compute consensus with the NON-IDENTITY
@@ -291,11 +290,10 @@ async fn judge(
         grade_and_consense(&rec, clients, area, verifier_grade).await?
     };
 
-    let mut updated = rec;
+    let mut updated = rec.clone();
     updated.verification = outcome.verification;
     updated.judging = outcome.judging;
-    persist_envelope_and_advance(&updated, clients, LifecycleState::Judged, None).await?;
-    reload(updated, clients).await
+    persist_and_emit(&rec, &updated, clients, LifecycleState::Judged, None).await
 }
 
 /// Run the cached judge panel + the consensus with the NON-IDENTITY correlation prior. The
@@ -363,6 +361,7 @@ async fn reconcile(
     clients: &Clients,
     area: &AreaConfig,
 ) -> Result<TrainingRecord> {
+    let expected = rec.clone();
     let decision = crate::grade::decision_from_judging(&rec, area)?;
     rec.judging.admission_intent = area.intent_for(&rec);
     if rec.judging.admission_intent == gw_schema::AdmissionIntent::ReviewOnly {
@@ -381,8 +380,7 @@ async fn reconcile(
             decision.reason().as_str().to_string(),
         ),
     };
-    persist_envelope_and_advance(&rec, clients, to, Some(&detail)).await?;
-    reload(rec, clients).await
+    persist_and_emit(&expected, &rec, clients, to, Some(&detail)).await
 }
 
 /// `Admitted → Formatted`: render the admitted record to the target template(s). v1 renders the
@@ -395,47 +393,46 @@ async fn format_record(rec: TrainingRecord, clients: &Clients) -> Result<Trainin
         TrlFormat::OpenAiMessages,
         CotPolicy::Supervised,
     )?;
-    persist_envelope_and_advance(&rec, clients, LifecycleState::Formatted, None).await?;
-    reload(rec, clients).await
+    persist_and_emit(&rec, &rec, clients, LifecycleState::Formatted, None).await
 }
 
-/// Persist the (already-mutated) envelope via `put` (idempotent upsert), then advance the lifecycle
-/// in one transaction (`advance_lifecycle` records the transition + grows `lifecycle.history`). Emits
-/// the [`EngineEvent::StateAdvanced`]. This is the single persist-after-every-transition site.
-async fn persist_envelope_and_advance(
-    rec: &TrainingRecord,
+/// Commit the complete envelope and transition against the snapshot used to compute this step.
+/// Repeated acknowledgments retain later progress and do not emit another state transition.
+async fn persist_and_emit(
+    expected: &TrainingRecord,
+    updated: &TrainingRecord,
     clients: &Clients,
     to: LifecycleState,
     detail: Option<&str>,
-) -> Result<()> {
-    // 1. Upsert the envelope (carries the new verification/judging block; idempotent by record_id).
-    clients.store.put(rec).await?;
-    // 2. Advance the lifecycle (state + event-sourced history) in one transaction.
-    clients
+) -> Result<TrainingRecord> {
+    #[cfg(test)]
+    if to == LifecycleState::Judged {
+        crate::process_replay_tests::boundary(clients, "judge_cached").await;
+    }
+    let persisted = clients
         .store
-        .advance_lifecycle(&rec.record_id, to, detail)
+        .transition_record(expected, updated, to, detail)
         .await?;
-    clients.events.emit(EngineEvent::StateAdvanced {
-        record_id: rec.record_id.clone(),
-        to,
-    });
-    // The admission transition is already durable and observable even if its later prior fails.
+    if persisted.status == gw_storage::RecordWriteStatus::Applied {
+        clients.events.emit(EngineEvent::StateAdvanced {
+            record_id: persisted.record.record_id.clone(),
+            to,
+        });
+    }
+    // Prior insertion is a separate effect after the durable admission. Its own record-keyed
+    // idempotence and launch-time recovery remain authoritative.
     if to == LifecycleState::Admitted {
         crate::priors::append_record(
             &clients.priors,
-            &clients.embedder_for(&rec.record_id, gw_schema::AttemptPurpose::AdmittedPrior),
-            rec,
+            &clients.embedder_for(
+                &persisted.record.record_id,
+                gw_schema::AttemptPurpose::AdmittedPrior,
+            ),
+            &persisted.record,
         )
         .await?;
     }
-    Ok(())
-}
-
-/// Re-read the record from the store after a transition so the returned envelope reflects exactly what
-/// was persisted (including the `lifecycle.history` grown by `advance_lifecycle`). The store is the
-/// source of truth; the in-memory `rec` we mutated does not carry the appended history row.
-async fn reload(rec: TrainingRecord, clients: &Clients) -> Result<TrainingRecord> {
-    Ok(clients.store.get(&rec.record_id).await?)
+    Ok(persisted.record)
 }
 
 /// A `step` that runs with no sandbox oracle wired (the [`NullSandboxOracle`] default). Convenience

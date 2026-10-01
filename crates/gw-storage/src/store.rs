@@ -21,7 +21,7 @@ use sqlx::sqlite::{
     SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous,
 };
 
-use crate::error::Result;
+use crate::{StartupPhase, error::Result, startup::Startup};
 
 /// How long a connection waits for the write lock before returning `SQLITE_BUSY` (the WAL
 /// single-writer model means concurrent writers queue here rather than failing immediately).
@@ -36,7 +36,7 @@ static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 /// across spawned generation workers. **Concurrency model:** SQLite in WAL mode allows many
 /// concurrent readers but only ONE writer at a time; the pool serializes write transactions and a
 /// blocked writer waits up to a 5-second busy timeout for the lock before surfacing `SQLITE_BUSY`.
-/// Read-modify-write transactions ([`advance_lifecycle`](Store::advance_lifecycle)) take an
+/// Guarded record transactions ([`transition_record`](Store::transition_record)) take an
 /// IMMEDIATE write lock at the start of the transaction, so a competing writer queues on the busy
 /// timeout instead of failing with `SQLITE_BUSY_SNAPSHOT` partway through.
 /// Cloning the handle shares the same pool — it does not grant additional write parallelism.
@@ -45,6 +45,8 @@ static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 #[derive(Debug, Clone)]
 pub struct Store {
     pool: SqlitePool,
+    #[cfg(test)]
+    pub(crate) test_hook: std::sync::Arc<std::sync::Mutex<Option<crate::test_hooks::Hook>>>,
 }
 
 impl Store {
@@ -52,25 +54,58 @@ impl Store {
     /// foreign-key enforcement, then run all pending migrations.
     ///
     /// WAL gives concurrent readers a snapshot while a single writer commits; `synchronous =
-    /// NORMAL` is the WAL-safe durability setting. A 5-second busy timeout lets a blocked
+    /// NORMAL` preserves committed writes after an application-process crash. It does not promise
+    /// acknowledged writes survive OS failure or power loss. A 5-second busy timeout lets a blocked
     /// writer wait for the lock instead of failing immediately under contention. Foreign keys are
     /// enforced so the `records → runs` / `lifecycle_history → records` cascades hold. See the
     /// [`Store`] doc for the single-writer concurrency model.
+    /// Connection setup retries SQLite BUSY for up to ten seconds, including time spent inside
+    /// SQLite. Other connection failures return immediately. Migrations then run once under an
+    /// IMMEDIATE transaction; their errors are returned without replay. Startup errors retain
+    /// their phase, connection attempt count, elapsed time, and original source.
     ///
     /// # Errors
     /// Returns [`StorageError`](crate::StorageError) if the file cannot be opened or a migration
     /// fails to apply.
     pub async fn open(path: impl AsRef<Path>) -> Result<Self> {
+        Self::open_file(
+            path.as_ref(),
+            #[cfg(test)]
+            None,
+        )
+        .await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn open_with_startup_hook(
+        path: &Path,
+        hook: crate::startup::StartupHook,
+    ) -> Result<Self> {
+        Self::open_file(path, Some(hook)).await
+    }
+
+    async fn open_file(
+        path: &Path,
+        #[cfg(test)] hook: Option<crate::startup::StartupHook>,
+    ) -> Result<Self> {
+        let mut startup = Startup::new(
+            #[cfg(test)]
+            hook,
+        );
         let opts = SqliteConnectOptions::new()
-            .filename(path.as_ref())
+            .filename(path)
             .create_if_missing(true)
             .journal_mode(SqliteJournalMode::Wal)
             .synchronous(SqliteSynchronous::Normal)
             .busy_timeout(BUSY_TIMEOUT)
             .foreign_keys(true);
-        let pool = SqlitePoolOptions::new().connect_with(opts).await?;
-        let store = Self { pool };
-        store.migrate().await?;
+        let pool = startup.connect(SqlitePoolOptions::new(), opts).await?;
+        let store = Self {
+            pool,
+            #[cfg(test)]
+            test_hook: Default::default(),
+        };
+        store.migrate(&startup).await?;
         Ok(store)
     }
 
@@ -83,19 +118,40 @@ impl Store {
     /// Returns [`StorageError`](crate::StorageError) if the in-memory database cannot be opened
     /// or a migration fails to apply.
     pub async fn open_in_memory() -> Result<Self> {
+        let mut startup = Startup::new(
+            #[cfg(test)]
+            None,
+        );
         let opts = SqliteConnectOptions::from_str("sqlite::memory:")?.foreign_keys(true);
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(opts)
+        let pool = startup
+            .connect(SqlitePoolOptions::new().max_connections(1), opts)
             .await?;
-        let store = Self { pool };
-        store.migrate().await?;
+        let store = Self {
+            pool,
+            #[cfg(test)]
+            test_hook: Default::default(),
+        };
+        store.migrate(&startup).await?;
         Ok(store)
     }
 
     /// Run all pending embedded migrations against the pool.
-    async fn migrate(&self) -> Result<()> {
-        MIGRATOR.run(&self.pool).await?;
+    async fn migrate(&self, startup: &Startup) -> Result<()> {
+        // SQLx's SQLite migration lock/unlock are no-ops. Hold SQLite's database write lock
+        // across discovery AND application; each migration uses a nested transaction/savepoint.
+        // This startup-only transaction is released before Store escapes and is not a run lease.
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(|error| startup.error(StartupPhase::MigrationBegin, error))?;
+        MIGRATOR
+            .run_direct(None, &mut *tx, false)
+            .await
+            .map_err(|error| startup.error(StartupPhase::MigrationApply, error))?;
+        tx.commit()
+            .await
+            .map_err(|error| startup.error(StartupPhase::MigrationCommit, error))?;
         Ok(())
     }
 

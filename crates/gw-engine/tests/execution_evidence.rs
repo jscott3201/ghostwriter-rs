@@ -10,7 +10,7 @@
 //! - a report bound to another attempt is rejected outright, and one bound to a moved patch is
 //!   treated as stale and never followed;
 //! - a corroborated PASS hands the remainder to the panel (so the axis does not swallow the pipeline);
-//! - the report and its verdict survive `put` / `get` / advance / reload.
+//! - the report and its verdict survive guarded persistence and reload.
 
 mod common;
 
@@ -301,7 +301,7 @@ async fn a_stale_report_is_never_followed() {
     assert!(rec.verification.needs_review.is_some());
 }
 
-/// The report is persisted with the envelope and survives `put` / `get` and the advance + reload of
+/// The report is persisted with the envelope and survives fixture insertion and the guarded transition of
 /// the `verify` edge — including on a crash-resume, where the rail re-derives the same verdict from
 /// data alone instead of re-resolving a different one.
 #[tokio::test]
@@ -348,7 +348,8 @@ async fn the_report_round_trips_through_put_get_and_a_resumed_verify() {
         call.generation(),
         None,
     );
-    store.put(&rec).await.unwrap();
+    store.replace_record_for_import(&rec).await.unwrap();
+    let rec = store.get(&rec.record_id).await.unwrap();
 
     let source = ScriptedEvidence::new(|key| Some(passing_report(key)));
     let cl = clients(store.clone(), teacher, judge, EventSink::disconnected())
@@ -364,7 +365,7 @@ async fn the_report_round_trips_through_put_get_and_a_resumed_verify() {
     let verified = step(rec, &cl, &area).await.unwrap();
     assert_eq!(verified.lifecycle.state, LifecycleState::Verified);
 
-    // The report is ON the re-read envelope (persisted by `put`, returned by `reload`), bound to
+    // The report is on the acknowledged envelope, committed atomically with its transition and bound to
     // exactly this candidate.
     let stored = store.get("rec-evidence").await.unwrap();
     let evidence = stored

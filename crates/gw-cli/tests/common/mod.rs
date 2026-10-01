@@ -38,9 +38,9 @@ pub fn write_eval_results(suffix: &str, aggregate: f64, gsm8k: f64) -> PathBuf {
 /// flag + a sibling-group key.
 ///
 /// `group` becomes the record's USER-turn content, so siblings sharing a `group` get the SAME
-/// `prompt_hash` once `Store::put` recomputes it (the separation diagnostic groups by `prompt_hash`),
+/// `prompt_hash` once `Store::replace_record_for_import` recomputes it (the separation diagnostic groups by `prompt_hash`),
 /// and distinct groups get distinct hashes. (Setting `hashes.prompt_hash` directly would be
-/// overwritten by `put`, which recomputes it from the message content — so the group key must live in
+/// recomputed by the fixture import, which recomputes it from the message content — so the group key must live in
 /// the content, not a pre-set hash.)
 #[must_use]
 pub fn record(
@@ -126,13 +126,13 @@ pub fn record(
         judging,
         reasoning_quality: None,
         lifecycle: Lifecycle::default(),
-        // Left at default; `Store::put` recomputes the content hashes (incl. prompt_hash) on insert.
+        // Left at default; `Store::replace_record_for_import` recomputes the content hashes (incl. prompt_hash) on insert.
         hashes: Default::default(),
         cost: Default::default(),
     }
 }
 
-/// Open a file-backed store at `path`, create `run_id`, and `put` every record. The returned store is
+/// Open a file-backed store at `path`, create `run_id`, and import every fixture record. The returned store is
 /// dropped by the caller; `path` (and `-wal`/`-shm` siblings) should be cleaned up after.
 pub async fn seed_store(path: &std::path::Path, run_id: &str, records: &[TrainingRecord]) -> Store {
     let store = Store::open(path).await.expect("open store");
@@ -141,7 +141,10 @@ pub async fn seed_store(path: &std::path::Path, run_id: &str, records: &[Trainin
         .await
         .expect("create run");
     for rec in records {
-        store.put(rec).await.expect("put record");
+        store
+            .replace_record_for_import(rec)
+            .await
+            .expect("import fixture record");
     }
     store
 }
@@ -149,7 +152,11 @@ pub async fn seed_store(path: &std::path::Path, run_id: &str, records: &[Trainin
 /// Select a record for the dataset; export also requires an Admit judging verdict.
 pub async fn admit(store: &Store, record_id: &str) {
     store
-        .advance_lifecycle(record_id, LifecycleState::Admitted, Some("test admit"))
+        .advance_lifecycle(
+            &store.get(record_id).await.unwrap(),
+            LifecycleState::Admitted,
+            Some("test admit"),
+        )
         .await
         .expect("advance to Admitted");
 }

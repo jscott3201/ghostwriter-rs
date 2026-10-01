@@ -18,7 +18,7 @@
 //!
 //! Per `gw-schema::Hashes`, `prompt_hash` is "blake3 of canonicalized prompt messages (also the
 //! DPO pairing key / sibling group id)", and `gw-storage` is AUTHORITATIVE for content hashes —
-//! it recomputes them on `put`. `gw-generate` has NO storage dependency and MUST NOT compute
+//! it recomputes them on insertion. `gw-generate` has NO storage dependency and MUST NOT compute
 //! content hashes, so it CANNOT mint the canonical `prompt_hash` here. We therefore set
 //! `completion_index` / `n_completions` on every sibling and LEAVE `sibling_group_id == None` for
 //! `gw-engine`/`gw-storage` to fill from the canonical `prompt_hash` once the prompt is hashed.

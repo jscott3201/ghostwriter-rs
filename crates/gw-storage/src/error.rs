@@ -8,6 +8,29 @@
 
 use thiserror::Error;
 
+/// The startup operation that failed before a store could be returned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StartupPhase {
+    /// Opening the pool and applying connection PRAGMAs.
+    Connect,
+    /// Taking the startup-only migration write lock.
+    MigrationBegin,
+    /// Discovering, validating, or applying embedded migrations.
+    MigrationApply,
+    /// Committing the complete migration transaction.
+    MigrationCommit,
+}
+impl std::fmt::Display for StartupPhase {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Connect => "connect",
+            Self::MigrationBegin => "migration_begin",
+            Self::MigrationApply => "migration_apply",
+            Self::MigrationCommit => "migration_commit",
+        })
+    }
+}
+
 /// Everything that can go wrong in the storage layer.
 ///
 /// `#[non_exhaustive]` so new variants can be added without a breaking change. Most variants
@@ -15,6 +38,44 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum StorageError {
+    /// Startup failed before a usable store escaped; the original error remains the source.
+    #[error(
+        "storage startup {phase} failed after {connection_attempts} connection attempts and {elapsed_ms} ms: {source}"
+    )]
+    Startup {
+        /// Bounded phase label containing no database path or user data.
+        phase: StartupPhase,
+        /// Number of connection initialization attempts made by this opener.
+        connection_attempts: u32,
+        /// Elapsed time for this opener, measured with a monotonic clock.
+        elapsed_ms: u64,
+        /// Original connection, transaction, or migration error.
+        #[source]
+        source: Box<StorageError>,
+    },
+    /// Connection initialization exhausted its ten-second deadline before migrations began.
+    #[error("connection initialization exceeded its ten-second deadline")]
+    StartupTimeout {
+        /// Last observed SQLite BUSY, when an attempt completed before the deadline.
+        #[source]
+        last_busy: Option<Box<sqlx::Error>>,
+    },
+    /// A guarded record command did not match its complete expected snapshot or initial identity.
+    #[error("record conflict for {record_id}: {reason}")]
+    RecordConflict {
+        /// The conflicting record, without its private payload.
+        record_id: String,
+        /// Non-secret conflict category.
+        reason: String,
+    },
+    /// Persisted record data, projections or normalized history contradict each other.
+    #[error("record integrity error for {record_id}: {reason}")]
+    RecordIntegrity {
+        /// The affected record.
+        record_id: String,
+        /// Non-secret integrity failure.
+        reason: String,
+    },
     /// Execution cannot reuse the run's immutable semantic evidence. Inspection/export remains valid.
     #[error(
         "run semantic manifest error for {run_id}: {reason}; use a new run ID for changed or unpinned semantics"

@@ -79,7 +79,10 @@ async fn start(
 async fn failed_prior_scan_seals_already_queued_initializer_before_outer_classification() {
     let store = Store::open_in_memory().await.unwrap();
     let clients = clients(store.clone(), Arc::new(gw_generate::NullEmbedder)).await;
-    store.put(&record("r-s0-seed0-a0-c0")).await.unwrap();
+    store
+        .replace_record_for_import(&record("r-s0-seed0-a0-c0"))
+        .await
+        .unwrap();
     sqlx::query("UPDATE records SET record_json = 'invalid-json'")
         .execute(store.raw_pool())
         .await
@@ -129,7 +132,10 @@ async fn fatal_custom_prior_embedder_seals_already_queued_initializer_before_out
         let store = Store::open_in_memory().await.unwrap();
         let embedder = Arc::new(FailingEmbedder::new(config_fault));
         let clients = clients(store.clone(), embedder.clone()).await;
-        store.put(&record("r-s0-seed0-a0-c0")).await.unwrap();
+        store
+            .replace_record_for_import(&record("r-s0-seed0-a0-c0"))
+            .await
+            .unwrap();
         let outer = Arc::new(Semaphore::new(0));
         let (first, owner) = start(clients.clone(), outer.clone()).await;
         embedder.entered.acquire().await.unwrap().forget();

@@ -59,7 +59,7 @@ async fn store(ids: &[&str]) -> Store {
         .await
         .unwrap();
     for id in ids {
-        store.put(&record(id)).await.unwrap();
+        store.replace_record_for_import(&record(id)).await.unwrap();
     }
     store
 }
@@ -150,7 +150,10 @@ async fn prepared_retry_ignores_later_unrelated_admissions_and_keeps_frozen_popu
         .await
         .unwrap_err();
     let expected = verified(&temp.output());
-    store.put(&record("later-admission")).await.unwrap();
+    store
+        .replace_record_for_import(&record("later-admission"))
+        .await
+        .unwrap();
     allow_ack(&store).await;
     let result = store
         .publish_export(options(), temp.output(), ExportPurpose::Engine)
@@ -189,7 +192,7 @@ async fn changed_selected_projection_or_eligibility_is_never_acknowledged() {
         } else {
             changed.cost.reasoning_tokens += 1;
         }
-        store.put(&changed).await.unwrap();
+        store.replace_record_for_import(&changed).await.unwrap();
         allow_ack(&store).await;
         let error = store
             .publish_export(options(), temp.output(), ExportPurpose::Engine)
@@ -223,7 +226,10 @@ async fn mismatched_destination_is_republished_from_same_frozen_plan_before_ack(
         .unwrap_err();
     let expected = verified(&temp.output());
     std::fs::write(temp.output(), b"different previous output").unwrap();
-    store.put(&record("later")).await.unwrap();
+    store
+        .replace_record_for_import(&record("later"))
+        .await
+        .unwrap();
     allow_ack(&store).await;
     let result = store
         .publish_export(options(), temp.output(), ExportPurpose::Engine)
@@ -251,7 +257,10 @@ async fn empty_receipt_recovers_without_absorbing_new_admissions() {
     let expected = verified(&temp.output());
     assert_eq!(expected.manifest.n_admitted, 0);
     assert_eq!(receipts(&store).await[0].2, "[]");
-    store.put(&record("later")).await.unwrap();
+    store
+        .replace_record_for_import(&record("later"))
+        .await
+        .unwrap();
     allow_ack(&store).await;
     let result = store
         .publish_export(options(), temp.output(), ExportPurpose::Engine)
@@ -321,7 +330,10 @@ async fn explicit_acknowledged_receipt_recovery_excludes_later_records_and_retai
         .unwrap();
     let before = store.get("selected").await.unwrap();
     let history = store.lifecycle_history("selected").await.unwrap();
-    store.put(&record("later")).await.unwrap();
+    store
+        .replace_record_for_import(&record("later"))
+        .await
+        .unwrap();
     store
         .set_run_status("run", RunStatus::Failed)
         .await

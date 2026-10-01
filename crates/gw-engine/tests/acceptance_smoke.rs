@@ -298,7 +298,7 @@ async fn one_tool_trajectory_survives_the_whole_chain_and_the_negatives_do_not()
     let ids = [ADMITTED, STALE, CROSS];
     for id in ids {
         store
-            .put(&chain_record(id, &turns))
+            .replace_record_for_import(&chain_record(id, &turns))
             .await
             .expect("put the chain record");
     }
