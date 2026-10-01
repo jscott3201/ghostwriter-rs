@@ -553,7 +553,7 @@ min_n_eff        = 1.5    # absolute effective-judge floor, else -> NeedsReview
 # ─── the judge panel (one or more distinct effective requests) ─────────────
 [[area.judges]]
 slug   = "deepseek/deepseek-v4-pro"
-family = "deepseek"        # coarse family tag for same-family exclusion
+family = "deepseek"        # audit annotation; does not establish independence
 # optional per-judge overrides: rubric_id, max_tokens, reasoning_max_tokens, reasoning_effort
 
 # ─── optional end-of-run export ─────────────────────────────────────────────
