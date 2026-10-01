@@ -1,5 +1,7 @@
 //! The new execution identity separates built-in adapter behavior from request location.
-use gw_providers::{EmbeddingsClient, OpenRouterProvider, RetryPolicy, builtin_adapter_behavior};
+use gw_providers::{
+    ChatCompletionsProvider, EmbeddingsClient, RetryPolicy, builtin_adapter_behavior,
+};
 use gw_schema::{Declaration, ModelExecutionSemantics, ModelOperation, SemanticDeclaration};
 
 fn execution(operation: ModelOperation, client: SemanticDeclaration) -> ModelExecutionSemantics {
@@ -21,7 +23,7 @@ fn execution(operation: ModelOperation, client: SemanticDeclaration) -> ModelExe
 
 #[test]
 fn built_in_chat_location_changes_do_not_change_execution_semantics() {
-    let builder = OpenRouterProvider::builder()
+    let builder = ChatCompletionsProvider::builder()
         .base_url("https://primary.example.test/v1")
         .retry_policy(RetryPolicy {
             max_attempts: 1,
@@ -100,7 +102,7 @@ fn built_in_embedding_location_changes_do_not_change_execution_semantics() {
 #[test]
 fn original_v1_client_declarations_remain_byte_identical() {
     use gw_providers::Provider;
-    let chat = OpenRouterProvider::builder()
+    let chat = ChatCompletionsProvider::builder()
         .base_url("https://primary.example.test/v1/")
         .retry_policy(RetryPolicy {
             max_attempts: 1,
@@ -161,7 +163,7 @@ fn original_v1_client_declarations_remain_byte_identical() {
 
 #[test]
 fn every_supported_behavior_field_contributes_to_execution_identity() {
-    let chat = OpenRouterProvider::builder()
+    let chat = ChatCompletionsProvider::builder()
         .semantic_declaration()
         .unwrap();
     let embedding = EmbeddingsClient::builder()
@@ -244,7 +246,7 @@ fn embedding_alias_and_unenforced_labels_are_explicitly_separate_from_adapter_be
 #[test]
 fn unsupported_descriptor_shapes_are_rejected_without_silent_field_loss_or_secret_errors() {
     use serde_json::json;
-    let chat = OpenRouterProvider::builder()
+    let chat = ChatCompletionsProvider::builder()
         .semantic_declaration()
         .unwrap();
     let embedding = EmbeddingsClient::builder().semantic_declaration().unwrap();

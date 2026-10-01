@@ -1,7 +1,7 @@
 //! A real protocol NACK, including a default-client positive control for hidden resends.
 use crate::{
-    AttemptObserver, ChatRequest, EmbeddingsClient, ObservationContext, ObservationFuture,
-    OpenRouterProvider, Provider, RetryPolicy,
+    AttemptObserver, ChatCompletionsProvider, ChatRequest, EmbeddingsClient, ObservationContext,
+    ObservationFuture, Provider, RetryPolicy,
 };
 use bytes::Bytes;
 use gw_schema::{
@@ -117,7 +117,7 @@ async fn real_refused_stream_is_retried_by_default_but_never_hidden_by_model_cli
     let observer = Arc::new(Observer::default());
     let ctx = context(observer.clone());
     let chat = NackServer::new().await;
-    let provider = OpenRouterProvider::builder()
+    let provider = ChatCompletionsProvider::builder()
         .base_url(&chat.url)
         .http2_for_test()
         .retry_policy(RetryPolicy {

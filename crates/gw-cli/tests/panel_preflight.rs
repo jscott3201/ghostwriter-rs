@@ -32,7 +32,7 @@ fn duplicate_judge_aliases_fail_before_credentials_for_every_generation_entry() 
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 assert!(!output.status.success());
                 assert!(stderr.contains("duplicate"), "{action}/{intent}: {stderr}");
-                assert!(!stderr.contains("OPENROUTER_API_KEY"), "{stderr}");
+                assert!(!stderr.contains("MODEL_API_KEY"), "{stderr}");
                 assert!(!db.exists(), "invalid evidence must not create a run store");
             }
             std::fs::remove_file(config).unwrap();
@@ -78,7 +78,7 @@ fn generation_preflight_precedes_missing_provider_key() {
             "expected panel preflight, got: {stderr}"
         );
         assert!(
-            !stderr.contains("OPENROUTER_API_KEY"),
+            !stderr.contains("MODEL_API_KEY"),
             "credentials accessed before preflight"
         );
         assert!(
@@ -95,16 +95,16 @@ fn toml_environment_and_cli_intent_share_the_resolved_assessment() {
     std::fs::write(&config, "[area]\nadmission_intent = 'review_only'\n[[area.judges]]\nslug = 'judge'\nfamily = 'family'\n").unwrap();
     std::fs::write(&prompts, "What is 12*8?\n").unwrap();
     for (env_intent, cli_intent, min_eff, expected) in [
-        (None, None, None, "OPENROUTER_API_KEY"),
+        (None, None, None, "MODEL_API_KEY"),
         (Some("automatic"), None, None, "unattainable"),
         (Some("review_only"), Some("automatic"), None, "unattainable"),
         (
             Some("automatic"),
             Some("review-only"),
             None,
-            "OPENROUTER_API_KEY",
+            "MODEL_API_KEY",
         ),
-        (Some("automatic"), None, Some("1.0"), "OPENROUTER_API_KEY"),
+        (Some("automatic"), None, Some("1.0"), "MODEL_API_KEY"),
         (Some("review_only"), None, Some("-1.0"), "min_n_eff"),
     ] {
         let db = common::unique_temp_path("panel-layers.sqlite");
@@ -134,8 +134,8 @@ fn toml_environment_and_cli_intent_share_the_resolved_assessment() {
             stderr.contains(expected),
             "expected {expected}, got: {stderr}"
         );
-        if expected != "OPENROUTER_API_KEY" {
-            assert!(!stderr.contains("OPENROUTER_API_KEY"));
+        if expected != "MODEL_API_KEY" {
+            assert!(!stderr.contains("MODEL_API_KEY"));
         }
     }
     std::fs::remove_file(config).unwrap();

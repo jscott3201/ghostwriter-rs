@@ -46,7 +46,7 @@ async fn exercise(fail: bool, break_summary: bool) {
         "Explain how to compare two independent methods of solving a reasoning problem.\n",
     )
     .unwrap();
-    std::fs::write(&config, format!("db = {:?}\nprovider_base_url = {:?}\naccounting_policy = {{ mode = \"finite_usd\", limit_usd = 5.0 }}\n[area]\nadmission_intent = \"review_only\"\nteacher_slug = \"teacher-fixture\"\n[[area.judges]]\nslug = \"judge-fixture\"\nfamily = \"fixture\"\n", db.to_str().unwrap(), server.url)).unwrap();
+    std::fs::write(&config, format!("db = {:?}\nmodel_api_base_url = {:?}\naccounting_policy = {{ mode = \"finite_usd\", limit_usd = 5.0 }}\n[area]\nadmission_intent = \"review_only\"\nteacher_slug = \"teacher-fixture\"\n[[area.judges]]\nslug = \"judge-fixture\"\nfamily = \"fixture\"\n", db.to_str().unwrap(), server.url)).unwrap();
     let store = Store::open(&db).await.unwrap();
     if break_summary {
         sqlx::query("CREATE TRIGGER break_terminal_summary AFTER UPDATE OF status ON runs WHEN NEW.status = 'failed' BEGIN UPDATE run_accounting SET policy_json = 'invalid-json' WHERE run_id = NEW.run_id; END").execute(store.raw_pool()).await.unwrap();
@@ -55,7 +55,7 @@ async fn exercise(fail: bool, break_summary: bool) {
         let mut command = Command::new(env!("CARGO_BIN_EXE_gw"));
         command
             .env_clear()
-            .env("OPENROUTER_API_KEY", "fixture")
+            .env("MODEL_API_KEY", "fixture")
             .args(["gen", mode, "--config"])
             .arg(&config)
             .args(["--run-id", "report", "--prompts"])

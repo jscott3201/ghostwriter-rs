@@ -21,7 +21,9 @@
 use std::time::Duration;
 
 use futures::StreamExt;
-use gw_providers::{ChatRequest, OpenRouterProvider, Provider, ProviderRouting, ReasoningParam};
+use gw_providers::{
+    ChatCompletionsProvider, ChatRequest, Provider, ProviderRouting, ReasoningParam,
+};
 use gw_schema::{Content, Message, ReasoningEffort, Role};
 
 /// Model + provider under test (owner-approved): MiniMax-M3, hard-pinned to Novita.
@@ -39,7 +41,10 @@ async fn minimax_m3_via_novita_streams_reasoning() {
         return;
     }
 
-    let provider = OpenRouterProvider::from_env().expect("build provider from OPENROUTER_API_KEY");
+    let provider = ChatCompletionsProvider::builder()
+        .api_key_env("OPENROUTER_API_KEY")
+        .build()
+        .expect("build provider from OPENROUTER_API_KEY");
 
     let req = ChatRequest::new(
         MODEL,

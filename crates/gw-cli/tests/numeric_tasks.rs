@@ -48,7 +48,7 @@ async fn invalid_tasks_fail_before_credentials_store_creation_and_all_provider_c
     .await;
     let temp = Temp::new();
     let config = temp.0.join("config.toml");
-    std::fs::write(&config, format!("provider_base_url = {:?}\n[area]\nadmission_intent='review_only'\n[[area.judges]]\nslug='fixture-judge'\nfamily='fixture'\n", server.url)).unwrap();
+    std::fs::write(&config, format!("model_api_base_url = {:?}\n[area]\nadmission_intent='review_only'\n[[area.judges]]\nslug='fixture-judge'\nfamily='fixture'\n", server.url)).unwrap();
     let valid: Value = serde_json::from_str(INPUT).unwrap();
     let mut invalid = vec!["{bad-json".to_owned()];
     for (pointer, value) in [
@@ -102,7 +102,7 @@ async fn invalid_tasks_fail_before_credentials_store_creation_and_all_provider_c
                     .arg("--db")
                     .arg(&db);
                 if has_key {
-                    command.env("OPENROUTER_API_KEY", "fixture");
+                    command.env("MODEL_API_KEY", "fixture");
                 }
                 let output = tokio::task::spawn_blocking(move || command.output().unwrap())
                     .await
@@ -110,7 +110,7 @@ async fn invalid_tasks_fail_before_credentials_store_creation_and_all_provider_c
                 let error = String::from_utf8_lossy(&output.stderr);
                 assert!(!output.status.success(), "{ordinal}/{action}/{has_key}");
                 assert!(
-                    !error.contains("OPENROUTER_API_KEY"),
+                    !error.contains("MODEL_API_KEY"),
                     "input must precede credentials: {error}"
                 );
                 assert!(!db.exists(), "invalid task input created store: {error}");

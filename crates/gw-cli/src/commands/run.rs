@@ -42,7 +42,7 @@ pub fn effective_config(args: &RunArgs) -> anyhow::Result<Config> {
 ///
 /// # Errors
 /// Propagates a config-load, seed-load, store-open, provider-construction (missing
-/// `OPENROUTER_API_KEY`), or engine-run failure.
+/// API key environment variable), or engine-run failure.
 pub async fn run(args: RunArgs) -> anyhow::Result<()> {
     let config = effective_config(&args)?;
     let source =

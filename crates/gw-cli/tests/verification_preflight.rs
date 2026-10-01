@@ -92,7 +92,7 @@ async fn legacy_facts_are_inspectable_exportable_and_denied_before_cli_credentia
                 "{variant}/{action}: {error}"
             );
             assert!(
-                !error.contains("OPENROUTER_API_KEY"),
+                !error.contains("MODEL_API_KEY"),
                 "{variant}/{action}: {error}"
             );
             assert_eq!(

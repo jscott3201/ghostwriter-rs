@@ -29,7 +29,7 @@ fn unknown_replay_is_rejected_before_missing_credentials() {
     let error = String::from_utf8_lossy(&output.stderr);
     assert!(!output.status.success());
     assert!(
-        !error.contains("OPENROUTER_API_KEY"),
+        !error.contains("MODEL_API_KEY"),
         "replay identity must be checked first: {error}"
     );
     assert!(error.contains("unknown run"), "{error}");
@@ -76,56 +76,67 @@ async fn run_replay_and_tui_check_existing_semantics_before_credentials_or_termi
             .await
             .unwrap();
     for action in ["run", "replay", "tui"] {
+        for (setting, value) in [
+            ("GW_AREA__TEACHER_SLUG", "other-teacher"),
+            ("GW_MODEL_API_BASE_URL", "http://localhost:9000/v1"),
+        ] {
+            let output = Command::new(env!("CARGO_BIN_EXE_gw"))
+                .env_clear()
+                .env(setting, value)
+                .env("GW_MODEL_API_KEY_ENV", "UNREAD_MODEL_KEY")
+                .args(["gen", action, "--config"])
+                .arg(&config)
+                .args(["--run-id", "pinned", "--shards", "1", "--prompts"])
+                .arg(&prompts)
+                .arg("--db")
+                .arg(&db)
+                .output()
+                .unwrap();
+            let error = String::from_utf8_lossy(&output.stderr);
+            assert!(!output.status.success());
+            assert!(error.contains("incompatible"), "{action}: {error}");
+            assert!(error.contains("new run"), "{error}");
+            assert!(!error.contains("UNREAD_MODEL_KEY"), "{action}: {error}");
+            assert_eq!(store.accounting_snapshot("pinned").await.unwrap(), snapshot);
+            let after: (String, String, String) = sqlx::query_as(
+                "SELECT config_json,created_at,status FROM runs WHERE run_id='pinned'",
+            )
+            .fetch_one(store.raw_pool())
+            .await
+            .unwrap();
+            assert_eq!(after, metadata);
+        }
+    }
+    // Operational and key-reference changes preserve identity and reach the selected missing key.
+    for action in ["run", "replay", "tui"] {
         let output = Command::new(env!("CARGO_BIN_EXE_gw"))
             .env_clear()
-            .env("GW_AREA__TEACHER_SLUG", "other-teacher")
+            .env("GW_MODEL_API_KEY_ENV", "ROTATED_MODEL_KEY")
+            .env("GW_PROVIDER_RPM", "999")
+            .env("GW_TICK_MS", "1")
             .args(["gen", action, "--config"])
             .arg(&config)
-            .args(["--run-id", "pinned", "--shards", "1", "--prompts"])
+            .args([
+                "--run-id",
+                "pinned",
+                "--shards",
+                "1",
+                "--max-in-flight",
+                "7",
+                "--accounting-policy",
+                "observation-only",
+                "--prompts",
+            ])
             .arg(&prompts)
             .arg("--db")
             .arg(&db)
             .output()
             .unwrap();
         let error = String::from_utf8_lossy(&output.stderr);
-        assert!(!output.status.success());
-        assert!(error.contains("incompatible"), "{action}: {error}");
-        assert!(error.contains("new run"), "{error}");
-        assert!(!error.contains("OPENROUTER_API_KEY"), "{action}: {error}");
+        assert!(error.contains("ROTATED_MODEL_KEY"), "{action}: {error}");
+        assert!(!error.contains("incompatible"), "{action}: {error}");
         assert_eq!(store.accounting_snapshot("pinned").await.unwrap(), snapshot);
-        let after: (String, String, String) =
-            sqlx::query_as("SELECT config_json,created_at,status FROM runs WHERE run_id='pinned'")
-                .fetch_one(store.raw_pool())
-                .await
-                .unwrap();
-        assert_eq!(after, metadata);
     }
-    // Operational changes pass read-only compatibility and reach the missing-key check.
-    let output = Command::new(env!("CARGO_BIN_EXE_gw"))
-        .env_clear()
-        .env("GW_PROVIDER_RPM", "999")
-        .env("GW_TICK_MS", "1")
-        .args(["gen", "replay", "--config"])
-        .arg(&config)
-        .args([
-            "--run-id",
-            "pinned",
-            "--shards",
-            "1",
-            "--max-in-flight",
-            "7",
-            "--accounting-policy",
-            "observation-only",
-            "--prompts",
-        ])
-        .arg(&prompts)
-        .arg("--db")
-        .arg(&db)
-        .output()
-        .unwrap();
-    let error = String::from_utf8_lossy(&output.stderr);
-    assert!(error.contains("OPENROUTER_API_KEY"), "{error}");
-    assert_eq!(store.accounting_snapshot("pinned").await.unwrap(), snapshot);
     drop(store);
     std::fs::remove_file(config).unwrap();
     std::fs::remove_file(prompts).unwrap();
@@ -138,6 +149,7 @@ fn pure_preparation_ignores_operational_config_and_resolves_effective_defaults()
     let first = gw_cli::wire::prepare_run(&base, &source).unwrap();
     let mut other = base.clone();
     other.accounting_policy = Some(gw_schema::AccountingPolicy::ObservationOnly);
+    other.model_api_key_env = "UNREAD_MODEL_KEY".into();
     other.provider_rpm = 999;
     other.tick_ms = 3;
     other.frame_ms = 2;
@@ -170,12 +182,12 @@ fn pure_preparation_ignores_operational_config_and_resolves_effective_defaults()
         "https://example.test/v1#SECRET",
     ] {
         let mut invalid = base.clone();
-        invalid.provider_base_url = endpoint.into();
+        invalid.model_api_base_url = endpoint.into();
         let error = format!(
             "{:#}",
             gw_cli::wire::prepare_run(&invalid, &source).unwrap_err()
         );
         assert!(!error.contains("SECRET"));
-        assert!(!error.contains("OPENROUTER_API_KEY"));
+        assert!(!error.contains("MODEL_API_KEY"));
     }
 }

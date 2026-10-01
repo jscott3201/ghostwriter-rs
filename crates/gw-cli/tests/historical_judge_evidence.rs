@@ -111,7 +111,7 @@ async fn prior_admission_runs_cannot_resume_but_remain_inspectable_exportable_an
                 }),
                 "{error}"
             );
-            assert!(!error.contains("OPENROUTER_API_KEY"), "{error}");
+            assert!(!error.contains("MODEL_API_KEY"), "{error}");
             assert_eq!(
                 store.accounting_snapshot("historical").await.unwrap(),
                 snapshot

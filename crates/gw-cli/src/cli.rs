@@ -7,8 +7,9 @@
 //! relevant subcommands so a single figment merge (file → env → these flags) produces the effective
 //! [`Config`](crate::config::Config).
 //!
-//! The API key is DELIBERATELY ABSENT here: `OPENROUTER_API_KEY` is read from the environment by the
-//! provider constructor ([`crate::wire`]) and is NEVER a CLI flag (so it can never land in a shell
+//! The API key is DELIBERATELY ABSENT here: the configured environment variable (default
+//! `MODEL_API_KEY`) is read by the provider constructor ([`crate::wire`]) and is NEVER a CLI flag
+//! (so it can never land in a shell
 //! history, a process listing, or a `--help` dump).
 
 use std::path::PathBuf;
@@ -138,6 +139,11 @@ pub struct RunArgs {
     #[arg(long, value_enum, value_name = "INTENT")]
     pub admission_intent: Option<AdmissionMode>,
     /// Path to the TOML config file (figment base layer). Absent ⇒ defaults + env only.
+    ///
+    /// Set model_api_base_url for the Model API endpoint (base URL), and model_api_key_env for
+    /// the API key environment variable name (default MODEL_API_KEY). Override these with
+    /// GW_MODEL_API_BASE_URL and GW_MODEL_API_KEY_ENV. Store the key value only in its environment
+    /// variable.
     #[arg(long, value_name = "FILE")]
     pub config: Option<PathBuf>,
     /// Override the SQLite store path (else the config's `db` / the default).
@@ -220,7 +226,12 @@ pub struct ReplayArgs {
     /// Override admission intent; persisted review-only records always remain review-only.
     #[arg(long, value_enum, value_name = "INTENT")]
     pub admission_intent: Option<AdmissionMode>,
-    /// Path to the TOML config file (must describe the same area/provider as the original run).
+    /// Path to the TOML config file (must describe the same area and Model API endpoint as the original run).
+    ///
+    /// Set model_api_base_url for the Model API endpoint (base URL), and model_api_key_env for
+    /// the API key environment variable name (default MODEL_API_KEY). Override these with
+    /// GW_MODEL_API_BASE_URL and GW_MODEL_API_KEY_ENV. Changing the key reference preserves run
+    /// identity; changing the endpoint requires a new run.
     #[arg(long, value_name = "FILE")]
     pub config: Option<PathBuf>,
     /// Override the SQLite store path (else the config's `db`).

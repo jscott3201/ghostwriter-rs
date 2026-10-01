@@ -15,7 +15,7 @@ fn command(db: &std::path::Path, out: &std::path::Path) -> Command {
         .arg("--out")
         .arg(out)
         .args(["--run-id", "run", "--dataset-version", "2.4.6"])
-        .env_remove("OPENROUTER_API_KEY");
+        .env_remove("MODEL_API_KEY");
     command
 }
 
@@ -220,7 +220,7 @@ async fn explicit_cli_recovery_retains_engine_mode_without_completing_generation
             .args(["gen", "export", "--db"])
             .arg(&db)
             .args(["--resume-publication", &publication_id])
-            .env_remove("OPENROUTER_API_KEY")
+            .env_remove("MODEL_API_KEY")
             .output()
             .unwrap();
         assert!(
