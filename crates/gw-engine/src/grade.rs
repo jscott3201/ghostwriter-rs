@@ -297,6 +297,14 @@ mod tests {
 
     fn grade(slug: &str, score: f64) -> Grade {
         Grade {
+            effective_contract: Some(
+                gw_judge::EffectiveJudgeContract::json_score(&gw_judge::build_judge_request(
+                    &gw_judge::PanelJudge::new(slug, "family"),
+                    "rubric",
+                    "candidate",
+                ))
+                .unwrap(),
+            ),
             judge_model: slug.into(),
             score,
             verdict: JudgeVerdict::Accept,

@@ -58,6 +58,28 @@ async fn invalid_numeric_settings_fail_before_spending() {
     rejects_without_spending(area).await;
 }
 
+#[tokio::test]
+async fn duplicate_effective_judges_fail_before_teacher_or_judge_spending() {
+    let first = PanelJudge::new("judge-a", "family-a");
+    for second in [
+        first.clone(),
+        PanelJudge::new("judge-a", "family-alias"),
+        first.clone().with_rubric("audit-alias"),
+    ] {
+        for intent in [AdmissionIntent::Automatic, AdmissionIntent::ReviewOnly] {
+            let area = AreaConfig::new(
+                "math",
+                "teacher",
+                vec![first.clone(), second.clone()],
+                "grade",
+            )
+            .with_correlation_rho(0.3)
+            .with_admission_intent(intent);
+            rejects_without_spending(area).await;
+        }
+    }
+}
+
 struct SubsetJudge;
 
 impl Provider for SubsetJudge {

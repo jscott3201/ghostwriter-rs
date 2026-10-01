@@ -29,6 +29,7 @@ struct Prepared<'a> {
     judge: &'a PanelJudge,
     request: ChatRequest,
     fingerprint: String,
+    effective_contract: crate::EffectiveJudgeContract,
     positions: Vec<usize>,
 }
 fn prepare<'a>(
@@ -45,6 +46,7 @@ fn prepare<'a>(
     let mut unique: Vec<Prepared<'_>> = Vec::new();
     for (position, judge) in judges.iter().enumerate() {
         let request = build_judge_request(judge, rubric, candidate);
+        let effective_contract = crate::EffectiveJudgeContract::json_score(&request)?;
         let fingerprint = request_fingerprint(&request, judge.rubric_id.as_deref())?;
         let key = (judge.slug.clone(), fingerprint.clone());
         if let Some(&index) = keys.get(&key) {
@@ -55,6 +57,7 @@ fn prepare<'a>(
                 judge,
                 request,
                 fingerprint,
+                effective_contract,
                 positions: vec![position],
             });
         }
@@ -66,6 +69,9 @@ fn prepare<'a>(
 /// Every original position is retained, in panel order. Equal keys share one grade and its actual
 /// paid origin; different sampling requests remain independent even when their model slug matches.
 /// Cache hits make no requests. A successful miss finishes interpretation and its cache write.
+/// Repeated positions are retained for collection/audit; [`crate::HybridGrader`] rejects them as
+/// duplicate evidence. Validate admission configurations with [`crate::validate_judge_panel`]
+/// before collecting a panel intended for consensus.
 ///
 /// `on_error` classifies each observed error immediately and may seal the caller's shared dispatch.
 /// No later logical miss starts after an error. Every already-started operation is drained, including
@@ -106,7 +112,7 @@ pub async fn grade_panel_cached<P: Provider + ?Sized>(
                 on_error(error);
             })?;
         if let Some(cached) = cached {
-            let grade = grade_from_cache_value(&cached);
+            let grade = grade_from_cache_value(&cached, prepared.effective_contract);
             for position in prepared.positions {
                 ordered[position] = Some(grade.clone());
             }

@@ -5,6 +5,44 @@ mod common;
 use std::process::Command;
 
 #[test]
+fn duplicate_judge_aliases_fail_before_credentials_for_every_generation_entry() {
+    for alias in ["", "family = 'alias'\n", "rubric_id = 'audit-alias'\n"] {
+        for intent in ["automatic", "review_only"] {
+            let config = common::unique_temp_path("duplicate-judges.toml");
+            let prompts = common::unique_temp_path("duplicate-judges.txt");
+            let db = common::unique_temp_path("duplicate-judges.sqlite");
+            let second_family = if alias.starts_with("family") {
+                ""
+            } else {
+                "family='family'\n"
+            };
+            std::fs::write(&config, format!("[area]\nadmission_intent='{intent}'\ncorrelation_rho=0.3\n[[area.judges]]\nslug='judge'\nfamily='family'\n[[area.judges]]\nslug='judge'\n{second_family}{alias}")).unwrap();
+            std::fs::write(&prompts, "Explain the result\n").unwrap();
+            for action in ["run", "replay", "tui"] {
+                let output = Command::new(env!("CARGO_BIN_EXE_gw"))
+                    .env_clear()
+                    .args(["gen", action, "--config"])
+                    .arg(&config)
+                    .args(["--run-id", "duplicate", "--shards", "1", "--prompts"])
+                    .arg(&prompts)
+                    .arg("--db")
+                    .arg(&db)
+                    .output()
+                    .unwrap();
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                assert!(!output.status.success());
+                assert!(stderr.contains("duplicate"), "{action}/{intent}: {stderr}");
+                assert!(!stderr.contains("OPENROUTER_API_KEY"), "{stderr}");
+                assert!(!db.exists(), "invalid evidence must not create a run store");
+            }
+            std::fs::remove_file(config).unwrap();
+            std::fs::remove_file(prompts).unwrap();
+            common::cleanup_db(&db);
+        }
+    }
+}
+
+#[test]
 fn generation_preflight_precedes_missing_provider_key() {
     for (label, panel, expected) in [
         ("empty", "", "empty"),

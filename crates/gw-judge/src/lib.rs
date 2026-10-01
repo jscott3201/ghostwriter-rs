@@ -41,6 +41,8 @@
 //!   `consensus::effective_n`; the n_eff clip + `≤ k` cap live in `consensus::effective_n`.
 //! - **Verifier authoritative** over the panel: `grader::HybridGrader::grade` short-circuits to
 //!   `Decision::Reject` when `VerifierGrade::is_hard_reject`, regardless of any panel score.
+//! - **Distinct live evidence**: configured panels and live consensus reject repeated effective
+//!   request/interpretation contracts. Family and rubric audit labels cannot supply independence.
 //! - **Never re-spend**: `cache::grade_one_cached` checks `Store::cache_get` before spending and
 //!   `cache_put` after, keyed by the built request, rubric identity, sampling bits, and JSON scoring
 //!   interpretation version. Legacy folded rubric keys are left untouched and never read.
@@ -62,6 +64,7 @@ mod cached_panel;
 mod calibration;
 mod consensus;
 mod decision;
+mod effective_contract;
 mod error;
 mod grader;
 mod panel;
@@ -79,6 +82,7 @@ pub use consensus::{
     CorrelationMatrix, agreement, effective_n, kish_effective_n, weighted_aggregate,
 };
 pub use decision::{Decision, DecisionReason, EscalateTo, Verdict};
+pub use effective_contract::{EffectiveJudgeContract, validate_judge_panel};
 pub use error::{JudgeError, Result};
 pub use grader::{AreaThresholds, GradeOutcome, HybridGrader, rederive_verdict};
 pub use panel::{

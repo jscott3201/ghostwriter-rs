@@ -8,6 +8,14 @@ use gw_schema::{AdmissionIntent, Judging};
 
 fn grade(index: usize, verdict: Verdict) -> Grade {
     Grade {
+        effective_contract: Some(
+            gw_judge::EffectiveJudgeContract::json_score(&gw_judge::build_judge_request(
+                &gw_judge::PanelJudge::new(format!("judge-{index}"), "family"),
+                "rubric",
+                "candidate",
+            ))
+            .unwrap(),
+        ),
         judge_model: format!("judge-{index}"),
         score: 0.95,
         verdict,

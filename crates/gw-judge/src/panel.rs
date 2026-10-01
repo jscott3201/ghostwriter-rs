@@ -113,13 +113,13 @@ impl Default for JudgeSampling {
 }
 
 /// One judge's configuration in the panel: its model slug, optional rubric id (part of the cache
-/// key), and sampling. The `family` token drives same-family exclusion upstream
-/// (`grader.rs`); it is the coarse model family, e.g. `"gemma"`, not the full slug.
+/// key), and sampling. `family` is a coarse model-family annotation for the configured contract;
+/// changing it does not change a request or establish independent evidence.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PanelJudge {
     /// OpenRouter model slug, e.g. `"deepseek/deepseek-v4-pro"`.
     pub slug: String,
-    /// Coarse model family for same-family exclusion (§5.8), e.g. `"gemma"`.
+    /// Coarse model-family annotation, e.g. `"gemma"`; it does not establish independence.
     pub family: String,
     /// Rubric id (`rubric_id` in the cache key + `JudgeVote.rubric_id`), or `None`.
     pub rubric_id: Option<String>,
@@ -213,6 +213,10 @@ impl PanelJudge {
 /// the provider response, `scoring_used`, and `interpretation_version` for audit.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Grade {
+    /// Immutable effective request and interpretation used for this live observation. Consensus
+    /// rejects missing or inconsistent evidence; audit labels are never a fallback. The cache
+    /// supplies this from its exact matched request without rewriting historical stored decisions.
+    pub effective_contract: Option<crate::EffectiveJudgeContract>,
     /// The judge model slug.
     pub judge_model: String,
     /// Normalized score in `[0, 1]`.
@@ -354,6 +358,7 @@ fn parse_grade(judge: &PanelJudge, response_text: &str) -> Result<Grade> {
     });
     match parsed {
         Ok(r) => Ok(Grade {
+            effective_contract: None,
             judge_model: judge.slug.clone(),
             score: normalize_score(r.score),
             verdict: parse_verdict(&r.verdict),
@@ -510,6 +515,7 @@ pub(crate) async fn grade_request<P: Provider + ?Sized>(
     judge: &PanelJudge,
     req: ChatRequest,
 ) -> Result<Grade> {
+    let effective_contract = crate::EffectiveJudgeContract::json_score(&req)?;
     let max_tokens = req.max_tokens;
     let reasoning = req.reasoning;
     let (stream, observation) = gw_providers::observed_chat(provider, req).await?;
@@ -532,6 +538,7 @@ pub(crate) async fn grade_request<P: Provider + ?Sized>(
     }
     .await;
     if let Ok(grade) = &mut result {
+        grade.effective_contract = Some(effective_contract);
         grade.raw["attempt_origin"] = observation
             .as_ref()
             .and_then(|call| {
@@ -567,6 +574,8 @@ pub(crate) async fn grade_request<P: Provider + ?Sized>(
 /// This is the raw (uncached) path. Production callers go through `cache.rs`'s
 /// [`grade_panel_cached`](crate::grade_panel_cached) so a re-run never re-spends. Returns
 /// [`JudgeError::EmptyPanel`] if `judges` is empty (the consensus math must never run on no votes).
+/// Collection preserves repeated positions; [`crate::HybridGrader`] rejects duplicate effective
+/// contracts before consensus. Use [`crate::validate_judge_panel`] before collecting for admission.
 ///
 /// # Errors
 /// Returns the FIRST judge call that fails to establish/stream (a transport failure is real — a
