@@ -851,6 +851,78 @@ score range.
 
 ---
 
+## Model identity vocabulary
+
+`gw-schema` provides independent version 1 documents for pinned model artifacts, requested
+execution semantics, model-policy document references, supplied deployment evidence, and observed
+execution references. These are pure data contracts with structural validation and identity hashing.
+They are not yet adopted by the engine, client requests, caches, records, or attempt receipts.
+RunManifest v1 still requires every `UnattestedDeployment` value to be `None`; its canonical bytes,
+record content hashes, and judge-request v2 identity are unchanged.
+
+A pinned artifact declares its source and immutable revision, a nonempty file inventory with
+purpose/algorithm/digest, lineage, and explicit tokenizer/template pins or unknowns. Lineage covers
+base artifacts, derivatives, quantization, adapters, and checkpoints. Declaring a revision and file
+hashes does not establish that files were obtained or loaded. An adapter's prior checkpoint and a
+checkpoint's prior checkpoint or adapter each require an explicit declaration: unknown uses
+`{"status":"unknown"}`, declared absence uses `{"status":"declared","value":null}`, and a
+present link supplies an artifact identity as `value`. Omitting the link or a declared `value` is
+invalid. These three states have distinct artifact hashes; declared absence remains a supplied
+claim requiring independent review and does not establish model eligibility.
+
+Model-policy references separately identify review, catalog, rights, lineage, serving-terms, and
+output-terms documents for a declared
+artifact, role, and intended use, including embeddings, teachers, judges, prompt synthesis, students, and
+derivatives. They do not establish model eligibility. Task-source rights and candidate test-execution
+evidence retain their existing meanings.
+
+Requested execution binds an alias and operation to an explicit `ModelAdapterBehavior`, which uses
+`SemanticDeclaration` for adapter behavior only. Serving endpoints and replica identities belong in
+separate requested-execution or deployment-evidence fields. The existing full client/run declarations
+remain endpoint-sensitive and cannot be used directly as adapter behavior. The pure
+`gw_providers::builtin_adapter_behavior` helper reads the known built-in v1 descriptor shapes and
+extracts their behavior parameters; unsupported implementations, versions, or fields are rejected.
+For embeddings, the requested model stays in the execution alias, and unenforced model-revision/index
+labels are excluded from adapter behavior. Existing client descriptors, fingerprints, constructors,
+manifests, runtime behavior, and current caches are unchanged.
+
+Execution also declares a serving-profile revision and any known artifact, tokenizer, template,
+runtime, parser, and configuration behavior. Supplied deployment evidence records method/version, issuer and
+claimed verifier, raw evidence reference/digest, claimed loaded artifacts and effective semantics,
+endpoint/instance/incarnation, and claimed validity/revocation evidence. It requires independent
+qualification before use; there is no deserialized approval or verification flag. Unknown expiration
+is not perpetual validity. Requested and claimed effective identities may disagree and remain
+separate evidence for a later consumer to assess.
+
+Observed execution references the durable run, launch, physical attempt, and optional exact
+observation sequence. A missing sequence means the attempt only, not its latest observation.
+Supplementary native and normalized termination reasons preserve missing values. Resolved model,
+provider, response ID, usage, and cost continue to belong to the existing attempt receipt.
+
+All top-level documents reject unknown fields, unsupported versions, malformed digests, and unsafe
+or duplicate file identifiers during deserialization. Their `from_json` and validation errors contain
+no rejected input. File identifiers use nonempty `/`-separated ASCII alphanumeric, `.`, `_`, or `-`
+segments; traversal, absolute paths, Windows reserved names, trailing dots, and case-insensitive
+duplicates are rejected. Locators use a deliberately narrow HTTP(S) origin/path or `urn:namespace:id`
+grammar; endpoints require HTTP(S). Userinfo, query strings, fragments, percent escapes, backslashes,
+and whitespace are rejected. Paths cannot contain `.` or `..` segments. Locators are not normalized,
+resolved, or fetched. All free text and semantic configuration must remain non-secret.
+
+Identity hashes use distinct BLAKE3 derive-key domains for artifacts, policy documents, semantic
+execution, deployment evidence, and observed execution. Canonical JSON recursively sorts object keys
+and preserves configuration-array order. Artifact files sort by exact path; additional lineage parents
+and declared artifact sets sort by digest, with duplicates rejected. An empty additional-artifact or
+additional-parent set declares none and remains distinct from unknown. Policy-reference order has no
+semantic effect. Artifact display labels are excluded; source locators, revisions, file identifiers,
+purposes, algorithms, byte digests, components, and lineage contribute. Policy identities include
+subject artifact, locator, revision, role, intended use, and document kind. Deployment identity includes all evidence,
+locators, incarnation, and validity claims. Semantic execution identity excludes endpoint, policy,
+incarnation, validity, and attempt references, while preserving unknowns and binding every semantic
+declaration. Attempt/incarnation changes alter evidence binding. Equal declared semantics alone do
+not establish deployment equivalence or authorize cache reuse.
+
+---
+
 ## Security
 
 - `OPENROUTER_API_KEY` is read from the environment by the provider constructor only — **never** from

@@ -60,6 +60,7 @@
 //! # }
 //! ```
 
+mod adapter_behavior;
 mod client;
 mod delta;
 mod delta_wire;
@@ -78,6 +79,7 @@ use std::pin::Pin;
 
 use futures::stream::Stream;
 
+pub use adapter_behavior::builtin_adapter_behavior;
 pub use client::{
     DEFAULT_API_KEY_ENV, DEFAULT_BASE_URL, OpenRouterProvider, OpenRouterProviderBuilder,
 };
