@@ -89,6 +89,9 @@ pub async fn dispatch(cli: Cli) -> anyhow::Result<CommandOutcome> {
             RewardCommand::Evaluate { .. } => commands::reward::evaluate_stdin(),
         }
         .map(|()| CommandOutcome::Success),
+        Command::Artifact(ArtifactCommand::VerifyCheckpoint { .. }) => {
+            commands::artifact::verify_checkpoint_stdin().map(|()| CommandOutcome::Success)
+        }
         Command::Artifact(ArtifactCommand::VerifyPrepared { .. }) => {
             commands::artifact::verify_prepared_stdin().map(|()| CommandOutcome::Success)
         }

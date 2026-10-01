@@ -12,8 +12,9 @@ The supported candidate is
 [Qwen/Qwen3-0.6B at c1899de289a04d12100db370d81485cdf75e47ca](https://huggingface.co/Qwen/Qwen3-0.6B/tree/c1899de289a04d12100db370d81485cdf75e47ca).
 The pinned official tokenizer and template are the rendering/token oracle. The
 repository declares Apache-2.0; its parent model revision and full execution
-lineage remain unresolved. This is label and trainer-handoff qualification, not
-evidence of model quality or training eligibility.
+lineage remain unresolved. Label and trainer-handoff qualification is separate from
+the bounded full-SFT checkpoint path described below. Local software qualification
+uses freshly initialized tiny models and establishes no learned quality benefit.
 
 ## Reproduce the qualified environment
 
@@ -337,6 +338,117 @@ To intentionally regenerate prepared fixtures after installing the current adapt
 GW_TRL_TOKENIZER="$PWD/qwen3-tokenizer" GW_TRL_GW="$PWD/target/debug/gw" \
   adapters/trl/.venv/bin/python adapters/trl/tests/regenerate_prepared.py
 ```
+
+## Completed full-SFT checkpoints
+
+`ghostwriter-trl-train` consumes a verified `.gwsft` input, trains all parameters on
+one CPU process, and publishes one complete `.gwckpt` file. The original input
+`build_id` remains unchanged; a separate `completion_id` covers the training
+declarations, initial model, saved model, and exact original prepared input.
+
+The public loader accepts one application-owned approved release start:
+
+| Property | Fixed scope |
+| --- | --- |
+| Repository | `Qwen/Qwen3-0.6B` |
+| Revision | `c1899de289a04d12100db370d81485cdf75e47ca` |
+| Role / purpose | Student / Training |
+| Rights evidence | Pinned publisher Apache-2.0 license and model card |
+| Declared parent | `Qwen/Qwen3-0.6B-Base`; exact parent revision remains unknown |
+| Approval identifier | `qwen3_0_6b_c1899de_student_training_v1` |
+
+This scoped release selection does not satisfy or change the separate generic
+lineage assessor's resolved-parent requirements. Arbitrary local weights and
+caller-supplied eligibility declarations cannot select this approval. The six
+pinned tokenizer/license/card files plus `config.json`, `generation_config.json`,
+and `model.safetensors` must already be present in a dedicated local directory.
+All nine files are captured and checked against fixed sizes and SHA256 commitments
+before a tokenizer or model loads. Extra files, pickle weights, remote-code
+configuration, missing/extra parameters, conflicting tied weights, nonfinite
+values, and unsupported conversions are rejected.
+
+The safe loader constructs the known Qwen3 class directly and loads every
+parameter strictly on CPU. BF16-to-F32 conversion is exact. Distinct trainable
+parameters exclude the tied output-head alias; both names contribute to the
+logical tensor content identity, and a serialized duplicate must contain equal
+values. An initialized model object or a saved inspection report cannot replace
+fresh approved loading.
+
+```sh
+ghostwriter-trl-train train \
+  --prepared prepared-sft/prepared.gwsft \
+  --release-directory qwen3-approved-release \
+  --gw "$PWD/target/debug/gw" --output completed.gwckpt \
+  --max-steps 3 --batch-size 1 --accumulation 2 \
+  --learning-rate-millionths 100 --max-sequence-length 2048
+
+gw artifact verify-checkpoint --stdin < completed.gwckpt
+
+ghostwriter-trl-train reload --checkpoint completed.gwckpt \
+  --tokenizer-directory qwen3-tokenizer --gw "$PWD/target/debug/gw"
+```
+
+Training uses FP32, AdamW, a constant learning rate, and a sequential sampler that
+repeats complete epochs. Epoch tails retain partial batches and flush partial
+gradient accumulation. Supported bounds are 1–32 optimizer updates, 1–8 examples
+per microbatch, 1–8 accumulated microbatches, and complete sequences of at most
+2048 tokens. There is no packing or truncation. Overflow is rejected before
+training. Full pretrained-model optimization can require substantially more
+memory than its weight file; the actual release has not been loaded or trained
+as part of local software qualification.
+
+Accounting is recorded after each successful real forward/backward call. It
+counts actual nonpadding inputs, consumed example occurrences, and nonmasked
+labels after the causal shift. Successful underlying optimizer calls are counted
+separately from microbatches and Trainer progress. Dataset totals and planned steps
+do not substitute for execution observations.
+
+The completion contains exactly five files: initial config and safetensors,
+final config and safetensors, and the original `.gwsft`. Strict framing carries
+their exact lengths and hashes; model content identities normalize BF16 to exact
+F32 bits. Native inspection streams large tensor payloads, verifies all finite
+values and shapes, checks initial/final architecture agreement, verifies the
+embedded prepared source, and independently reconstructs the declared batch
+schedule. It accepts only final full inference weights. No pickled training
+arguments, optimizer state, or resumable-training claim is saved.
+
+Publication occurs only after native inspection, official tokenizer replay, a
+fresh safe model reload, and trained-versus-reloaded logit agreement. The output
+is linked atomically without replacing an existing file or symlink. Failed
+optimization, save, verification, or reload produces no completed publication.
+After the link is created, a directory open or synchronization failure retains the
+complete checkpoint and raises `PublishedCheckpointError`. Its detached `report`
+includes the completion and prepared input identities with
+`status=published_durability_unknown`. A cleanup failure after successful directory
+synchronization instead reports `status=published_cleanup_failed` and
+`durability=confirmed`. Additional cleanup errors preserve the original outcome;
+no such failure returns an `ObservedCompletion` receipt.
+
+The training command returns exit code **3** for either post-publication outcome,
+writes the publication report as one JSON object on stdout, and explains the failure
+on stderr. Inspect the retained file with `verify-checkpoint` or `reload` and compare
+its `completion_id` with the report before using it: another actor may have replaced
+the pathname. The producer never deletes or replaces that destination during error
+recovery. Retrying an existing destination is rejected before optimization; a
+deliberate new training run needs an unused destination. Cleanup errors may leave
+temporary files for inspection. Safe reloading confirms the captured file's current
+contents, while historical training remains `declared`.
+
+`ObservedCompletion` is a private-factory receipt for the current successful
+producer call. `read_checkpoint` returns a separate `ReloadedCheckpoint`: its
+current safe load and tokenizer replay are verified, while historical training
+remains explicitly `declared`. Neither a content hash nor reloading authenticates
+historical optimizer execution.
+
+The training implementation has its own recursive source identity in a separate
+subpackage and console entry point. Adding training support does not change the
+existing preparation code identity or require old prepared inputs to be rebuilt.
+Tiny random Qwen3 models live only in the test fixtures; no installed command
+selects fixture authority. Qualification covers actual repeated/partial and long
+training batches, independent supervision counts and reload logits, BF16/tied
+aliases, rehashed corruption attempts, publication races, and injected failures.
+The exercised Python platform remains CPython 3.12 on macOS ARM64 CPU. Pretrained
+acquisition/training, Linux Python training, CUDA, and learning benefit are unqualified.
 
 ## Fresh numeric rewards
 

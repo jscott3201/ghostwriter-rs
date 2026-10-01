@@ -29,8 +29,10 @@
 //! NeedsReview }` and the config-side `JudgeSampling` policy folded into the contract.
 
 mod candidate;
+mod checkpoint_model;
 mod coding_task;
 mod coding_value;
+pub use checkpoint_model::*;
 pub use coding_task::*;
 pub use coding_value::{CodingValue, coding_digest, strict_coding_json};
 mod message_validation;
@@ -92,6 +94,8 @@ mod run_manifest;
 mod sandbox;
 mod task;
 mod task_identity;
+mod training_checkpoint;
+pub use training_checkpoint::*;
 mod verification;
 mod verification_contract;
 

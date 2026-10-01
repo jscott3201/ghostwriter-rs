@@ -1,6 +1,18 @@
 //! Provider-free verification for external consumers of one immutable byte snapshot.
 use std::io::{Read, Write};
 
+/// Stream a bounded full inference checkpoint and emit measured byte/content evidence.
+///
+/// # Errors
+/// Rejects unsafe model content, contradictory training declarations or malformed captured input.
+pub fn verify_checkpoint_stdin() -> anyhow::Result<()> {
+    let report = gw_storage::verify_training_checkpoint(std::io::stdin().lock())?;
+    let mut output = std::io::stdout().lock();
+    serde_json::to_writer(&mut output, &report)?;
+    writeln!(output)?;
+    Ok(())
+}
+
 /// Verify a bounded captured prepared input and its source, then emit a separate receipt.
 ///
 /// # Errors
