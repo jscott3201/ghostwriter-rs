@@ -43,3 +43,10 @@ pub fn verify_stdin() -> anyhow::Result<()> {
     writeln!(output)?;
     Ok(())
 }
+
+/// Stream and inspect the separate complete Gemma LoRA framing.
+pub fn verify_lora_stdin() -> anyhow::Result<()> {
+    let report = gw_storage::verify_lora_checkpoint(std::io::stdin().lock())?;
+    println!("{}", serde_json::to_string(&report)?);
+    Ok(())
+}

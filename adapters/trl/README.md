@@ -666,3 +666,80 @@ IDs, reasoning-only/prompt-only markers, stale token/text, and distinct attempts
 Rust independently checks literal grammar, tolerance, overflow, and extraction vectors; agreement
 between two runtime paths alone is not the numeric correctness oracle. No pretrained weights,
 inference, optimizer step, or learned improvement is part of these checks.
+
+## Gemma E2B LoRA completion
+
+The separate `ghostwriter-trl-lora` entry point consumes a verified
+`gemma4_e2b_text_v1` prepared build. Its exact environment is
+`requirements-gemma-lora.lock`: the 64 Gemma preparation pins plus PEFT 0.21.2.
+Install the `gemma-lora` extra in a separate CPython 3.12 environment using the
+same hash-checked installation procedure above.
+
+The supported recipe uses the official `Gemma4ForConditionalGeneration` text
+path, rank 8, alpha 8, zero dropout, no bias, and only the exact text-attention
+`q_proj` and `v_proj` projections. The selected full configuration has 35 q and
+15 v projections because later layers share KV state. Embeddings, output head,
+per-layer embeddings and projections, and all modality tensors remain frozen.
+Every base parameter and persistent buffer must retain its captured bytes. The
+only permitted infinite values are the directed scalar clipping bounds in the
+exact official vision/audio clippable-linear inventory. Weights, adapters,
+losses and adapter gradients must be finite.
+
+The CPU float32 recipe permits 2–32 AdamW updates, batch size and accumulation
+1–8, complete sequences up to 2,048 tokens, and a learning rate of 1–10,000
+millionths. Every adapter tensor must change. Defaults are two updates, batch
+size one, accumulation one, and a learning rate of 100 millionths. It uses the
+complete sequential batch order, explicit causal-shift labels, no packing, and
+no truncation. The observed optimizer population must equal all and only the
+selected adapters. Seed zero is applied before PEFT initializes the adapter. The
+execution scope restores caller Python, NumPy and CPU PyTorch random state after
+both success and failure.
+
+Supply a local directory containing exactly the seven pinned Gemma tokenizer
+files plus the approved `model.safetensors` (10,246,621,918 bytes; SHA256
+`2db5482b20d746879bb3ef79b5203e9075a2e2b98f54ec7c2f281c1477ddc550`).
+The overlapping `config.json` is captured once. The loader owns regular file
+descriptors, bounds and streams capture, and rejects altered bytes, unexpected
+files, pickle, remote code, and automatic Hub base resolution.
+
+```sh
+ghostwriter-trl-lora train \
+  --prepared prepared-gemma/prepared.gwsft \
+  --release-directory gemma-e2b-release \
+  --gw "$PWD/target/debug/gw" --output completed.gwlora \
+  --max-steps 2 --batch-size 1 --accumulation 2
+
+gw artifact verify-lora --stdin < completed.gwlora
+
+ghostwriter-trl-lora reload --checkpoint completed.gwlora \
+  --tokenizer-directory gemma-e2b-tokenizer --gw "$PWD/target/debug/gw"
+```
+
+`GWLORA01` is a separate versioned framing and hash domain. It contains the base
+once, initial and final adapter safetensors, strict inert adapter configuration,
+and the original complete prepared input. Native inspection streams the captured
+bytes and verifies shapes, counts, configuration, source and dependency bindings,
+and the full declared batch order. It reports historical training as `declared`
+and model reload as `not_run`. Qwen full-SFT framing remains separate and rejects
+LoRA completions.
+
+The producer additionally reloads a fresh base from the captured safe tensors,
+attaches only the captured local adapter, compares actual tensor identities, and
+checks finite matching logits before exclusive publication. Safe PEFT extraction
+explicitly uses `save_embedding_layers=False`. Only a successful actual producer
+returns a private observation receipt owning its fresh reload and binding the
+base, adapter, prepared build, recipe and completion identities. Reading saved
+JSON or successfully reloading an arbitrary completion does not grant observed
+training authority. A failure after publication retains the complete target and
+reports its exact identity without returning a successful receipt; cleanup never
+deletes a replacement destination.
+
+Local qualification uses an owned seeded random text-only Gemma fixture with the
+real 262,144-token vocabulary, both attention kinds, different local/global head
+widths, KV sharing, nonzero per-layer embeddings and tied embeddings. It has
+8,402,844 distinct base parameters and 1,728 trainable adapter parameters across
+six targets and 12 tensors. This checks actual CPU forward/backward, changed
+adapters, unchanged frozen state, native inspection and fresh reload. Full-release
+shape checks use the official architecture on the meta device. Neither result
+establishes actual pretrained loading, CUDA/BF16 execution, accelerator memory
+fit, learned benefit, or an immutable publisher-parent revision.

@@ -68,6 +68,12 @@ pub enum RewardCommand {
 /// Provider-free artifact commands.
 #[derive(Debug, Subcommand, PartialEq)]
 pub enum ArtifactCommand {
+    /// Inspect one complete Gemma q/v LoRA completion without running a model.
+    VerifyLora {
+        /// Require one complete captured binary stream.
+        #[arg(long, required = true)]
+        stdin: bool,
+    },
     /// Inspect one complete full-SFT checkpoint without importing Python or running a model.
     VerifyCheckpoint {
         /// Require one captured binary stream; no archive paths are opened.

@@ -362,3 +362,8 @@ mod tests {
         assert_eq!(rec, back);
     }
 }
+
+mod gemma_model;
+pub use gemma_model::*;
+mod lora_checkpoint;
+pub use lora_checkpoint::*;
