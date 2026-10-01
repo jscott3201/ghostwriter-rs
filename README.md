@@ -863,8 +863,15 @@ record content hashes, and judge-request v2 identity are unchanged.
 A pinned artifact declares its source and immutable revision, a nonempty file inventory with
 purpose/algorithm/digest, lineage, and explicit tokenizer/template pins or unknowns. Lineage covers
 base artifacts, derivatives, quantization, adapters, and checkpoints. Declaring a revision and file
-hashes does not establish that files were obtained or loaded. Model-policy references separately
-identify review, catalog, rights, lineage, serving-terms, and output-terms documents for a declared
+hashes does not establish that files were obtained or loaded. An adapter's prior checkpoint and a
+checkpoint's prior checkpoint or adapter each require an explicit declaration: unknown uses
+`{"status":"unknown"}`, declared absence uses `{"status":"declared","value":null}`, and a
+present link supplies an artifact identity as `value`. Omitting the link or a declared `value` is
+invalid. These three states have distinct artifact hashes; declared absence remains a supplied
+claim requiring independent review and does not establish model eligibility.
+
+Model-policy references separately identify review, catalog, rights, lineage, serving-terms, and
+output-terms documents for a declared
 artifact, role, and intended use, including embeddings, teachers, judges, prompt synthesis, students, and
 derivatives. They do not establish model eligibility. Task-source rights and candidate test-execution
 evidence retain their existing meanings.

@@ -53,12 +53,18 @@ macro_rules! document {
     tag = "status",
     content = "value",
     rename_all = "snake_case",
-    deny_unknown_fields
+    deny_unknown_fields,
+    bound(deserialize = "T: Deserialize<'de>")
 )]
 pub enum Declaration<T> {
     /// No declaration is available; never inferred from an alias or endpoint.
     Unknown,
     /// A caller supplied this value, pending any required independent qualification.
+    /// The wire value must be present, including an explicit null for declared absence.
+    // A variant-level hook prevents Serde's missing-field fallback from interpreting an
+    // omitted adjacent `value` as None when T is Option. The derived map decoder still
+    // rejects duplicate keys and unknown fields.
+    #[serde(deserialize_with = "Deserialize::deserialize")]
     Declared(T),
 }
 impl<T> Declaration<T> {

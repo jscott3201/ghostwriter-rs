@@ -57,6 +57,8 @@ impl ModelComponentReference {
 }
 
 /// Explicit lineage claims, requiring later resolution and compatibility qualification.
+/// Optional links distinguish unknown, declared absence, and a supplied exact identity.
+/// Declared absence is a caller's claim and requires the same independent review as presence.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ModelArtifactLineage {
@@ -82,8 +84,8 @@ pub enum ModelArtifactLineage {
     Adapter {
         /// Base model expected by this adapter.
         base: ArtifactIdentity,
-        /// Prior checkpoint, explicitly unknown if unavailable.
-        parent_checkpoint: Declaration<ArtifactIdentity>,
+        /// Prior checkpoint: unknown, declared absent, or a supplied exact identity.
+        parent_checkpoint: Declaration<Option<ArtifactIdentity>>,
         /// Adapter implementation, revision, and settings.
         configuration: SemanticDeclaration,
     },
@@ -91,10 +93,10 @@ pub enum ModelArtifactLineage {
     Checkpoint {
         /// Base model from which this checkpoint descends.
         base: ArtifactIdentity,
-        /// Prior checkpoint, explicitly unknown if unavailable.
-        parent: Declaration<ArtifactIdentity>,
-        /// Adapter incorporated into the checkpoint, if declared.
-        adapter: Declaration<ArtifactIdentity>,
+        /// Prior checkpoint: unknown, declared absent, or a supplied exact identity.
+        parent: Declaration<Option<ArtifactIdentity>>,
+        /// Incorporated adapter: unknown, declared absent, or a supplied exact identity.
+        adapter: Declaration<Option<ArtifactIdentity>>,
     },
 }
 impl ModelArtifactLineage {
@@ -126,7 +128,7 @@ impl ModelArtifactLineage {
                 configuration,
             } => {
                 base.validate()?;
-                parent_checkpoint.check(ArtifactIdentity::validate)?;
+                parent_checkpoint.check(optional_identity)?;
                 semantic(configuration)
             }
             Self::Checkpoint {
@@ -135,11 +137,15 @@ impl ModelArtifactLineage {
                 adapter,
             } => {
                 base.validate()?;
-                parent.check(ArtifactIdentity::validate)?;
-                adapter.check(ArtifactIdentity::validate)
+                parent.check(optional_identity)?;
+                adapter.check(optional_identity)
             }
         }
     }
+}
+
+fn optional_identity(value: &Option<ArtifactIdentity>) -> Result<()> {
+    value.as_ref().map_or(Ok(()), ArtifactIdentity::validate)
 }
 
 document! {
