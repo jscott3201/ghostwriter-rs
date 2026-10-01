@@ -61,6 +61,7 @@
 //! ```
 
 mod adapter_behavior;
+pub mod artifact_assessment;
 mod client;
 mod delta;
 mod delta_wire;
