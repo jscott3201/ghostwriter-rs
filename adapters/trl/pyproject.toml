@@ -33,11 +33,13 @@ gemma-lora = [
 ghostwriter-trl = "ghostwriter_trl.cli:main"
 ghostwriter-trl-train = "ghostwriter_trl.training.cli:main"
 ghostwriter-trl-lora = "ghostwriter_trl.lora.cli:main"
+ghostwriter-trl-compare = "ghostwriter_trl.comparison.cli:main"
 
 [tool.setuptools.package-data]
 ghostwriter_trl = ["*.json"]
 "ghostwriter_trl.profiles" = ["*.json"]
 "ghostwriter_trl.lora" = ["*.json"]
+"ghostwriter_trl.comparison" = ["*.json"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

@@ -352,7 +352,9 @@ outside this adapter's current evidence.
 
 ```sh
 GW_TRL_TOKENIZER="$PWD/qwen3-tokenizer" GW_TRL_GW="$PWD/target/debug/gw" \
-  adapters/trl/.venv/bin/python -m pytest -q adapters/trl/tests --ignore=adapters/trl/tests/gemma
+  adapters/trl/.venv/bin/python -m pytest -q adapters/trl/tests \
+    --ignore=adapters/trl/tests/gemma --ignore=adapters/trl/tests/gemma_lora \
+    --ignore=adapters/trl/tests/gemma_comparison
 GW_TRL_GEMMA_TOKENIZER="$PWD/gemma-e2b-tokenizer" GW_TRL_GW="$PWD/target/debug/gw" \
   adapters/trl/.venv-gemma/bin/python -m pytest -q adapters/trl/tests/gemma
 ```
@@ -753,3 +755,115 @@ and absent judge fields. Preparation binds origin to the captured Parquet and us
 reference component for grouping unless an explicit screened component is present.
 Historical v2/v3 artifacts retain their exact columns and identities. These exported
 declarations do not authenticate an external reviewer or reconstruct local registration.
+
+### Paired Gemma coding comparison
+
+`ghostwriter-trl-compare train-and-compare` runs the bounded CPU LoRA producer and
+passes its live completion directly to the paired controller. A saved checkpoint,
+inspection report, supplied model object or copied receipt cannot authorize this
+fresh path. The controller captures the original checkpoint once, independently
+loads an untouched base and a second base with its measured final adapter, and
+rechecks both complete tensor inventories after generation.
+
+```sh
+ghostwriter-trl-compare train-and-compare \
+  --prepared prepared-gemma/prepared.gwsft --release-directory gemma-e2b-release \
+  --checkpoint-output completed.gwlora --output paired-test.json \
+  --gw "$PWD/target/debug/gw" --db reference.sqlite --registration REGISTRATION_ID \
+  --split test --max-steps 2 --max-new-tokens 128 --max-prompt-tokens 1024
+
+ghostwriter-trl-compare inspect --artifact paired-test.json \
+  --tokenizer-directory gemma-e2b-tokenizer --gw "$PWD/target/debug/gw"
+
+ghostwriter-trl-compare replay --artifact paired-test.json \
+  --tokenizer-directory gemma-e2b-tokenizer --gw "$PWD/target/debug/gw" \
+  --db reference.sqlite --output paired-test-replay.json
+```
+
+The selected registration must already contain the complete committed reviewed
+112-member reference import. Rust captures **all 32 Test members or all 16
+Validation members**, in accepted order, with private cases held inside the native
+process. Completeness applies to that exact split. Generation receives public
+problem text and redacted task, family, component, split and suite identities;
+private inputs, expected values, reviews and held-out reference solutions are absent.
+The capture includes compact native-derived content hashes of all 64 accepted Train
+records. Python recomputes each hash from the verified prepared messages, task,
+origin and stable record identity; a caller-supplied digest cannot replace this check.
+Every complete bridge message is bounded to 32 MiB of serialized UTF-8, including
+the newline on native output. Both sides enforce the opening population limit.
+An actual release comparison requires the prepared build to cover all 64 accepted
+Train members from that same registration/import. The owned random fixture can
+use explicit synthetic software training. Both paths check task/family/component
+separation and exact prompt IDs rendered under the generation recipe. Source
+screening remains declared and semantic screening remains `not_run`. A held-out
+prompt rejected by the text protocol retains both Unknown rows and marks effective
+prompt separation incomplete. All renderable prompts still undergo collision checks.
+
+Version one uses the actual pinned Gemma processor with
+`add_generation_prompt=True`, `enable_thinking=False` and
+`preserve_thinking=False`. Preparation retains its separate existing rendering.
+Each model receives one complete unpadded prompt per member, greedy decoding,
+one beam and sequence, the same fixed suffix bound and system text, float32 CPU
+parameters, eager attention, one thread, deterministic algorithms and a fresh
+ordinary dynamic cache. Compilation is disabled. The full effective generation
+configuration is saved, including inactive defaults. There is no truncation.
+
+The report retains prompt IDs, attention masks, full returned sequences, exact
+suffix/body IDs and unfiltered decoded text. Stops are IDs 1, 106 and 50. Only one
+actually observed final 1 or 106 is removed; tool handoff 50 stays in the body and
+fails the representation gate. A terminal exactly at the token bound records both
+facts. A complete suffix at the bound remains exact module bytes even without a
+terminal. Unexpected short returns or prefix mismatches remain Unknown. Added
+control tokens and control spellings, empty bodies and oversized bodies fail the
+representation gate. Whitespace, Unicode, syntax errors and ordinary invalid code
+are preserved for native execution; the controller does not extract or repair code.
+
+Rust validates both ordered answer sets before running their modules through the
+existing external-oracle coding observer and verifier. Every item remains in the
+report, with native case coverage or an explicit failure/Unknown reason. Counts
+retain Unknown separately; a pass-count difference is present only when both
+whole populations are comparable. No result automatically promotes a candidate.
+Cancellation waits for the owned native process and its container cleanup.
+Publication validates first, then atomically links synced complete bytes without
+overwriting. Errors after linking report the retained artifact identity and
+uncertain durability or cleanup; they never remove a replacement target.
+
+Saved inspection checks complete bindings, representation, arithmetic and actual
+tokenizer decoding. Historical training, generation and execution stay `declared`.
+Saved replay freshly executes the exact modules against current registered native
+oracles and compares stable case results; it never reloads or regenerates a model.
+The native `gw eval coding-pair --stdio` bridge likewise grants only fresh native
+execution, not authenticity to caller-supplied model history.
+
+The local qualification uses the reduced random CPU Gemma fixture and cached
+native ARM64 Docker runtime. It covers complete paired generation/execution,
+positive/wrong/syntax/Unknown controls, replay, copied receipt and altered artifact
+rejection, cancellation and publication settlement. It does not establish learned
+benefit, an actual pretrained comparison, GPU execution, accelerator memory fit,
+semantic decontamination or an immutable publisher-parent revision.
+
+The complete paired qualification additionally needs an explicit synthetic store fixture:
+
+```sh
+PAIR_FIXTURE=$(mktemp -d)
+PAIR_REJECTED_FIXTURE=$(mktemp -d)
+PAIR_LARGE_FIXTURES=$(mktemp -d)
+GW_PAIR_TEST_DIRECTORY="$PAIR_FIXTURE" cargo nextest run -p gw-cli --locked \
+  --test coding_pair --retries 0
+GW_PAIR_TEST_DIRECTORY="$PAIR_REJECTED_FIXTURE" GW_PAIR_TEST_REJECTED_PROMPT=1 \
+  cargo nextest run -p gw-cli --locked --test coding_pair --retries 0
+for metadata in train heldout; do
+  GW_PAIR_TEST_DIRECTORY="$PAIR_LARGE_FIXTURES/$metadata" GW_PAIR_TEST_LARGE_METADATA="$metadata" \
+    cargo nextest run -p gw-cli --locked --test coding_pair --retries 0
+done
+GW_PAIR_TEST_DIRECTORY="$PAIR_FIXTURE" GW_PAIR_REJECTED_TEST_DIRECTORY="$PAIR_REJECTED_FIXTURE" \
+  GW_PAIR_LARGE_TEST_DIRECTORY="$PAIR_LARGE_FIXTURES" \
+  GW_TRL_GW="$PWD/target/debug/gw" \
+  GW_TRL_GEMMA_TOKENIZER="$PWD/gemma-e2b-tokenizer" \
+  adapters/trl/.venv-gemma/bin/python -m pytest -q adapters/trl/tests/gemma_comparison
+```
+
+This store models the prior native reference-import boundary with explicitly synthetic
+observations. Its paired tests perform fresh actual Docker execution. The separate
+ignored `reference_full_population_cached_runtime_roundtrip` test qualifies actual
+112-member reference import. Preserve that distinction when reporting evidence.

@@ -71,6 +71,12 @@ pub enum RewardCommand {
 /// Provider-free artifact commands.
 #[derive(Debug, Subcommand, PartialEq)]
 pub enum ArtifactCommand {
+    /// Inspect a complete paired coding artifact without granting model or execution authority.
+    VerifyCodingPair {
+        /// One complete captured JSON stream.
+        #[arg(long, required = true)]
+        stdin: bool,
+    },
     /// Inspect one complete Gemma q/v LoRA completion without running a model.
     VerifyLora {
         /// Require one complete captured binary stream.
@@ -115,6 +121,10 @@ pub enum GenCommand {
 /// The `eval` subcommands.
 #[derive(Debug, Subcommand, PartialEq)]
 pub enum EvalCommand {
+    /// Capture a complete registered held-out split and execute both generated answer sets.
+    CodingPair(crate::commands::coding_pair::CodingPairArgs),
+    /// Fresh native re-execution of all saved modules; saved model history stays declared.
+    CodingPairReplay(crate::commands::coding_pair::CodingPairReplayArgs),
     /// Execute a saved pure Python function under the qualified cached local Docker recipe.
     Coding(crate::commands::coding::CodingArgs),
     /// Validate a saved coding declaration and explicitly re-execute its captured input locally.

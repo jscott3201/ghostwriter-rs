@@ -7,6 +7,7 @@ mod container;
 mod containment_tests;
 #[cfg(all(test, unix))]
 mod lifecycle_tests;
+pub mod paired;
 mod process;
 pub(crate) mod reference;
 mod runtime;
