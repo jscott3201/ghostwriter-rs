@@ -7,7 +7,7 @@ import blake3
 import pytest
 
 from ghostwriter_trl.artifact import ContractError, VerifiedSnapshot, read_snapshot
-from ghostwriter_trl.build import build, identity
+from ghostwriter_trl.build import build
 from ghostwriter_trl.tokenizer import load_tokenizer
 
 
@@ -37,7 +37,7 @@ def test_nested_report_edit_before_build_cannot_change_verified_authority(gw, fi
     exposed = snapshot.report
     exposed["artifact"]["artifact_id"] = "0" * 64
     examples, manifest = prepare(snapshot, tokenizer)
-    assert manifest["source_verification"] == original
+    assert "source_verification" not in manifest
     assert snapshot.report == original
     assert all(example["source"]["artifact_id"] == original["artifact"]["artifact_id"] for example in examples)
 
@@ -49,9 +49,7 @@ def test_report_edit_after_build_cannot_change_manifest_or_build_identity(gw, fi
     original = copy.deepcopy(manifest)
     exposed["artifact"]["manifest"]["cot_policy"] = "stripped"
     assert manifest == original
-    payload = dict(manifest)
-    build_id = payload.pop("build_id")
-    assert identity(payload) == build_id
+    assert "build_id" not in manifest  # Identity now binds the complete saved payload and source.
 
 
 @pytest.mark.parametrize("mutation", ["split_special_tokens", "additional_special_tokens"])

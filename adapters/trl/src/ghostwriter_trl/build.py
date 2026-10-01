@@ -38,7 +38,7 @@ def build(snapshot: VerifiedSnapshot, tokenizer, *, cot: str, turns: str, max_le
         "version": 1, "adapter_version": __version__, "adapter_source_sha256": source_identity(),
         "dependencies": dependencies, "tokenizer": pinned_tokenizer, "tokenizer_policy": tokenizer_policy(),
         "runtime": {"python": platform.python_version(), "implementation": platform.python_implementation(), "system": platform.system(), "machine": platform.machine()},
-        "student": {"repository": pinned_tokenizer["repository"], "revision": pinned_tokenizer["revision"], "weights_loaded": False},
+        "tokenizer_target": {"repository": pinned_tokenizer["repository"], "revision": pinned_tokenizer["revision"]},
         "cot_policy": cot, "multi_turn_loss": turns,
         "layout": "assistant_prefix_v1" if turns == "all_assistant" else "full_conversation_final_v1",
         "max_length": max_length, "offset_unit": "python_unicode_codepoint",
@@ -114,7 +114,6 @@ def build(snapshot: VerifiedSnapshot, tokenizer, *, cot: str, turns: str, max_le
             accepted_records.add(row["record_id"])
     manifest = {
         "build_manifest_version": 1, "recipe_id": recipe_id, "recipe": recipe,
-        "source_verification": verification_report,
         "source_record_count": len(rows), "accepted_source_record_count": len(accepted_records),
         "candidate_target_count": candidate_targets, "expanded_example_count": len(examples),
         "rejected_item_count": len(rejections), "rejections": rejections,
@@ -124,12 +123,15 @@ def build(snapshot: VerifiedSnapshot, tokenizer, *, cot: str, turns: str, max_le
         "example_ids": [e["example_id"] for e in examples],
         "supervised_token_count": sum(e["supervised_tokens"] for e in examples),
         "context_token_count": sum(e["context_tokens"] for e in examples),
+        "effective_shifted_supervised_token_count": sum(e["effective_shifted_supervised_tokens"] for e in examples),
         "effective_shifted_answer_token_count": sum(len(e["shifted_answer_token_indices"]) for e in examples),
         "qualification_limits": {
             "lifecycle_eligibility": "not_reconstructed_by_artifact_verification",
             "rights_and_execution_lineage": "unknown", "student_parent_revision": None,
             "grouped_split_qualification": "unknown", "contamination_screening": "unknown",
             "heldout_training_benefit": "unknown",
+            "semantic_screening": "not_run", "effective_prompt_separation": "unknown",
+            "student_weights": "unbound", "execution_lineage": "unbound", "decision_lineage": "unbound",
         },
     }
     if screening is not None:
@@ -140,5 +142,4 @@ def build(snapshot: VerifiedSnapshot, tokenizer, *, cot: str, turns: str, max_le
             "screening_lexical_scope": screening["plan"]["lexical_scope"],
             "semantic_screening": "not_run", "effective_prompt_separation": "unknown",
         })
-    manifest["build_id"] = identity(manifest)
     return examples, manifest

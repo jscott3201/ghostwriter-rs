@@ -189,3 +189,30 @@ fn snapshot_heldout_task_fixtures_remain_valid_artifacts() {
         );
     }
 }
+
+#[test]
+fn snapshot_long_conversations_preserve_complete_training_context() {
+    let mut plan = plan(ExportSchemaVersion::ReviewedTasks, false);
+    for (index, row) in plan.rows.iter_mut().enumerate() {
+        let mut messages: Vec<Message> = serde_json::from_str(&row.messages_json).unwrap();
+        messages[1].content = gw_schema::Content::Text("context ".repeat(1050 + index * 10));
+        row.messages_json = serde_json::to_string(&messages).unwrap();
+    }
+    plan.artifact.manifest.build_inputs_hash = shard_content_hash(&plan.rows);
+    plan.artifact.artifact_id = artifact_identity(&plan.artifact, &plan.rows).unwrap();
+    let mut encoded = Vec::new();
+    write_parquet(&plan.rows, &plan.artifact, &mut encoded).unwrap();
+    let name = "v3-long.parquet";
+    if let Some(output) = std::env::var_os("GW_REGENERATE_TRL_FIXTURES") {
+        std::fs::write(Path::new(&output).join(name), &encoded).unwrap();
+    }
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../adapters/trl/tests/fixtures")
+        .join(name);
+    assert_eq!(
+        verify_artifact_snapshot(std::fs::read(fixture).unwrap())
+            .unwrap()
+            .artifact,
+        plan.artifact
+    );
+}

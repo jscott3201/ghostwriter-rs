@@ -4,7 +4,9 @@ This external Python adapter reads one canonical Ghostwriter Parquet snapshot,
 asks `gw artifact verify --stdin` to verify **those exact bytes**, and prepares
 `input_ids`, `attention_mask`, and explicit unshifted causal language-model
 `labels`. It also retains the original `messages_json`, artifact/record/target
-identities, character and token ownership, and a versioned build manifest.
+identities, character and token ownership, and a versioned immutable input build.
+The installed command saves that build, verifies it through Rust, and replays the
+pinned tokenizer before any optional trainer handoff.
 
 The supported candidate is
 [Qwen/Qwen3-0.6B at c1899de289a04d12100db370d81485cdf75e47ca](https://huggingface.co/Qwen/Qwen3-0.6B/tree/c1899de289a04d12100db370d81485cdf75e47ca).
@@ -74,15 +76,48 @@ adapters/trl/.venv/bin/ghostwriter-trl \
   --output prepared-sft
 ```
 
-The output directory must not already exist. `examples.jsonl` contains the token
-features and audit information; `manifest.json` contains policies, installed
-versions, actual runtime platform, source report, identities, counts, and explicit
-rejections. An empty or fully rejected input produces zero examples and explicit
-counts. Inspect those counts before using any output. The adapter uses its own
-versioned SHA256 JSON identities; it never reimplements Rust's framed logical
-BLAKE3 artifact identity.
+The output directory must not already exist. Preparation writes:
 
-For a synthetic fixture, add `--qualify-handoff` to inspect both the actual
+- `prepared.gwsft`: the complete ordered examples, manifest, and exact original Parquet bytes.
+- `verification.json`: a separate Rust receipt for the complete build and its reverified source.
+- `replay.json`: a separate receipt for official rendering/tokenization replay by the Python loader.
+- `handoff.json`: optional actual collator/trainer evidence, created with `--qualify-handoff`.
+
+The input `build_id` exists before any trainer operation and stays unchanged when
+handoff evidence is added. An empty or fully rejected input still carries complete
+source verification, policies, counts, and rejection reasons. Inspect those counts
+before consuming examples. Handoff qualification requires usable, unequal-length examples.
+
+To verify a captured build with the provider-free Rust bridge:
+
+```sh
+gw artifact verify-prepared --stdin < prepared-sft/prepared.gwsft
+```
+
+To consume the saved build through the pinned Python loader:
+
+```python
+from pathlib import Path
+from ghostwriter_trl.prepared import read_prepared
+from ghostwriter_trl.handoff import qualify_prepared_handoff
+from ghostwriter_trl.tokenizer import load_tokenizer
+
+tokenizer = load_tokenizer(Path("qwen3-tokenizer"))
+prepared = read_prepared(Path("prepared-sft/prepared.gwsft"), Path("target/debug/gw"), tokenizer)
+examples = prepared.examples
+manifest = prepared.manifest
+report = qualify_prepared_handoff(prepared, tokenizer)
+assert report["build_id"] == prepared.build_id
+```
+
+`VerifiedPrepared` can be created only through successful whole-build verification
+and replay. Public examples, metadata, and receipts are defensive copies. Capture
+happens once: replacing the bundle or original source path cannot change the bytes
+that verification, replay, or handoff consumes. Publication uses an exclusive atomic
+link and refuses existing files or symlinks. An optional handoff failure leaves the
+saved input available for inspection; it does not produce a successful handoff receipt.
+
+For a synthetic fixture, add `--qualify-handoff` to load the saved build and inspect both the actual
 [TRL 1.14.1 collator and SFTTrainer](https://github.com/huggingface/trl/blob/fd74bbc7b5f852a70d4cc94377e0a8f94392fda1/trl/trainer/sft_trainer.py)
 dataloader. This requires at least two unequal-length examples. It constructs a
 small **random** CPU GPT-2 causal model covering the full tokenizer vocabulary,
@@ -160,6 +195,43 @@ rejects snapshot lookalikes. Caller-supplied byte/report pairs cannot acquire
 verified authority by recomputing a raw digest. Footer declarations do not reconstruct
 lifecycle eligibility or independently establish rights.
 
+### Complete prepared input contract
+
+The version-one wire is `GWSFT001`, a 32-byte BLAKE3 digest, two big-endian unsigned
+64-bit lengths, exact UTF-8 JSON payload bytes, and the exact source Parquet bytes.
+The digest uses derive-key domain `ghostwriter.prepared-sft-input.v1` over both
+lengths and all payload/source bytes. The maximum complete input is 256 MiB.
+Trailing bytes, stale digests, malformed UTF-8, duplicate JSON fields, floating-point
+JSON numbers, unsupported versions, and unknown payload fields are rejected.
+Original decimal task/oracle values remain in captured Parquet and original task
+JSON strings; this framing requires no second cross-language numeric hash convention.
+
+The identity binds every ordered example and all IDs, attention, labels, rendered
+text, ownership spans/offsets, source record/target/task/component references,
+rejections, supervised/context counts, and shifted supervision/answer counts. It also
+binds tokenizer files, official template, wrapper/backend policy, adapter source,
+dependencies, producer runtime, layout, length, reasoning, and turn policies.
+The `tokenizer_target` is the tokenizer repository/revision. Student weights and
+execution/decision lineage remain explicitly `unbound`; semantic screening stays
+`not_run`, and effective prompt separation stays `unknown`.
+
+Rust checks all framing, shape, ownership, accounting, source rows, target partitions,
+and screened policy/component bindings before returning any imported payload. It
+reverifies the actual embedded Parquet; an invented report plus a recomputed outer
+digest cannot establish source verification. Rust reports `tokenizer_replay=not_run`:
+it does not execute the official tokenizer or prove the producer's rendering choices.
+The Python loader reconstructs the entire build from the captured verified source
+under the pinned adapter/tokenizer/dependencies and compares every semantic field,
+recipe/example identity, rejection, and count before exposing any examples.
+
+Replay preserves the recorded producer runtime and original identities while recording
+its own runtime separately in `replay.json`. A different OS or Python 3.12 patch alone
+does not invalidate a build. Tokenizer, adapter source, dependency, and policy pins
+must still match, and all rendered features must replay exactly. This compatibility
+rule has regression coverage using altered producer-runtime declarations; execution
+qualification remains macOS ARM64 CPU only. A later adapter implementation with a
+different source identity requires preparation under that implementation.
+
 Declared task groups/splits/rights are retained. Expanded prefixes keep their
 source group. A declared validation or test role is a counted record rejection
 from SFT preparation. A declared train role is still only a declaration. For
@@ -227,7 +299,7 @@ identities, real collator and trainer tensors, and source-path replacement.
 `tests/fixtures/*.parquet` are small synthetic Rust-generated artifacts, with no
 provider output or third-party training data. They cover empty/nonempty v2/v3,
 raw JSON escape preservation, 1025 rows, reviewed task declarations, and held-out
-roles. Tests independently mutate the footer, schema, values, IDs, messages,
+roles, and conversations that produce unequal examples above 1024 tokens. Tests independently mutate the footer, schema, values, IDs, messages,
 counts, hashes, and task JSON. The Rust verifier's existing corruption tests also
 exercise both path and snapshot readers, including required nulls and later
 batches. To intentionally regenerate the synthetic fixtures from their checked
@@ -248,6 +320,22 @@ Regenerate only these synthetic fixtures with:
 ```sh
 GW_REGENERATE_SCREENED_TRL_FIXTURES="$PWD/adapters/trl/tests/fixtures" \
   cargo nextest run -p gw-cli -E 'binary(screened_export)' --locked --profile ci
+```
+
+Prepared fixtures (`tests/fixtures/prepared-*.gwsft`) are actual outputs of the
+installed pinned Python producer over these synthetic Parquet sources. Rust and
+Python consume the same frozen bytes and `tests/prepared_cases.json` independently.
+The corpus includes recomputed-hash attacks on later examples, source/component and
+count mismatches, missing/duplicate/reordered examples, malformed framing/JSON, and
+structurally valid token/recipe edits that only official replay can reject. Tests also
+check all-rejected and empty inputs, unchanged IDs across producer/runtime differences,
+and complete loaded features through the real collator and SFTTrainer dataloader.
+Fail-if-called sentinels cover forward, generation, training, and optimizer steps.
+To intentionally regenerate prepared fixtures after installing the current adapter:
+
+```sh
+GW_TRL_TOKENIZER="$PWD/qwen3-tokenizer" GW_TRL_GW="$PWD/target/debug/gw" \
+  adapters/trl/.venv/bin/python adapters/trl/tests/regenerate_prepared.py
 ```
 
 ## Fresh numeric rewards
