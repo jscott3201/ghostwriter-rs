@@ -106,7 +106,10 @@ mod store;
 #[cfg(test)]
 mod test_hooks;
 
-pub use artifact::{ARTIFACT_METADATA_KEY, ArtifactVerification, ExportPlan, verify_artifact};
+pub use artifact::{
+    ARTIFACT_METADATA_KEY, ArtifactSnapshotReport, ArtifactVerification, ExportPlan,
+    verify_artifact, verify_artifact_snapshot,
+};
 pub use cache::{canonical_json_hash, completion_hash, prompt_hash, record_hash};
 pub use error::{Result, StartupPhase, StorageError};
 pub use export::{clean_messages_json, export_parquet_bytes, is_selected_admitted};

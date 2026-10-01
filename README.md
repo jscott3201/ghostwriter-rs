@@ -207,6 +207,25 @@ You get one `out/dataset.parquet` file. Its footer records the target template, 
 same manifest as JSON. It records a local publication receipt without changing generation run status
 or record lifecycle. Historical sidecars are ignored and left untouched.
 
+### Verified SFT token labels
+
+The [external TRL adapter](adapters/trl/README.md) prepares explicit loss labels for the pinned
+Qwen3-0.6B tokenizer. It verifies one immutable Parquet byte snapshot through Rust, checks every
+rendering against the official template, and supports supervised, masked, and stripped reasoning
+with explicit assistant-prefix expansion. Its local CPU qualification inspects the real collator
+and SFTTrainer dataloader without loading pretrained weights or running a training step.
+
+The provider-free snapshot verifier is also available directly:
+
+```sh
+gw artifact verify --stdin < out/dataset.parquet
+```
+
+Its versioned JSON report contains the verified artifact, raw byte length, and raw BLAKE3 digest.
+Missing legacy metadata and integrity failures exit with status 1 and emit no success report.
+See the adapter guide for the pinned environment, rejection limits, and unresolved split/lineage
+qualification.
+
 ### Pure preference preparation
 
 `gw_engine::prepare_preference_pair` validates two records against a versioned judge-ranking

@@ -16,6 +16,7 @@
 //! | `gw gen replay`          | live   | resume a run from its persisted shard checkpoints         |
 //! | `gw eval audit-separation`| pure  | score diagnostics and independent outcome comparison     |
 //! | `gw eval promote`        | pure   | variance-aware promotion gate over two `eval_results.json` |
+//! | `gw artifact verify --stdin` | pure | verify one immutable Parquet snapshot and report its raw digest |
 //!
 //! ## Security posture
 //!
@@ -32,7 +33,7 @@ pub mod wire;
 
 use clap::Parser;
 
-use crate::cli::{Cli, Command, EvalCommand, GenCommand};
+use crate::cli::{ArtifactCommand, Cli, Command, EvalCommand, GenCommand};
 
 /// The process-level outcome of a successfully-run command.
 ///
@@ -58,15 +59,18 @@ pub fn init_tracing() {
 
 /// Parse the process arguments and dispatch to the matching command handler.
 ///
-/// This is the single async entrypoint the binary's `main` awaits. Tracing is initialized first so
-/// every downstream `tracing` event is captured.
+/// This is the single async entrypoint the binary's `main` awaits. Artifact verification leaves
+/// tracing disabled so stdout contains only its strict JSON report. Other commands initialize tracing.
 ///
 /// # Errors
 /// Returns the first error from the dispatched handler (config-load, store/provider construction,
 /// engine run, export, eval, or I/O), as `anyhow::Error` (the binary boundary).
 pub async fn run() -> anyhow::Result<CommandOutcome> {
-    init_tracing();
-    dispatch(Cli::parse()).await
+    let cli = Cli::parse();
+    if !matches!(cli.command, Command::Artifact(_)) {
+        init_tracing();
+    }
+    dispatch(cli).await
 }
 
 /// Dispatch an already-parsed [`Cli`] to its handler — factored out of [`run`] so a test can drive a
@@ -77,6 +81,9 @@ pub async fn run() -> anyhow::Result<CommandOutcome> {
 /// Propagates the dispatched handler's error.
 pub async fn dispatch(cli: Cli) -> anyhow::Result<CommandOutcome> {
     match cli.command {
+        Command::Artifact(ArtifactCommand::Verify { .. }) => {
+            commands::artifact::verify_stdin().map(|()| CommandOutcome::Success)
+        }
         Command::Gen(gen_cmd) => match gen_cmd {
             GenCommand::Run(args) => commands::run::run(args)
                 .await

@@ -1,8 +1,8 @@
 //! The clap-derive command tree for the `gw` binary.
 //!
-//! Two top-level groups mirror the crate-dependency split: `gen` drives the engine (the LIVE
-//! provider-spending paths plus the PURE `export`), and `eval` drives the off-path, model-free
-//! diagnostics ([`gw_eval`]). Every leaf carries only the flags that command needs; the shared
+//! `gen` drives the engine (live provider paths plus pure export), `eval` drives model-free
+//! diagnostics ([`gw_eval`]), and `artifact` verifies immutable provider-free snapshots.
+//! Every leaf carries only the flags that command needs; the shared
 //! `--config` / `--db` / `--run-id` knobs that LAYER over the config file are hoisted onto the
 //! relevant subcommands so a single figment merge (file → env → these flags) produces the effective
 //! [`Config`](crate::config::Config).
@@ -27,12 +27,26 @@ pub struct Cli {
 /// The top-level command groups.
 #[derive(Debug, Subcommand, PartialEq)]
 pub enum Command {
+    /// Verify a self-contained immutable Parquet snapshot (no providers or database).
+    #[command(subcommand)]
+    Artifact(ArtifactCommand),
     /// Generation: drive the engine over a seed space (run / tui / export / replay).
     #[command(subcommand)]
     Gen(GenCommand),
     /// Evaluation: off-path, model-free diagnostics over persisted records / eval artifacts.
     #[command(subcommand)]
     Eval(EvalCommand),
+}
+
+/// Provider-free artifact commands.
+#[derive(Debug, Subcommand, PartialEq)]
+pub enum ArtifactCommand {
+    /// Read all Parquet bytes from stdin and emit a versioned JSON verification report.
+    Verify {
+        /// Require explicit binary stdin input; paths and legacy metadata are unsupported.
+        #[arg(long, required = true)]
+        stdin: bool,
+    },
 }
 
 /// The `gen` subcommands.

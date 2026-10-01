@@ -352,3 +352,19 @@ fn verifier_reads_tail_batches_and_detects_changed_conversation() {
             .contains("identity mismatch")
     );
 }
+
+fn verify_artifact(path: impl AsRef<Path>) -> Result<ArtifactVerification> {
+    let disk = super::verify_artifact(path.as_ref());
+    let snapshot = verify_artifact_snapshot(std::fs::read(path).unwrap());
+    match (&disk, snapshot) {
+        (Ok(ArtifactVerification::Verified(expected)), Ok(report)) => {
+            assert_eq!(expected, &report.artifact)
+        }
+        (Ok(ArtifactVerification::MissingLegacyMetadata), Err(error)) => {
+            assert!(error.to_string().contains("metadata"))
+        }
+        (Err(_), Err(_)) => {}
+        _ => panic!("path and snapshot verification disagree"),
+    }
+    disk
+}

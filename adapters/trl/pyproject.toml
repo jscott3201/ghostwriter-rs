@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools==80.9.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ghostwriter-trl"
+version = "0.1.0"
+description = "Verified Ghostwriter Parquet to explicit Qwen3 SFT token labels"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "blake3==1.0.8", "pyarrow==21.0.0", "transformers==4.56.2",
+  "tokenizers==0.22.0", "trl==1.14.1", "datasets==4.7.0",
+  "accelerate==1.4.0", "torch==2.8.0", "jinja2==3.1.6",
+]
+
+[project.scripts]
+ghostwriter-trl = "ghostwriter_trl.cli:main"
+
+[tool.setuptools.package-data]
+ghostwriter_trl = ["*.json"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
