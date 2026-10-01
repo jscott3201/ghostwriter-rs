@@ -28,6 +28,11 @@
 //! responses). `gw-schema` owns the *persisted* envelope `Verdict { Admit, Reject,
 //! NeedsReview }` and the config-side `JudgeSampling` policy folded into the contract.
 
+mod candidate;
+pub use candidate::CandidateBinding;
+mod calibration;
+mod finite_numbers;
+pub use calibration::*;
 mod accounting;
 mod attempt;
 mod config;

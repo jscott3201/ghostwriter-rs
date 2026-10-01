@@ -62,6 +62,17 @@
 mod cache;
 mod cached_panel;
 mod calibration;
+mod calibration_contract;
+mod calibration_fit;
+mod calibration_intake;
+pub use calibration_contract::{
+    ResolvedCalibrationPanel, calibration_observation_identity, calibration_payload_identity,
+};
+pub use calibration_fit::{fit_calibration, verify_calibration_snapshot};
+mod interpretation;
+pub use interpretation::{InterpretedJudgeResponse, interpret_judge_response};
+mod candidate_render;
+pub use candidate_render::{JUDGE_CANDIDATE_RENDER_VERSION, render_judge_candidate};
 mod consensus;
 mod decision;
 mod effective_contract;
@@ -86,9 +97,9 @@ pub use effective_contract::{EffectiveJudgeContract, validate_judge_panel};
 pub use error::{JudgeError, Result};
 pub use grader::{AreaThresholds, GradeOutcome, HybridGrader, rederive_verdict};
 pub use panel::{
-    DEFAULT_JUDGE_MAX_TOKENS, DEFAULT_JUDGE_REASONING_MAX_TOKENS, Grade, JudgeReasoning,
-    JudgeSampling, JudgeScoring, MIN_JUDGE_VERDICT_TOKENS, PanelJudge, build_judge_request,
-    grade_one, grade_panel,
+    DEFAULT_JUDGE_MAX_TOKENS, DEFAULT_JUDGE_REASONING_MAX_TOKENS, Grade,
+    JUDGE_INTERPRETATION_VERSION, JudgeReasoning, JudgeSampling, JudgeScoring,
+    MIN_JUDGE_VERDICT_TOKENS, PanelJudge, build_judge_request, grade_one, grade_panel,
 };
 pub use preflight::{
     DEFAULT_CORRELATION_RHO, PanelAssessment, assess_panel, validate_correlation_prior,

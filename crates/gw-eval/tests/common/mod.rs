@@ -64,7 +64,7 @@ pub fn candidate(prompt: usize, index: u32, score: Option<f64>) -> TrainingRecor
         hashes: Hashes::default(),
         cost: Default::default(),
     };
-    let binding = CandidateBinding::from_record(&record).unwrap();
+    let binding = gw_storage::capture_candidate_binding(&record).unwrap();
     record.hashes.prompt_hash = binding.prompt_hash;
     record.hashes.record_hash = binding.record_hash;
     record
@@ -74,7 +74,7 @@ pub fn evidence(records: &[TrainingRecord], values: &[f64]) -> OutcomeEvidence {
     assert_eq!(records.len(), values.len());
     let corpus: Vec<_> = records
         .iter()
-        .map(|record| CandidateBinding::from_record(record).unwrap())
+        .map(|record| gw_storage::capture_candidate_binding(record).unwrap())
         .collect();
     let outcomes = corpus
         .iter()

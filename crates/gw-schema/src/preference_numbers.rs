@@ -7,40 +7,10 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::DeserializeOwned};
 use serde_json::Value;
 
-const TAG: &str = "binary64";
 type Transform = dyn FnMut(&mut Value) -> Result<(), String>;
 type Visit = fn(&mut Value, &mut Transform) -> Result<(), String>;
 
-fn encode(value: &mut Value) -> Result<(), String> {
-    let number = value
-        .as_f64()
-        .filter(|number| number.is_finite())
-        .ok_or("preference numeric evidence must be finite")?;
-    *value = serde_json::json!({TAG: format!("{:016x}", number.to_bits())});
-    Ok(())
-}
-
-fn decode(value: &mut Value) -> Result<(), String> {
-    let object = value
-        .as_object()
-        .filter(|object| object.len() == 1)
-        .ok_or("preference numbers require a binary64 bit object")?;
-    let text = object
-        .get(TAG)
-        .and_then(Value::as_str)
-        .filter(|text| {
-            text.len() == 16
-                && text
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        })
-        .ok_or("preference binary64 bits must be exactly 16 lowercase hexadecimal digits")?;
-    let bits = u64::from_str_radix(text, 16).map_err(|error| error.to_string())?;
-    let number = serde_json::Number::from_f64(f64::from_bits(bits))
-        .ok_or("preference numeric evidence must be finite")?;
-    *value = Value::Number(number);
-    Ok(())
-}
+use crate::finite_numbers::{decode, encode};
 
 fn serialize<T: Serialize, S: Serializer>(
     value: &T,

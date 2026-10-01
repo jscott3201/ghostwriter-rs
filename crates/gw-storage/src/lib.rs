@@ -84,6 +84,8 @@
 //! # }
 //! ```
 
+mod candidate;
+pub use candidate::capture_candidate_binding;
 mod accounting;
 mod admission;
 mod artifact;

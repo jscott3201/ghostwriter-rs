@@ -126,7 +126,7 @@ fn cache_float_projection(value: f64) -> Result<f64> {
     })
 }
 
-fn validate_unique<'a>(
+pub(crate) fn validate_unique<'a>(
     contracts: impl IntoIterator<Item = &'a EffectiveJudgeContract>,
 ) -> Result<()> {
     let mut positions = HashMap::new();

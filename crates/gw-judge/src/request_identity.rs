@@ -21,7 +21,15 @@ pub fn judge_request_contract(
     judge: &crate::PanelJudge,
     rubric: &str,
 ) -> Result<serde_json::Value> {
-    let request = crate::build_judge_request(judge, rubric, "");
+    request_contract_for_candidate(judge, rubric, "")
+}
+
+pub(crate) fn request_contract_for_candidate(
+    judge: &crate::PanelJudge,
+    rubric: &str,
+    candidate: &str,
+) -> Result<serde_json::Value> {
+    let request = crate::build_judge_request(judge, rubric, candidate);
     crate::EffectiveJudgeContract::json_score(&request)?;
     Ok(
         serde_json::json!({"request": request, "request_identity": request_fingerprint(&request, judge.rubric_id.as_deref())?, "family": judge.family, "rubric_id": judge.rubric_id, "scoring": JudgeScoring::JsonScore.as_str(), "interpretation_version": JUDGE_INTERPRETATION_VERSION}),

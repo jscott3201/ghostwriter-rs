@@ -65,10 +65,27 @@ pub enum GenCommand {
 /// The `eval` subcommands.
 #[derive(Debug, Subcommand, PartialEq)]
 pub enum EvalCommand {
+    /// Fit supplied judge observations against independent labels offline; never qualifies quality.
+    FitCalibration(FitCalibrationArgs),
     /// Descriptive score diagnostics and an optional independent-outcome check; prints JSON.
     AuditSeparation(AuditSeparationArgs),
     /// Variance-aware promotion gate over two `eval_results.json` files; prints the report as JSON.
     Promote(PromoteArgs),
+}
+
+/// Offline calibration inputs; no database, provider credentials, or model calls are used.
+#[derive(Debug, clap::Args, PartialEq)]
+pub struct FitCalibrationArgs {
+    /// Production TOML configuration resolving the expected area, rubric and ordered judge panel.
+    #[arg(long, value_name = "FILE")]
+    pub config: PathBuf,
+    /// JSON lookup pool of full records with unique (run_id, record_id) pairs. Only records
+    /// referenced by the evidence fit/assessment rows are evaluated and bound in the snapshot.
+    #[arg(long, value_name = "FILE")]
+    pub records: PathBuf,
+    /// Strict versioned calibration evidence with exact numerical encodings.
+    #[arg(long, value_name = "FILE")]
+    pub evidence: PathBuf,
 }
 
 /// Whether a generation command requests automatic admission or collection for human review.
