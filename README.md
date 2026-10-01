@@ -921,6 +921,45 @@ incarnation, validity, and attempt references, while preserving unknowns and bin
 declaration. Attempt/incarnation changes alter evidence binding. Equal declared semantics alone do
 not establish deployment equivalence or authorize cache reuse.
 
+## Offline artifact eligibility
+
+`gw_providers::artifact_assessment` assesses an exact artifact, role, and intended use from an offline
+bundle and a separately owner-supplied `TrustedArtifactCatalog`. Catalog construction belongs to a
+trusted application or owner review channel. The catalog and its review inputs cannot be
+deserialized from submitted model evidence. There are no built-in production catalog entries.
+
+Each trusted review binds the recomputed artifact identity, allowed role/use, reviewed openness,
+review reference/date/scope, and separate rights, serving-term, and output-term decisions. Reviewed
+open weights may qualify without a complete open-training-artifact claim. Closed or unknown
+openness and unreviewed applicable terms deny. Rights require reviewed evidence. Serving and output
+terms each require either their own reviewed evidence or an explicit owner-reviewed inapplicability
+scope. The assessor does not infer permissions from license names or interpret license text.
+
+Both catalog construction and assessment check raw policy bytes against their declared SHA-256 or
+BLAKE3 digest. The trusted review additionally pins the exact `PolicyDocumentIdentity` and an
+independent BLAKE3 digest of the reviewed bytes. Submitted review/catalog documents, aliases,
+claimed accepted digests, and approval flags cannot supply a trusted review. Changes to a policy's
+subject, role, use, revision, bytes, or declaration require a new matching independent review.
+
+Every referenced base, parent checkpoint, and adapter must resolve to its exact declaration and
+its own reviewed obligations for the requested role/use. Unknown or missing lineage denies;
+checkpoint and adapter links must have compatible kinds and the same declared base. Explicit
+absence is useful only within the exact artifact claim reviewed by the owner. Duplicate or
+conflicting catalog entries and duplicate submitted evidence are rejected. This first contract
+supports one pinned document per artifact/kind/role/use. Additional submitted documents for that
+same scope deny the assessment instead of expanding the trusted review. Real rights reviews may
+require several source documents; those need an explicitly supported reviewed set in a later
+contract. This limitation does not classify their text as legally contradictory. Collection ordering
+is ignored where the contract defines a set; semantic configuration array ordering remains meaningful.
+
+The structured report contains the selected artifact/role/use, exact catalog identity, matched
+review and policy references, denial reasons, and an evidence digest. Catalog revisions and review
+scope changes alter that binding. Reports are immutable results and cannot be deserialized into
+trust. A positive report establishes only this offline artifact assessment. It does not prove that
+model files were acquired or loaded, verify a deployment, qualify an actual client, or authorize
+cache reuse or a model call. Existing request, manifest, cache, receipt, and concurrency behavior is
+unchanged; this module performs no file, environment, credential, or network access.
+
 ---
 
 ## Security

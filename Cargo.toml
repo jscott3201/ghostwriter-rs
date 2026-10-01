@@ -55,6 +55,7 @@ parquet = "59.0.0"
 minijinja = "2.21.0"
 clap = { version = "4", features = ["derive"] }
 blake3 = "1"
+sha2 = "0.10.9"
 semver = { version = "1", features = ["serde"] }
 time = { version = "0.3", features = ["serde", "formatting", "parsing", "macros"] }
 figment = { version = "0.10", features = ["toml", "env"] }

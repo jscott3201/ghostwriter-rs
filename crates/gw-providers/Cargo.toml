@@ -13,6 +13,7 @@ workspace = true
 
 [dependencies]
 blake3.workspace = true
+sha2.workspace = true
 gw-schema.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["raw_value"] }
