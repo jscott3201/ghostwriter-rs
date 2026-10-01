@@ -135,12 +135,12 @@ cargo install --path crates/gw-cli
 
 ## Quickstart
 
-**1. Provide your provider key via the environment.** It is read only from `OPENROUTER_API_KEY` and is
-never a config field or a CLI flag. A literal `export` command can still enter shell history; use
-your shell or secret manager's protected input mechanism when entering a real key.
+**1. Provide your Model API key via the environment.** The default variable is `MODEL_API_KEY`.
+The key value is never a config field or a CLI flag. A literal `export` command can still enter shell
+history; use your shell or secret manager's protected input mechanism when entering a real key.
 
 ```sh
-export OPENROUTER_API_KEY=sk-or-...
+export MODEL_API_KEY=sk-or-...
 ```
 
 **2. Write a prompts file** — one user turn per line (lines beginning with `#` are skipped):
@@ -564,7 +564,8 @@ requires a nonempty judge panel and a valid admission configuration before any p
 db          = "gw-run.sqlite"   # SQLite store: run state, queue, provenance
 accounting_policy = { mode = "finite_usd", limit_usd = 5.0 }
 # For local/unpriced backends: accounting_policy = { mode = "observation_only" }
-provider_base_url = "https://openrouter.ai/api/v1"   # OpenAI-compatible endpoint
+model_api_base_url = "https://openrouter.ai/api/v1"   # Model API endpoint (base URL)
+model_api_key_env  = "MODEL_API_KEY"                # API key environment variable name
 provider_rpm      = 60          # shared teacher + judge chat requests/min
 
 # ─── the training area: what to generate and how to grade it ────────────────
@@ -612,7 +613,16 @@ dataset_version = "0.1.0"
 
 Notes:
 
-- **The API key is never in this file.** Only `OPENROUTER_API_KEY` (from the environment) authenticates.
+- **The API key value is never in this file.** `model_api_key_env` names the environment variable
+  that holds it; the default is `MODEL_API_KEY`. Names start with an ASCII letter or underscore and
+  contain only ASCII letters, digits, or underscores.
+- `GW_MODEL_API_BASE_URL` overrides the Model API endpoint (base URL); `GW_MODEL_API_KEY_ENV`
+  overrides the API key environment variable **name**, never its value. For an existing OpenRouter
+  setup, explicitly set `model_api_key_env = "OPENROUTER_API_KEY"`. There is no old-key fallback.
+- Replace the removed `provider_base_url` / `GW_PROVIDER_BASE_URL` settings with
+  `model_api_base_url` / `GW_MODEL_API_BASE_URL`. The default endpoint remains OpenRouter; changing
+  its URL does not establish compatibility or qualify another backend. Embedding endpoint and key
+  settings remain separate, including the local embedding default without authentication.
 - `judge_reasoning_max_tokens` and `judge_reasoning_effort` are **mutually exclusive** in the same
   table — set one or the other, not both. The same holds for per-judge `reasoning_max_tokens` /
   `reasoning_effort`.
@@ -1297,8 +1307,10 @@ actual-client/cache qualification remain separate requirements; no production mo
 
 ## Security
 
-- `OPENROUTER_API_KEY` is read from the environment by the provider constructor only — **never** from
-  the config file, a CLI flag, serialization, or logs. The `GW_` env prefix can't slurp it.
+- The provider constructor reads the key from the configured environment variable (default
+  `MODEL_API_KEY`) after run compatibility checks. Configuration stores only the variable name;
+  never put the key value in TOML, `GW_` settings, CLI flags, or logs. Credentials are excluded from
+  run manifests, receipts, cache identities, and provider debug output.
 - `unsafe` code is **forbidden** workspace-wide.
 - See [SECURITY.md](SECURITY.md) for reporting.
 

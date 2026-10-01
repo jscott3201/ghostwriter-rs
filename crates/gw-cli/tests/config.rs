@@ -199,11 +199,11 @@ fn nested_env_key_sets_area_field() {
 }
 
 #[test]
-fn openrouter_api_key_env_does_not_leak_into_config() {
+fn model_api_key_value_does_not_leak_into_config() {
     Jail::expect_with(|jail| {
         // The real key var is present in the environment but carries no `GW_` prefix, so the figment
         // Env layer (scoped to `GW_`) cannot reach it — it never enters the Config.
-        jail.set_env("OPENROUTER_API_KEY", "LEAKED-KEY-FROM-ENV");
+        jail.set_env("MODEL_API_KEY", "LEAKED-KEY-FROM-ENV");
         jail.create_file(
             "gw.toml",
             "accounting_policy = { mode = \"finite_usd\", limit_usd = 2.0 }\n",
@@ -212,7 +212,7 @@ fn openrouter_api_key_env_does_not_leak_into_config() {
         let json = serde_json::to_string(&cfg).expect("serialize");
         assert!(
             !json.contains("LEAKED-KEY-FROM-ENV"),
-            "OPENROUTER_API_KEY must never reach the Config: {json}"
+            "MODEL_API_KEY must never reach the Config: {json}"
         );
         Ok(())
     });

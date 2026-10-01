@@ -1,8 +1,8 @@
-//! [`OpenRouterProvider`] — the concrete OpenAI-compatible streaming client.
+//! [`ChatCompletionsProvider`] — the concrete OpenAI-compatible streaming client.
 //!
 //! Wires the pieces together: a [`RateLimiter`] gate, a [`retry`] loop around the POST,
 //! `reqwest`'s `bytes_stream()`, and the [`decode_sse`] decoder.
-//! The API key is read from an **environment variable** (default `OPENROUTER_API_KEY`) and is
+//! The API key is read from an **environment variable** (default `MODEL_API_KEY`) and is
 //! never logged. The base URL defaults to OpenRouter's `/api/v1` but is configurable for OMLX
 //! / any OpenAI-compatible remote.
 
@@ -24,12 +24,12 @@ use gw_schema::TransportOutcome;
 /// The default OpenRouter base URL.
 pub const DEFAULT_BASE_URL: &str = "https://openrouter.ai/api/v1";
 /// The default environment variable holding the API key.
-pub const DEFAULT_API_KEY_ENV: &str = "OPENROUTER_API_KEY";
+pub const DEFAULT_API_KEY_ENV: &str = "MODEL_API_KEY";
 
-/// Builder for an [`OpenRouterProvider`]: configure base URL, key env var, optional OpenRouter
+/// Builder for a [`ChatCompletionsProvider`]: configure base URL, key env var, optional OpenRouter
 /// attribution headers, and the retry policy before reading the key from the environment.
-#[derive(Debug, Clone)]
-pub struct OpenRouterProviderBuilder {
+#[derive(Clone)]
+pub struct ChatCompletionsProviderBuilder {
     base_url: String,
     api_key_env: String,
     referer: Option<String>,
@@ -40,7 +40,46 @@ pub struct OpenRouterProviderBuilder {
     http2_prior_knowledge: bool,
 }
 
-impl Default for OpenRouterProviderBuilder {
+impl std::fmt::Debug for ChatCompletionsProviderBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let reference = if validate_api_key_env(&self.api_key_env).is_ok() {
+            self.api_key_env.as_str()
+        } else {
+            "[invalid]"
+        };
+        f.debug_struct("ChatCompletionsProviderBuilder")
+            .field("base_url", &self.base_url)
+            .field("api_key_env", &reference)
+            .field("referer", &self.referer)
+            .field("title", &self.title)
+            .field("rpm", &self.rpm)
+            .field("policy", &self.policy)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Validate an API key environment variable name without accessing its value.
+///
+/// Names use portable ASCII identifiers: a letter or underscore followed by letters, digits,
+/// or underscores. Invalid supplied names are omitted from lookup errors and debug output.
+///
+/// # Errors
+/// Returns a static configuration error for an invalid name, without echoing the supplied input.
+pub fn validate_api_key_env(name: &str) -> Result<(), ProviderError> {
+    let mut bytes = name.bytes();
+    if !bytes
+        .next()
+        .is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_')
+        || !bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+    {
+        return Err(ProviderError::Config(
+            "API key environment variable must be a name starting with an ASCII letter or underscore and containing only ASCII letters, digits, or underscores".into(),
+        ));
+    }
+    Ok(())
+}
+
+impl Default for ChatCompletionsProviderBuilder {
     fn default() -> Self {
         Self {
             base_url: DEFAULT_BASE_URL.to_string(),
@@ -55,7 +94,7 @@ impl Default for OpenRouterProviderBuilder {
     }
 }
 
-impl OpenRouterProviderBuilder {
+impl ChatCompletionsProviderBuilder {
     #[cfg(test)]
     pub(crate) fn http2_for_test(mut self) -> Self {
         self.http2_prior_knowledge = true;
@@ -70,7 +109,8 @@ impl OpenRouterProviderBuilder {
         self
     }
 
-    /// Override the environment variable the API key is read from.
+    /// Override the environment variable the API key is read from. Its name is validated by
+    /// [`Self::semantic_declaration`], [`Self::build`], and [`Self::build_with_key`].
     #[must_use]
     pub fn api_key_env(mut self, var: impl Into<String>) -> Self {
         self.api_key_env = var.into();
@@ -112,7 +152,7 @@ impl OpenRouterProviderBuilder {
     ///   never a value).
     /// - [`ProviderError::Config`] if the key is not a valid HTTP header value, or the HTTP
     ///   client cannot be constructed.
-    pub fn build(self) -> Result<OpenRouterProvider, ProviderError> {
+    pub fn build(self) -> Result<ChatCompletionsProvider, ProviderError> {
         self.semantic_declaration()?;
         let key = std::env::var(&self.api_key_env)
             .map_err(|_| ProviderError::MissingApiKey(self.api_key_env.clone()))?;
@@ -124,7 +164,7 @@ impl OpenRouterProviderBuilder {
     ///
     /// # Errors
     /// [`ProviderError::Config`] if the key / headers are invalid or the client fails to build.
-    pub fn build_with_key(self, key: &str) -> Result<OpenRouterProvider, ProviderError> {
+    pub fn build_with_key(self, key: &str) -> Result<ChatCompletionsProvider, ProviderError> {
         let declaration = self.semantic_declaration()?;
         let mut headers = HeaderMap::new();
         let mut auth = HeaderValue::from_str(&format!("Bearer {key}"))
@@ -157,7 +197,7 @@ impl OpenRouterProviderBuilder {
             .build()
             .map_err(|e| ProviderError::Config(format!("http client build failed: {e}")))?;
 
-        Ok(OpenRouterProvider {
+        Ok(ChatCompletionsProvider {
             http,
             base_url: crate::normalize_endpoint(&self.base_url)?,
             declaration,
@@ -170,8 +210,10 @@ impl OpenRouterProviderBuilder {
     /// credentials or constructing an HTTP client.
     ///
     /// # Errors
-    /// Rejects unsupported or credential-bearing endpoint forms without echoing the URL.
+    /// Rejects unsupported or credential-bearing endpoint forms and invalid API key environment
+    /// variable names without echoing the input.
     pub fn semantic_declaration(&self) -> Result<gw_schema::SemanticDeclaration, ProviderError> {
+        validate_api_key_env(&self.api_key_env)?;
         crate::identity::chat(&self.base_url, self.policy.max_attempts)
     }
 }
@@ -181,7 +223,7 @@ impl OpenRouterProviderBuilder {
 /// `stream_chat` gates on the rate limiter, retries the POST on transient faults, and returns a
 /// stream of [`StreamDelta`](crate::StreamDelta)s decoded from the SSE response.
 #[derive(Clone)]
-pub struct OpenRouterProvider {
+pub struct ChatCompletionsProvider {
     http: HttpClient,
     base_url: String,
     limiter: Arc<RateLimiter>,
@@ -190,9 +232,9 @@ pub struct OpenRouterProvider {
 }
 
 /// Redacted `Debug` — never prints the HTTP client (which holds the `Authorization` header).
-impl std::fmt::Debug for OpenRouterProvider {
+impl std::fmt::Debug for ChatCompletionsProvider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("OpenRouterProvider")
+        f.debug_struct("ChatCompletionsProvider")
             .field("base_url", &self.base_url)
             .field("rpm", &self.limiter.rpm())
             .field("policy", &self.policy)
@@ -200,17 +242,17 @@ impl std::fmt::Debug for OpenRouterProvider {
     }
 }
 
-impl OpenRouterProvider {
+impl ChatCompletionsProvider {
     /// Start configuring a provider.
     #[must_use]
-    pub fn builder() -> OpenRouterProviderBuilder {
-        OpenRouterProviderBuilder::default()
+    pub fn builder() -> ChatCompletionsProviderBuilder {
+        ChatCompletionsProviderBuilder::default()
     }
 
-    /// Convenience: build the default OpenRouter provider, reading `OPENROUTER_API_KEY`.
+    /// Convenience: build the default OpenRouter provider, reading `MODEL_API_KEY`.
     ///
     /// # Errors
-    /// See [`OpenRouterProviderBuilder::build`].
+    /// See [`ChatCompletionsProviderBuilder::build`].
     pub fn from_env() -> Result<Self, ProviderError> {
         Self::builder().build()
     }
@@ -306,7 +348,7 @@ impl OpenRouterProvider {
     }
 }
 
-impl Provider for OpenRouterProvider {
+impl Provider for ChatCompletionsProvider {
     fn semantic_declaration(&self) -> Option<gw_schema::SemanticDeclaration> {
         Some(self.declaration.clone())
     }
@@ -354,20 +396,20 @@ mod tests {
     fn provider_is_dyn_compatible() {
         // Coercing to `&dyn Provider` / `Box<dyn Provider>` only compiles if the trait is
         // object-safe — the runtime witness for the compile-time assertion in lib.rs.
-        let p = OpenRouterProvider::builder()
+        let p = ChatCompletionsProvider::builder()
             .build_with_key("sk-test-not-a-real-key")
             .expect("builds");
         let boxed: Box<dyn Provider> = Box::new(p.clone());
         let dynref: &dyn Provider = &p;
         // Use both bindings so the coercions are load-bearing (and Debug stays redacted).
-        assert!(format!("{p:?}").contains("OpenRouterProvider"));
+        assert!(format!("{p:?}").contains("ChatCompletionsProvider"));
         let _ = (boxed, dynref);
     }
 
     #[test]
     fn missing_env_var_is_clean_error() {
         // A var name extremely unlikely to be set in CI.
-        let res = OpenRouterProvider::builder()
+        let res = ChatCompletionsProvider::builder()
             .api_key_env("GW_PROVIDERS_DEFINITELY_UNSET_KEY_XYZ")
             .build();
         match res {
@@ -380,7 +422,7 @@ mod tests {
 
     #[test]
     fn build_with_key_succeeds_and_sets_base_url() {
-        let p = OpenRouterProvider::builder()
+        let p = ChatCompletionsProvider::builder()
             .base_url("https://example.test/api/v1/")
             .referer("https://ghostwriter.example")
             .title("ghostwriter-rs")
@@ -396,7 +438,7 @@ mod tests {
     #[test]
     fn invalid_key_is_config_error_not_panic() {
         // A newline in a header value is rejected by reqwest's HeaderValue.
-        let res = OpenRouterProvider::builder().build_with_key("bad\nkey");
+        let res = ChatCompletionsProvider::builder().build_with_key("bad\nkey");
         assert!(matches!(res, Err(ProviderError::Config(_))));
     }
 
@@ -429,8 +471,8 @@ mod tests {
     }
 
     #[test]
-    fn default_constants_are_openrouter() {
+    fn default_endpoint_and_key_reference() {
         assert_eq!(DEFAULT_BASE_URL, "https://openrouter.ai/api/v1");
-        assert_eq!(DEFAULT_API_KEY_ENV, "OPENROUTER_API_KEY");
+        assert_eq!(DEFAULT_API_KEY_ENV, "MODEL_API_KEY");
     }
 }

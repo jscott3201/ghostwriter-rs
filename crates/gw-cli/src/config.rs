@@ -14,11 +14,10 @@
 //!
 //! ## The API key is NEVER in this struct (security INVARIANT)
 //!
-//! `OPENROUTER_API_KEY` is read from the process environment by the provider constructor
-//! ([`crate::wire::build_provider`]) and is deliberately ABSENT from [`Config`] — it is never read
-//! from the TOML file, never a clap flag, never serialized, and never logged. The figment `Env`
-//! provider is scoped to the `GW_` prefix, so it cannot even accidentally slurp `OPENROUTER_API_KEY`
-//! (which carries no `GW_` prefix) into the config.
+//! [`Config::model_api_key_env`] stores only an environment variable name (default `MODEL_API_KEY`).
+//! The provider constructor ([`crate::wire::build_provider`]) resolves the secret after pure run
+//! preparation and compatibility checks. Key values never belong in TOML, `GW_` configuration
+//! overrides, CLI flags, serialized configuration, or logs.
 //!
 //! The config mirrors the leaf-crate config types ([`AreaThresholds`], [`PanelJudge`]) with its OWN
 //! `serde`-deriving structs, because those leaf types do not derive `serde`; [`Config::area_config`]
@@ -42,15 +41,17 @@ use gw_schema::{
 pub const DEFAULT_DB_PATH: &str = "gw-run.sqlite";
 
 /// The effective run configuration (file + env layered). clap flags override fields AFTER load.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     /// The SQLite store path.
     pub db: PathBuf,
     /// Explicit policy from file, environment, or flags. Absence defaults only after layering.
     pub accounting_policy: Option<AccountingPolicy>,
-    /// The OpenAI-compatible provider base URL (default OpenRouter). The API KEY is NOT here.
-    pub provider_base_url: String,
+    /// Model API endpoint (base URL), defaulting to OpenRouter's OpenAI-compatible endpoint.
+    pub model_api_base_url: String,
+    /// API key environment variable name, never the key value (default `MODEL_API_KEY`).
+    pub model_api_key_env: String,
     /// The shared teacher and judge chat requests-per-minute rate limit.
     pub provider_rpm: u32,
     /// The TUI tick interval in milliseconds (dashboard model updates).
@@ -65,12 +66,35 @@ pub struct Config {
     pub embedding: Option<EmbeddingConfig>,
 }
 
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let reference = if gw_providers::validate_api_key_env(&self.model_api_key_env).is_ok() {
+            self.model_api_key_env.as_str()
+        } else {
+            "[invalid]"
+        };
+        f.debug_struct("Config")
+            .field("db", &self.db)
+            .field("accounting_policy", &self.accounting_policy)
+            .field("model_api_base_url", &self.model_api_base_url)
+            .field("model_api_key_env", &reference)
+            .field("provider_rpm", &self.provider_rpm)
+            .field("tick_ms", &self.tick_ms)
+            .field("frame_ms", &self.frame_ms)
+            .field("area", &self.area)
+            .field("export", &self.export)
+            .field("embedding", &self.embedding)
+            .finish()
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
             db: PathBuf::from(DEFAULT_DB_PATH),
             accounting_policy: None,
-            provider_base_url: gw_providers::DEFAULT_BASE_URL.to_string(),
+            model_api_base_url: gw_providers::DEFAULT_BASE_URL.to_string(),
+            model_api_key_env: gw_providers::DEFAULT_API_KEY_ENV.to_string(),
             provider_rpm: 60,
             tick_ms: 250,
             frame_ms: 33,
@@ -254,7 +278,7 @@ impl Config {
     /// prefixed env vars. clap flags are applied by the caller AFTER this (highest precedence).
     ///
     /// The `GW_` env prefix is split on `__` for nested keys (e.g. `GW_AREA__K=4` sets `area.k`).
-    /// `OPENROUTER_API_KEY` carries no `GW_` prefix, so it is structurally unreachable from here.
+    /// This loads the API key environment variable name only; it never resolves the secret.
     ///
     /// Returns [`anyhow::Result`] (not the raw `figment::Error`): the underlying figment error is
     /// large (clippy `result_large_err`), so it is boxed into `anyhow` — which is also the binary
@@ -270,6 +294,16 @@ impl Config {
         }
         fig = fig.merge(Env::prefixed("GW_").split("__"));
         let mut value: serde_json::Value = fig.extract()?;
+        if value.get("provider_base_url").is_some() {
+            anyhow::bail!(
+                "provider_base_url / GW_PROVIDER_BASE_URL was removed; configure the Model API endpoint (base URL) with model_api_base_url / GW_MODEL_API_BASE_URL"
+            );
+        }
+        let reference = value
+            .get("model_api_key_env")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("API key environment variable must be a string name"))?;
+        gw_providers::validate_api_key_env(reference)?;
         let environment: serde_json::Value =
             Figment::from(Env::prefixed("GW_").split("__")).extract()?;
         // A mode selected by a later layer replaces the complete tagged policy, so ObservationOnly
@@ -386,7 +420,7 @@ mod tests {
     fn defaults_load_without_a_file_but_need_a_generation_panel() {
         let cfg = Config::load(None).expect("defaults load");
         assert_eq!(cfg.db, PathBuf::from(DEFAULT_DB_PATH));
-        assert_eq!(cfg.provider_base_url, gw_providers::DEFAULT_BASE_URL);
+        assert_eq!(cfg.model_api_base_url, gw_providers::DEFAULT_BASE_URL);
         assert_eq!(cfg.effective_policy(), AccountingPolicy::default());
         assert_eq!(cfg.area.k, gw_engine::DEFAULT_K);
         assert!(cfg.export.is_none());

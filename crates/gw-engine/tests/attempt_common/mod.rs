@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-use gw_providers::{EmbeddingsClient, OpenRouterProvider, RetryPolicy};
+use gw_providers::{ChatCompletionsProvider, EmbeddingsClient, RetryPolicy};
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 use tokio::{
@@ -122,8 +122,8 @@ impl Server {
             task,
         }
     }
-    pub fn provider(&self) -> OpenRouterProvider {
-        OpenRouterProvider::builder()
+    pub fn provider(&self) -> ChatCompletionsProvider {
+        ChatCompletionsProvider::builder()
             .base_url(&self.url)
             .rpm(60_000)
             .retry_policy(RetryPolicy {

@@ -3,15 +3,15 @@ mod common;
 use common::*;
 use futures::StreamExt;
 use gw_providers::{
-    ChatRequest, EmbeddingsClient, OpenRouterProvider, Provider, ProviderError, RetryPolicy,
+    ChatCompletionsProvider, ChatRequest, EmbeddingsClient, Provider, ProviderError, RetryPolicy,
 };
 use gw_schema::{AttemptPurpose as Purpose, AttemptRole as Role, ReportedCost, TransportOutcome};
 use gw_storage::Store;
 use serde_json::json;
 use std::{sync::atomic::Ordering, time::Duration};
 
-fn chat(server: &Server, attempts: u32) -> OpenRouterProvider {
-    OpenRouterProvider::builder()
+fn chat(server: &Server, attempts: u32) -> ChatCompletionsProvider {
+    ChatCompletionsProvider::builder()
         .base_url(&server.url)
         .rpm(60_000)
         .retry_policy(RetryPolicy {

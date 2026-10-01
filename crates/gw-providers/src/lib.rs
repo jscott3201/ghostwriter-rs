@@ -17,7 +17,7 @@
 //!   `{"max_tokens":N}`), serialized with `stream: true`.
 //! - `limiter` — [`RateLimiter`], a thin `governor` GCRA wrapper with an async `until_ready`.
 //! - `retry` — [`retry()`], hand-rolled exponential backoff honoring `Retry-After`.
-//! - `client` — [`OpenRouterProvider`], the concrete [`Provider`] impl.
+//! - `client` — [`ChatCompletionsProvider`], the concrete [`Provider`] impl.
 //!
 //! ## The [`Provider`] trait
 //!
@@ -29,11 +29,11 @@
 //!
 //! ```no_run
 //! use futures::StreamExt;
-//! use gw_providers::{ChatRequest, OpenRouterProvider, Provider, ReasoningParam};
+//! use gw_providers::{ChatRequest, ChatCompletionsProvider, Provider, ReasoningParam};
 //! use gw_schema::{Content, Message, Role};
 //!
 //! # async fn run() -> Result<(), gw_providers::ProviderError> {
-//! let provider = OpenRouterProvider::from_env()?; // reads OPENROUTER_API_KEY
+//! let provider = ChatCompletionsProvider::from_env()?; // reads MODEL_API_KEY
 //! let req = ChatRequest::new(
 //!     "z-ai/glm-5.2",
 //!     vec![Message {
@@ -83,7 +83,8 @@ use futures::stream::Stream;
 
 pub use adapter_behavior::builtin_adapter_behavior;
 pub use client::{
-    DEFAULT_API_KEY_ENV, DEFAULT_BASE_URL, OpenRouterProvider, OpenRouterProviderBuilder,
+    ChatCompletionsProvider, ChatCompletionsProviderBuilder, DEFAULT_API_KEY_ENV, DEFAULT_BASE_URL,
+    validate_api_key_env,
 };
 pub use delta::{ChunkProvenance, CompletionTokensDetails, StreamDelta, Usage};
 pub use embeddings::{EmbeddingsClient, EmbeddingsClientBuilder, embedding_headers};
@@ -108,7 +109,7 @@ pub type StreamChatFuture<'a> =
 
 /// A streaming chat provider over an OpenAI-compatible `/chat/completions` endpoint.
 ///
-/// Implemented by [`OpenRouterProvider`]. The single method streams a chat completion as a
+/// Implemented by [`ChatCompletionsProvider`]. The single method streams a chat completion as a
 /// sequence of [`StreamDelta`]s, each carrying incremental `content` and/or
 /// `reasoning`/`reasoning_details` (the captured chain-of-thought). The returned future
 /// resolves once a response is in hand (after rate-limiting + retries); per-delta errors and a

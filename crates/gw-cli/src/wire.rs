@@ -7,7 +7,7 @@
 //! | field      | constructor                                                           |
 //! |------------|-----------------------------------------------------------------------|
 //! | `store`    | [`Store::open`] over `config.db`                                      |
-//! | `teacher`  | [`OpenRouterProvider`] (base URL + rpm from config, KEY from env)      |
+//! | `teacher`  | [`ChatCompletionsProvider`] (base URL + rpm from config, KEY from env)      |
 //! | `judge`    | the SAME provider `Arc` (one endpoint for both rails in v1)            |
 //! | `embedder` | configured OpenAI-compatible client, or [`NullEmbedder`] when absent   |
 //! | `sandbox`  | [`NullSandboxOracle`] (D-SANDBOX deferred per `gw-judge`)              |
@@ -17,8 +17,8 @@
 //!
 //! ## The API key flows from the environment ONLY
 //!
-//! [`build_provider`] calls [`OpenRouterProviderBuilder::build`](gw_providers::OpenRouterProviderBuilder::build),
-//! which reads `OPENROUTER_API_KEY` from the process environment and moves it into a
+//! [`build_provider`] calls [`ChatCompletionsProviderBuilder::build`](gw_providers::ChatCompletionsProviderBuilder::build),
+//! which reads the configured API key environment variable (default `MODEL_API_KEY`) and moves it into a
 //! `set_sensitive(true)` `Authorization` header. The key is never read from the config file, never a
 //! CLI flag, and never logged: a missing key returns a clean
 //! [`ProviderError::MissingApiKey`](gw_providers::ProviderError::MissingApiKey) that names only the
@@ -42,8 +42,8 @@ use gw_judge::{
     ExecutionEvidenceSource, NullExecutionEvidenceSource, NullSandboxOracle, SandboxOracle,
 };
 use gw_providers::{
-    EmbeddingsClient, EmbeddingsClientBuilder, OpenRouterProvider, OpenRouterProviderBuilder,
-    Provider,
+    ChatCompletionsProvider, ChatCompletionsProviderBuilder, EmbeddingsClient,
+    EmbeddingsClientBuilder, Provider,
 };
 use gw_schema::EmbeddingBackend;
 use gw_storage::Store;
@@ -53,8 +53,7 @@ use crate::config::Config;
 /// The harness version stamped into provenance (the crate version).
 pub const HARNESS_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Build the live teacher/judge [`Provider`] from `config` + the `OPENROUTER_API_KEY` environment
-/// variable.
+/// Build the live teacher/judge [`Provider`] from `config` and its API key environment variable.
 ///
 /// The base URL and per-lane rpm come from the config; the API KEY comes from the environment and is
 /// never logged. A v1 run routes BOTH the teacher and the judge rails through this one provider (the
@@ -62,18 +61,19 @@ pub const HARNESS_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// run would construct a second provider here.
 ///
 /// # Errors
-/// Returns the [`ProviderError`](gw_providers::ProviderError) (as `anyhow`) if `OPENROUTER_API_KEY`
-/// is unset or the key/headers/HTTP client cannot be constructed.
+/// Returns the [`ProviderError`](gw_providers::ProviderError) (as `anyhow`) if the configured API key
+/// environment variable is invalid or unset, or the key/headers/HTTP client cannot be constructed.
 pub fn build_provider(config: &Config) -> anyhow::Result<Arc<dyn Provider>> {
     let provider = provider_builder(config)
         .build()
-        .context("constructing the OpenRouter provider (is OPENROUTER_API_KEY set?)")?;
+        .context("constructing the Model API provider")?;
     Ok(Arc::new(provider))
 }
 
-fn provider_builder(config: &Config) -> OpenRouterProviderBuilder {
-    OpenRouterProvider::builder()
-        .base_url(&config.provider_base_url)
+fn provider_builder(config: &Config) -> ChatCompletionsProviderBuilder {
+    ChatCompletionsProvider::builder()
+        .base_url(&config.model_api_base_url)
+        .api_key_env(&config.model_api_key_env)
         .rpm(config.provider_rpm)
         .title("ghostwriter-rs")
 }
@@ -192,7 +192,7 @@ pub fn build_clients(
 ///
 /// # Errors
 /// Propagates a store-open or provider-construction failure (the latter includes a missing
-/// `OPENROUTER_API_KEY`).
+/// API key environment variable).
 pub async fn build_engine(
     config: &Config,
     events: EventSink,
@@ -256,7 +256,7 @@ mod tests {
         // structural wiring: both rails point at the same Arc, the embedder/sandbox are the v1 seams,
         // and the clients carry the resolved policy.
         let provider: Arc<dyn Provider> = Arc::new(
-            OpenRouterProvider::builder()
+            ChatCompletionsProvider::builder()
                 .build_with_key("DUMMY-TEST-KEY-NOT-A-CREDENTIAL")
                 .expect("provider builds with an explicit test key"),
         );
@@ -283,23 +283,17 @@ mod tests {
 
     #[test]
     fn provider_missing_key_is_a_clean_error_not_a_panic() {
-        // Point the provider at an env var that is overwhelmingly unlikely to be set, so the failure
-        // path is exercised without depending on the ambient environment.
-        let mut cfg = Config::default();
-        // build_provider always reads OPENROUTER_API_KEY; to test the missing-key path hermetically
-        // we assert the error TYPE only when the key is genuinely absent. Skip if it happens to be set
-        // (a developer machine with a real key) so the test never makes a network call or fails.
-        if std::env::var("OPENROUTER_API_KEY").is_ok() {
-            return;
-        }
-        cfg.provider_base_url = gw_providers::DEFAULT_BASE_URL.to_string();
+        let cfg = Config {
+            model_api_key_env: "GW_TEST_MISSING_MODEL_CREDENTIAL_77".into(),
+            ..Default::default()
+        };
         // `Arc<dyn Provider>` is not `Debug`, so match the Result rather than `expect_err`.
         match build_provider(&cfg) {
             Ok(_) => panic!("a missing key must error, not succeed"),
             Err(err) => {
                 // The error chain names the key var, never a value.
                 let msg = format!("{err:#}");
-                assert!(msg.contains("OPENROUTER_API_KEY"), "got: {msg}");
+                assert!(msg.contains(&cfg.model_api_key_env), "got: {msg}");
             }
         }
     }
@@ -325,7 +319,7 @@ mod tests {
 
     fn test_provider() -> Arc<dyn Provider> {
         Arc::new(
-            OpenRouterProvider::builder()
+            ChatCompletionsProvider::builder()
                 .build_with_key("DUMMY-TEST-KEY-NOT-A-CREDENTIAL")
                 .expect("provider builds"),
         )

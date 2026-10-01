@@ -1,5 +1,5 @@
 //! Physical transmission boundaries, exercised against local HTTP servers.
-use gw_providers::{ChatRequest, EmbeddingsClient, OpenRouterProvider, Provider, RetryPolicy};
+use gw_providers::{ChatCompletionsProvider, ChatRequest, EmbeddingsClient, Provider, RetryPolicy};
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
@@ -37,7 +37,7 @@ async fn redirect_server() -> (String, Arc<AtomicUsize>, tokio::task::JoinHandle
 #[tokio::test]
 async fn chat_and_embedding_do_not_follow_redirects() {
     let (base, posts, task) = redirect_server().await;
-    let provider = OpenRouterProvider::builder()
+    let provider = ChatCompletionsProvider::builder()
         .base_url(&base)
         .retry_policy(RetryPolicy {
             max_attempts: 1,

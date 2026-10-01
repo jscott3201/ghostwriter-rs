@@ -4,7 +4,9 @@ mod common;
 use attempt_common::{Response, Server};
 use common::*;
 use gw_engine::{Engine, EventSink};
-use gw_providers::{CallObservation, ChatRequest, OpenRouterProvider, Provider, StreamChatFuture};
+use gw_providers::{
+    CallObservation, ChatCompletionsProvider, ChatRequest, Provider, StreamChatFuture,
+};
 use gw_schema::{AccountingPolicy, LifecycleState};
 use gw_storage::Store;
 use std::{
@@ -19,7 +21,7 @@ use tokio_util::sync::CancellationToken;
 
 /// The C operation starts, but its opaque provider future is held before accounted dispatch.
 struct QueuedProvider {
-    inner: OpenRouterProvider,
+    inner: ChatCompletionsProvider,
     entered: mpsc::UnboundedSender<String>,
     c_once: AtomicBool,
     c_release: Semaphore,

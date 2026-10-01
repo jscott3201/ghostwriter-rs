@@ -6,7 +6,7 @@ use std::process::{Command, Stdio};
 fn stdin_verification_is_provider_free_and_never_accepts_malformed_bytes() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_gw"))
         .args(["artifact", "verify", "--stdin"])
-        .env_remove("OPENROUTER_API_KEY")
+        .env_remove("MODEL_API_KEY")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -30,7 +30,7 @@ fn stdin_report_binds_the_exact_bytes_and_ignores_trace_logging_configuration() 
     let expected = gw_storage::verify_artifact_snapshot(bytes.to_vec()).unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_gw"))
         .args(["artifact", "verify", "--stdin"])
-        .env_remove("OPENROUTER_API_KEY")
+        .env_remove("MODEL_API_KEY")
         .env("RUST_LOG", "trace")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

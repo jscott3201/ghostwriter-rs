@@ -5,7 +5,7 @@ use std::process::Command;
 fn screened_export_command_is_available_without_provider_configuration() {
     let output = Command::new(env!("CARGO_BIN_EXE_gw"))
         .args(["gen", "export-screened", "--help"])
-        .env_remove("OPENROUTER_API_KEY")
+        .env_remove("MODEL_API_KEY")
         .env("DATABASE_URL", "invalid://must-not-open")
         .output()
         .unwrap();
@@ -118,7 +118,7 @@ async fn actual_screened_cli_publication_generates_verified_consumer_golden_arti
             .arg(&protected_path)
             .arg("--out")
             .arg(out.artifact())
-            .env_remove("OPENROUTER_API_KEY")
+            .env_remove("MODEL_API_KEY")
             .env("DATABASE_URL", "invalid://must-not-open")
             .output()
             .unwrap();

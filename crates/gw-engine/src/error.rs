@@ -271,8 +271,7 @@ mod tests {
         // Defense-in-depth: construction-time misconfig, if it ever surfaces at the call site, is
         // unambiguously systemic.
         let e: EngineError =
-            GenerateError::Provider(ProviderError::MissingApiKey("OPENROUTER_API_KEY".into()))
-                .into();
+            GenerateError::Provider(ProviderError::MissingApiKey("MODEL_API_KEY".into())).into();
         assert!(!e.is_record_level());
         let e: EngineError =
             GenerateError::Provider(ProviderError::Config("bad base url".into())).into();

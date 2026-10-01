@@ -3,7 +3,7 @@
 //! A thin shell over the [`gw_cli`] library: it owns only the tokio runtime and the process exit code.
 //! The clap tree, the layered config, and every command handler live in the library so they are unit +
 //! integration testable. See [`gw_cli`] for the full command surface and the security posture
-//! (`OPENROUTER_API_KEY` is read from the environment ONLY).
+//! (the configured key, default `MODEL_API_KEY`, is read from the environment ONLY).
 
 /// Build the multi-threaded tokio runtime and drive [`gw_cli::run`] to completion.
 ///

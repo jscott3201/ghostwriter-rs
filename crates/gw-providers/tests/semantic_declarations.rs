@@ -1,6 +1,6 @@
 //! Pure endpoint and implementation declarations shared with constructed clients.
 use gw_providers::{
-    EmbeddingsClient, OpenRouterProvider, Provider, RetryPolicy, normalize_endpoint,
+    ChatCompletionsProvider, EmbeddingsClient, Provider, RetryPolicy, normalize_endpoint,
 };
 use std::time::Duration;
 #[test]
@@ -32,7 +32,7 @@ fn normalized_endpoint_preserves_origin_and_path_and_rejects_secret_bearing_form
     ] {
         let error = normalize_endpoint(endpoint).unwrap_err().to_string();
         assert!(!error.contains("SECRET"));
-        let builder = OpenRouterProvider::builder()
+        let builder = ChatCompletionsProvider::builder()
             .base_url(endpoint)
             .api_key_env("KEY_NEVER_PRESENT_MANIFEST_TEST");
         let error = match builder.build() {
@@ -45,28 +45,29 @@ fn normalized_endpoint_preserves_origin_and_path_and_rejects_secret_bearing_form
 }
 #[test]
 fn built_chat_client_and_pure_builder_share_effective_identity() {
-    let builder = OpenRouterProvider::builder()
+    let builder = ChatCompletionsProvider::builder()
         .base_url("https://EXAMPLE.test:443/v1/")
         .rpm(4);
     let declaration = builder.semantic_declaration().unwrap();
     let client = builder.build_with_key("DUMMY-TEST-KEY").unwrap();
     assert_eq!(client.semantic_declaration().unwrap(), declaration);
     assert_eq!(
-        OpenRouterProvider::builder()
+        ChatCompletionsProvider::builder()
             .base_url("https://example.test/v1")
+            .api_key_env("OTHER_UNREAD_MODEL_KEY")
             .rpm(999)
             .semantic_declaration()
             .unwrap(),
         declaration
     );
-    let zero = OpenRouterProvider::builder()
+    let zero = ChatCompletionsProvider::builder()
         .retry_policy(RetryPolicy {
             max_attempts: 0,
             ..Default::default()
         })
         .semantic_declaration()
         .unwrap();
-    let one = OpenRouterProvider::builder()
+    let one = ChatCompletionsProvider::builder()
         .retry_policy(RetryPolicy {
             max_attempts: 1,
             ..Default::default()

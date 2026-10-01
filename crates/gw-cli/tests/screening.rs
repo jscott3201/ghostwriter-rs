@@ -37,7 +37,7 @@ impl Files {
             .arg(&self.declaration)
             .arg("--protected")
             .arg(&self.protected)
-            .env_remove("OPENROUTER_API_KEY")
+            .env_remove("MODEL_API_KEY")
             .env("DATABASE_URL", "invalid://must-not-open");
         for (key, _) in std::env::vars_os() {
             if key.to_string_lossy().starts_with("GW_") {
@@ -67,7 +67,7 @@ impl Drop for Files {
 fn frozen_screening_command_is_available_without_credentials() {
     let output = Command::new(env!("CARGO_BIN_EXE_gw"))
         .args(["eval", "screen", "--help"])
-        .env_remove("OPENROUTER_API_KEY")
+        .env_remove("MODEL_API_KEY")
         .env("DATABASE_URL", "invalid://must-not-open")
         .output()
         .unwrap();

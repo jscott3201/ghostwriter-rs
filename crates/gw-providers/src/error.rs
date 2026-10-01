@@ -171,7 +171,7 @@ mod tests {
 
         assert!(!ProviderError::from_status(400, None).is_retryable());
         assert!(!ProviderError::from_status(404, None).is_retryable());
-        assert!(!ProviderError::MissingApiKey("OPENROUTER_API_KEY".into()).is_retryable());
+        assert!(!ProviderError::MissingApiKey("MODEL_API_KEY".into()).is_retryable());
         assert!(!ProviderError::Decode("bad json".into()).is_retryable());
         assert!(!ProviderError::Config("bad url".into()).is_retryable());
     }
@@ -198,8 +198,8 @@ mod tests {
 
     #[test]
     fn missing_key_message_names_var_not_value() {
-        let e = ProviderError::MissingApiKey("OPENROUTER_API_KEY".into());
+        let e = ProviderError::MissingApiKey("MODEL_API_KEY".into());
         let msg = e.to_string();
-        assert!(msg.contains("OPENROUTER_API_KEY"));
+        assert!(msg.contains("MODEL_API_KEY"));
     }
 }

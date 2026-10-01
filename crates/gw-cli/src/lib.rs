@@ -21,9 +21,9 @@
 //!
 //! ## Security posture
 //!
-//! `OPENROUTER_API_KEY` is read ONLY from the process environment, by the provider constructor in
-//! [`wire`]; it is never a config-file field, never a CLI flag, never serialized, and never logged
-//! (the figment env layer is scoped to the `GW_` prefix, so it cannot even slurp the key by accident).
+//! The configured key (default `MODEL_API_KEY`) is read ONLY from the process environment by the
+//! provider constructor in [`wire`]. Configuration holds the variable name; the value is never a
+//! config-file field, CLI flag, serialized configuration, or log entry.
 //! See [`config`] and [`wire`].
 
 pub mod cli;

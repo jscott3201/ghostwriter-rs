@@ -6,7 +6,7 @@ use std::process::Command;
 fn offline_calibration_command_is_available_without_credentials() {
     let output = Command::new(env!("CARGO_BIN_EXE_gw"))
         .args(["eval", "fit-calibration", "--help"])
-        .env_remove("OPENROUTER_API_KEY")
+        .env_remove("MODEL_API_KEY")
         .output()
         .unwrap();
     assert!(
@@ -72,7 +72,7 @@ family = "b"
             .arg(&self.records)
             .arg("--evidence")
             .arg(&self.evidence)
-            .env_remove("OPENROUTER_API_KEY");
+            .env_remove("MODEL_API_KEY");
         for (key, _) in std::env::vars_os() {
             if key.to_string_lossy().starts_with("GW_") {
                 command.env_remove(key);
