@@ -28,6 +28,9 @@ pub struct Cli {
 /// The top-level command groups.
 #[derive(Debug, Subcommand, PartialEq)]
 pub enum Command {
+    /// Portable reviewed numeric tasks and fresh rewards (no providers, models, or database).
+    #[command(subcommand)]
+    Reward(RewardCommand),
     /// Verify a self-contained immutable Parquet snapshot (no providers or database).
     #[command(subcommand)]
     Artifact(ArtifactCommand),
@@ -37,6 +40,29 @@ pub enum Command {
     /// Evaluation: off-path, model-free diagnostics over persisted records / eval artifacts.
     #[command(subcommand)]
     Eval(EvalCommand),
+}
+
+/// Provider-free portable numeric corpus and reward commands.
+#[derive(Debug, Subcommand, PartialEq)]
+pub enum RewardCommand {
+    /// Emit one ordered Train-only corpus from strict reviewed task documents as JSON on stdout.
+    Export {
+        /// Ordered input documents. Every declaration is validated before Train selection.
+        #[arg(long, required = true, num_args = 1.., value_name = "FILE")]
+        tasks: Vec<PathBuf>,
+    },
+    /// Verify a captured numeric corpus from stdin and emit only its JSON receipt.
+    Verify {
+        /// Require explicit complete JSON stdin input (64 MiB maximum).
+        #[arg(long, required = true)]
+        stdin: bool,
+    },
+    /// Evaluate one complete fresh-completion batch from stdin and emit only strict JSON.
+    Evaluate {
+        /// Require explicit complete JSON stdin input (64 MiB maximum).
+        #[arg(long, required = true)]
+        stdin: bool,
+    },
 }
 
 /// Provider-free artifact commands.

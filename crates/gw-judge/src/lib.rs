@@ -70,7 +70,11 @@ pub use calibration_contract::{
 };
 pub use calibration_fit::{fit_calibration, verify_calibration_snapshot};
 mod interpretation;
+mod numeric_reward;
 pub use interpretation::{InterpretedJudgeResponse, interpret_judge_response};
+pub use numeric_reward::{
+    evaluate_numeric_answer, evaluate_numeric_reward_batch, evaluate_numeric_reward_json,
+};
 mod candidate_render;
 pub use candidate_render::{JUDGE_CANDIDATE_RENDER_VERSION, render_judge_candidate};
 mod consensus;

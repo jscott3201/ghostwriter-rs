@@ -13,6 +13,7 @@ pub mod calibration;
 pub mod eval;
 pub mod export;
 pub mod replay;
+pub mod reward;
 pub mod run;
 pub mod screening;
 pub mod tui;

@@ -34,7 +34,7 @@ pub mod wire;
 
 use clap::Parser;
 
-use crate::cli::{ArtifactCommand, Cli, Command, EvalCommand, GenCommand};
+use crate::cli::{ArtifactCommand, Cli, Command, EvalCommand, GenCommand, RewardCommand};
 
 /// The process-level outcome of a successfully-run command.
 ///
@@ -68,7 +68,7 @@ pub fn init_tracing() {
 /// engine run, export, eval, or I/O), as `anyhow::Error` (the binary boundary).
 pub async fn run() -> anyhow::Result<CommandOutcome> {
     let cli = Cli::parse();
-    if !matches!(cli.command, Command::Artifact(_)) {
+    if !matches!(cli.command, Command::Artifact(_) | Command::Reward(_)) {
         init_tracing();
     }
     dispatch(cli).await
@@ -82,6 +82,12 @@ pub async fn run() -> anyhow::Result<CommandOutcome> {
 /// Propagates the dispatched handler's error.
 pub async fn dispatch(cli: Cli) -> anyhow::Result<CommandOutcome> {
     match cli.command {
+        Command::Reward(command) => match command {
+            RewardCommand::Export { tasks } => commands::reward::export(&tasks),
+            RewardCommand::Verify { .. } => commands::reward::verify_stdin(),
+            RewardCommand::Evaluate { .. } => commands::reward::evaluate_stdin(),
+        }
+        .map(|()| CommandOutcome::Success),
         Command::Artifact(ArtifactCommand::Verify { .. }) => {
             commands::artifact::verify_stdin().map(|()| CommandOutcome::Success)
         }

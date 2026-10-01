@@ -1,4 +1,4 @@
-# Verified Qwen3 SFT label preparation
+# Verified Qwen3 SFT labels and numeric rewards
 
 This external Python adapter reads one canonical Ghostwriter Parquet snapshot,
 asks `gw artifact verify --stdin` to verify **those exact bytes**, and prepares
@@ -249,3 +249,141 @@ Regenerate only these synthetic fixtures with:
 GW_REGENERATE_SCREENED_TRL_FIXTURES="$PWD/adapters/trl/tests/fixtures" \
   cargo nextest run -p gw-cli -E 'binary(screened_export)' --locked --profile ci
 ```
+
+## Fresh numeric rewards
+
+The `ghostwriter_trl.reward_artifact` and `ghostwriter_trl.rewards` modules support one
+synchronous numeric reward callback for the pinned
+[GRPOTrainer](https://github.com/huggingface/trl/blob/fd74bbc7b5f852a70d4cc94377e0a8f94392fda1/trl/trainer/grpo_trainer.py).
+This is offline software and reward-dispatch qualification. A real RLVR experiment still needs
+reviewed corpus/oracle quality, qualified splits, an eligible SFT-derived student, checkpoint/build
+lineage, authorized compute, and a held-out comparison.
+
+### Freeze task authority
+
+```sh
+gw reward export --tasks examples/reviewed-numeric-tasks.json > numeric-corpus.json
+gw reward verify --stdin < numeric-corpus.json
+```
+
+Repeat `--tasks` for additional ordered task documents. All documents and cross-document duplicate
+or conflicting declarations are checked before projection. Export selects each unique declared
+Train task once and requires training rights assertions, passing reviewed QC assertions,
+authoritative literal answers, and absent execution policy. The declarations retain their existing
+evidentiary limits; export does not screen splits or prove corpus quality. Held-out tasks never enter
+the artifact. Teacher Parquet siblings, assistant turns, reasoning, grades, and execution reports
+are not accepted as task sources.
+
+The version 1 self-contained artifact retains the complete reviewed task declaration, semantic
+task identity, ordered corpus identity, and reward contract identity. The contract pins the existing
+verification interpretation. The corpus identity includes source, rights, group/split, prompt,
+oracle/extraction/tolerance, and review observations; metadata changes cannot reuse a prior corpus
+receipt. The separate snapshot receipt binds every captured input byte, including whitespace.
+Python reads the corpus once, sends those bytes to Rust, checks the receipt, and retains immutable
+captured state. Public properties return detached copies. Both trainer-row projection and callback
+construction require the exact factory-created corpus type and reject subclasses before tokenizer
+validation or prompt projection.
+
+Within this reward snapshot, `task.verification.numeric.tolerance.absolute` and `relative` use exact
+finite binary64 objects, for example `{"binary64":"3ff89d89d89d89d9"}` for the selected binary64
+representation of `20/13`. Each object contains exactly one key with 16 lowercase hexadecimal digits.
+The codec preserves adjacent finite values and signed zero, rejects nonfinite values, and detects
+duplicate keys before map conversion. Reviewed task-input documents retain their existing decimal
+JSON number format; historical semantic task identities and other contracts retain their encoding.
+The new snapshot preserves the exact values obtained from that intake rather than reparsing decimal
+tolerances at each replay. Python forwards these bit objects unchanged and implements no comparator.
+
+### Connect the callback
+
+Use the same locally verified tokenizer and dependency pins as SFT preparation. In an application
+that already supplies its authorized model and GRPO configuration:
+
+```python
+from pathlib import Path
+from datasets import Dataset
+from trl import GRPOTrainer
+from ghostwriter_trl.tokenizer import load_tokenizer
+from ghostwriter_trl.reward_artifact import read_numeric_corpus, reward_rows
+from ghostwriter_trl.rewards import NumericRewardCallback
+
+gw = Path("target/debug/gw").resolve()
+tokenizer = load_tokenizer(Path("qwen3-tokenizer"))
+corpus = read_numeric_corpus(Path("numeric-corpus.json"), gw)
+reward = NumericRewardCallback(corpus, tokenizer, gw, timeout_seconds=30.0)
+trainer = GRPOTrainer(
+    model=model, args=grpo_config, processing_class=tokenizer,
+    reward_funcs=[reward], train_dataset=Dataset.from_list(reward_rows(corpus, tokenizer)),
+)
+reward.bind_trainer(trainer)
+```
+
+The selected configuration requires one local process, `remove_unused_columns=False`, `beta=0`,
+`use_vllm=False`, `use_transformers_continuous_batching=False`, no tools/environment/custom rollout,
+and `chat_template_kwargs={"enable_thinking": False}`. Use valid GRPO batch/group sizes. Offline
+qualification also disables reporting, Hub push, mixed precision, and gradient checkpointing.
+Binding checks the actual trainer and repeats effective configuration checks on each callback.
+Distributed execution needs a separately qualified coordinated-failure contract.
+
+Trainer rows contain only one typed user message and the separate `gw_reward` identity references.
+The callback keeps the oracle and full provenance in its verified corpus. The template is rendered
+explicitly without thinking. This prevents exporter-induced oracle leakage; human corpus review
+must still detect answers embedded in source prompt prose.
+
+### Complete batch contract
+
+TRL's real RepeatSampler can repeat task rows. Each callback instance creates a fresh run namespace.
+Every callback entry allocates a monotonically increasing batch sequence and ordered positions;
+failed calls consume a sequence too. Identical completions and
+repeated tasks still have distinct reward attempts. These identities record reward evaluation and
+do not establish model-generation or checkpoint lineage.
+
+Every request binds corpus/task/reward-contract identity, fresh attempt, raw unpadded completion
+IDs, exact decoded UTF-8 content, tokenizer identity, and decode policy. With Transformers 4.56.2 the
+supported conversational completion is exactly one plain assistant string. Decoding uses
+`skip_special_tokens=True` and disabled cleanup. The adapter checks raw IDs before decoding: all
+26 pinned control tokens are rejected except one terminal pinned EOS. Invalid IDs, reasoning,
+tools/media, extra turns, raw control literals, and mismatched token/text evidence are rejected.
+Thus a role or media token hidden by skip-special decoding cannot become ordinary answer evidence.
+
+The callback invokes `gw reward evaluate --stdin` once for the whole batch, with a finite timeout.
+The strict version 1 request carries `artifact`, `completion_policy`, the effective
+`mask_truncated_completions`, and ordered `items` containing `binding` and `completion`.
+Rust validates every binding before evaluating any results. Its pure evaluator is shared with the
+existing verifier: finite binary64 parsing and the declared extraction/tolerance settings determine
+factual Pass, Fail, or Unknown from assistant content alone. Pass maps to `1.0`, Fail to `0.0`, and
+Unknown carries `null`. Missing/malformed oracles are rejected at task intake; the pure evaluator
+also preserves Unknown for unavailable oracle evidence.
+
+The report binds the exact request bytes and policy, retains the mask setting, and returns one
+ordered result per item. Python validates the complete report before returning any rewards. Unknown,
+invalid/stale bindings, wrong order/cardinality, partial output, timeout, and evaluator failure all
+abort the whole callback. No row is omitted, resampled, assigned a substitute zero, or returned as
+`None`. `last_report` retains only a completely successful batch and is cleared at the next entry.
+
+Termination is separate: a final pinned EOS gives `observed_eos`; every other supported sequence
+retains `unknown`. No EOS or length equal to the configured cap does not identify a stop cause.
+Numeric Pass/Fail can coexist with unknown termination. The adapter records and preserves the
+effective truncation-mask setting without changing rewards based on an inferred stop cause.
+
+Rust declares and validates tokenizer policy and completion hashes without loading a tokenizer.
+The qualified Python adapter additionally checks the actual pinned tokenizer and token-to-text
+decoding. A direct CLI caller's declared tokens/text are caller-supplied evidence. Hashes establish
+binding and integrity, not authenticity. `gw-schema` stays pure and performs no I/O; CLI input/output
+is local and provider-free, with a 64 MiB limit per captured input. Semantic errors emit no success
+JSON; callers must check exit status and complete report parsing.
+
+### Offline dispatcher evidence
+
+`tests/test_rewards.py` constructs the real CPU GRPOTrainer with a tiny random GPT-2 model and the
+pinned tokenizer. Its real data loader preserves repeated task metadata, and its unmodified
+`_calculate_rewards` method consumes synthetic completions. Literal expected answers assert the
+finite CPU float32 batch-by-one tensor and exact order. Fail-if-called sentinels cover model forward,
+generation, preparation, prediction, evaluation, training, and optimizer construction.
+
+The real dispatcher allocates an empty reward tensor before invoking the callback. Failure checks
+prove that no numeric rewards reach its later tensor assignment or gather. Fixtures cover a valid
+first row followed by an invalid row, Unknown, timeouts, partial/stale/reordered output, all reserved
+IDs, reasoning-only/prompt-only markers, stale token/text, and distinct attempts for repeated rows.
+Rust independently checks literal grammar, tolerance, overflow, and extraction vectors; agreement
+between two runtime paths alone is not the numeric correctness oracle. No pretrained weights,
+inference, optimizer step, or learned improvement is part of these checks.
