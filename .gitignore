@@ -33,3 +33,6 @@ Cargo.lock.bak
 *.jsonl
 *.parquet
 !**/fixtures/**/*.jsonl
+
+# Synthetic, Rust-generated interoperability fixtures (no provider data).
+!adapters/trl/tests/fixtures/*.parquet

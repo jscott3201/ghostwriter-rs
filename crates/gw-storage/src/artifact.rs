@@ -11,6 +11,7 @@ use gw_schema::{
     ExportTaskProjection, Message, MultiTurnLoss, TrainingRecord,
 };
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use parquet::file::reader::ChunkReader;
 use serde::{Deserialize, Serialize};
 
 use crate::export::{Projected, export_schema, is_selected_admitted, project, shard_content_hash};
@@ -198,7 +199,46 @@ pub enum ArtifactVerification {
 /// Fails on duplicate/unsupported metadata, schema mismatch, malformed messages, duplicate IDs,
 /// count/hash mismatch, corrupt batches, or filesystem errors. Missing metadata is explicit.
 pub fn verify_artifact(path: impl AsRef<Path>) -> Result<ArtifactVerification> {
-    let builder = ParquetRecordBatchReaderBuilder::try_new(File::open(path)?)?;
+    verify_reader(File::open(path)?)
+}
+
+/// A successful verification bound to exact Parquet bytes, distinct from the logical artifact ID.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArtifactSnapshotReport {
+    /// Version of this stdin/snapshot report contract.
+    pub report_version: u32,
+    /// Fully verified self-contained artifact metadata.
+    pub artifact: ExportArtifact,
+    /// Length of the exact verified Parquet encoding.
+    pub byte_length: u64,
+    /// Ordinary BLAKE3 of the raw Parquet bytes, without the logical identity framing.
+    pub snapshot_blake3: String,
+}
+
+/// Verify one owned immutable snapshot without reopening a filesystem path.
+///
+/// # Errors
+/// Returns the same integrity failures as [`verify_artifact`], and rejects missing legacy metadata.
+pub fn verify_artifact_snapshot(snapshot: Vec<u8>) -> Result<ArtifactSnapshotReport> {
+    let byte_length = snapshot.len() as u64;
+    let snapshot_blake3 = blake3::hash(&snapshot).to_hex().to_string();
+    let ArtifactVerification::Verified(artifact) = verify_reader(bytes::Bytes::from(snapshot))?
+    else {
+        return Err(integrity(
+            "snapshot verification requires authoritative artifact metadata",
+        ));
+    };
+    Ok(ArtifactSnapshotReport {
+        report_version: 1,
+        artifact,
+        byte_length,
+        snapshot_blake3,
+    })
+}
+
+fn verify_reader<R: ChunkReader + 'static>(reader: R) -> Result<ArtifactVerification> {
+    let builder = ParquetRecordBatchReaderBuilder::try_new(reader)?;
     let entries: Vec<_> = builder
         .metadata()
         .file_metadata()
@@ -342,3 +382,7 @@ mod task_tests;
 #[cfg(test)]
 #[path = "artifact_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "snapshot_tests.rs"]
+mod snapshot_tests;
