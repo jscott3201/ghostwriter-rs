@@ -155,3 +155,7 @@ mod publication_integrity_tests;
 
 #[cfg(test)]
 mod startup_tests;
+
+mod lora_checkpoint;
+mod lora_tensors;
+pub use lora_checkpoint::{LoraCheckpointReport, verify_lora_checkpoint};

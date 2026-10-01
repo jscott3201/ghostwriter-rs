@@ -28,7 +28,7 @@ pub const CHECKPOINT_FILES: [&str; 5] = [
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CheckpointFile {
-    /// One of the five fixed [`CHECKPOINT_FILES`] identifiers.
+    /// One fixed identifier from the enclosing completion contract.
     pub path: String,
     /// Complete exact byte length.
     pub byte_length: u64,
@@ -121,7 +121,7 @@ pub struct TrainingObservations {
 pub struct CheckpointModelSummary {
     /// Digest of exact named tensor shapes and normalized float32 parameter content.
     pub tensor_content_id: String,
-    /// Distinct trainable parameter elements, excluding a tied head alias.
+    /// Distinct parameter elements, excluding persistent buffers and a tied head alias.
     pub parameter_count: u64,
     /// Complete logical named tensor count, including the supported tied alias.
     pub tensor_count: u64,
