@@ -39,7 +39,8 @@
 //!   (INVARIANT i). A separate, explicit step: a text-only conversation declares no tool fields and
 //!   is never rejected by it.
 //! - **projection** — [`project_sft`] (admitted record → [`SftProjection`]) and
-//!   [`project_preference`] (admitted + rejected sibling → [`gw_schema::PreferenceRecord`]).
+//!   [`project_preference_messages`] (structural checks and message arrays only).
+//!   Complete preference evidence validation belongs to `gw_engine::prepare_preference_pair`.
 //!
 //! ## Tool trajectories fail closed at the render boundary (INVARIANT i)
 //!
@@ -93,6 +94,7 @@
 
 mod error;
 mod ingest;
+mod preference;
 mod projection;
 mod render;
 mod tool_links;
@@ -100,6 +102,7 @@ mod validate;
 
 pub use error::{FormatError, Result, ToolCallRecovery, ToolSignal};
 pub use ingest::{ingest_openrouter, strip_channel_tokens};
-pub use projection::{SftProjection, project_preference, project_sft};
+pub use preference::{PreferenceMessages, project_preference_messages};
+pub use projection::{SftProjection, project_sft};
 pub use render::render;
 pub use tool_links::validate_tool_links;

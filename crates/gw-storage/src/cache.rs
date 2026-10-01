@@ -139,8 +139,8 @@ fn reasoning_detail_value(d: &ReasoningDetail) -> Value {
 
 /// BLAKE3 of the canonicalized prompt (every non-assistant message's role + clean `content`).
 ///
-/// This is the DPO pairing key / sibling-group id ([`gw_schema::Hashes::prompt_hash`]); it
-/// ignores assistant turns, reasoning, and tool calls entirely.
+/// This is the sibling-group id ([`gw_schema::Hashes::prompt_hash`]); it ignores assistant
+/// turns, reasoning, and tool calls. Preference preparation must separately compare full prefixes.
 ///
 /// # Errors
 /// Returns [`StorageError::Serde`](crate::StorageError::Serde) on a serialization failure.

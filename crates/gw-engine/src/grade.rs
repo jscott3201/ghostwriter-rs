@@ -42,6 +42,14 @@ pub fn correlation_prior(k: usize, rho: f64) -> Result<CorrelationMatrix> {
 /// Rejects missing task policy, missing/unsupported facts after verification, or applied policies
 /// that disagree with the task contract or the area's reasoning requirement.
 pub fn validate_record_verification(rec: &TrainingRecord, area: &AreaConfig) -> Result<()> {
+    validate_record_verification_for_reasoning(rec, area.cot_required)
+}
+
+/// Shared task-authority validation using the only area setting that affects verification.
+fn validate_record_verification_for_reasoning(
+    rec: &TrainingRecord,
+    cot_required: bool,
+) -> Result<()> {
     let contract = rec.verification_contract.as_ref().ok_or_else(|| {
         EngineError::Invariant(
             "record lacks task verification policy; historical records are inspect/export only"
@@ -62,7 +70,7 @@ pub fn validate_record_verification(rec: &TrainingRecord, area: &AreaConfig) -> 
         facts
             .gate()
             .map_err(|reason| EngineError::Invariant(reason.into()))?;
-        let reasoning_policy = if area.cot_required {
+        let reasoning_policy = if cot_required {
             VerificationPolicy::Authoritative
         } else {
             VerificationPolicy::Absent
@@ -119,7 +127,15 @@ pub fn verifier_grade_from_verification(
     rec: &TrainingRecord,
     area: &AreaConfig,
 ) -> Result<VerifierGrade> {
-    validate_record_verification(rec, area)?;
+    verifier_grade_for_reasoning(rec, area.cot_required)
+}
+
+/// Reconstruct the same authority gate for pure callers that carry a frozen reasoning policy.
+pub(crate) fn verifier_grade_for_reasoning(
+    rec: &TrainingRecord,
+    cot_required: bool,
+) -> Result<VerifierGrade> {
+    validate_record_verification_for_reasoning(rec, cot_required)?;
     let mut verification: Verification = rec.verification.clone();
     let facts = verification.interpretation.as_ref().ok_or_else(|| {
         EngineError::Invariant("record has no completed verification interpretation".into())

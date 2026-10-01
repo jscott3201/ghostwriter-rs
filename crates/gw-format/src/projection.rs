@@ -1,13 +1,9 @@
 //! `projection` — project an admitted [`TrainingRecord`] down to a trainer's export shape.
 //!
-//! Two projections, both at the LAST moment (the envelope keeps full provenance; only here is it
-//! reduced to a trainer's columns):
-//!
-//! - [`project_sft`] renders the record's messages into a `target` SFT shape under a [`CotPolicy`]
-//!   and a [`MultiTurnLoss`], returning a [`SftProjection`] that pairs the rendered output with
-//!   the loss/masking metadata a trainer needs.
-//! - [`project_preference`] builds a [`PreferenceRecord`] (`{prompt, chosen, rejected}`) from an
-//!   admitted record and a rejected sibling that shares the same `prompt_hash`.
+//! [`project_sft`] renders messages at the export boundary while the source envelope keeps full
+//! provenance. Its [`SftProjection`] also carries the trainer's loss and masking intent.
+//! Preference structural projection lives in [`crate::project_preference_messages`]; complete
+//! evidence validation is owned by the engine preparation API.
 //!
 //! ## CotPolicy + MultiTurnLoss
 //!
@@ -19,10 +15,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use gw_schema::{
-    Content, CotPolicy, MultiTurnLoss, PreferenceRecord, PreferenceSide, Role, TrainingRecord,
-    TrlFormat,
-};
+use gw_schema::{CotPolicy, MultiTurnLoss, Role, TrainingRecord, TrlFormat};
 
 use crate::error::{FormatError, Result};
 use crate::render::render;
@@ -96,93 +89,12 @@ pub fn project_sft(
     })
 }
 
-/// Build a DPO [`PreferenceRecord`] from an admitted `chosen` record and a `rejected` sibling.
-///
-/// Both records MUST share the same `hashes.prompt_hash` (the pairing key / sibling-group id) and
-/// have a final assistant turn. The shared prompt is taken from `chosen` (the turns before its
-/// final assistant turn). Each side's `content` is the clean final answer; `reasoning` rides as an
-/// optional sibling under `cot` ([`CotPolicy::Stripped`] drops it), NEVER inlined (INVARIANT-a).
-///
-/// # Errors
-///
-/// Returns [`FormatError::Projection`] if the two records do not share a non-empty `prompt_hash`,
-/// or if either lacks a final assistant turn.
-pub fn project_preference(
-    chosen: &TrainingRecord,
-    rejected: &TrainingRecord,
-    cot: CotPolicy,
-) -> Result<PreferenceRecord> {
-    let prompt_hash = &chosen.hashes.prompt_hash;
-    if prompt_hash.is_empty() || *prompt_hash != rejected.hashes.prompt_hash {
-        return Err(FormatError::Projection(format!(
-            "chosen/rejected must share a non-empty prompt_hash (chosen={:?}, rejected={:?})",
-            chosen.hashes.prompt_hash, rejected.hashes.prompt_hash
-        )));
-    }
-
-    let (chosen_idx, chosen_side) = final_assistant_side(chosen, cot)?;
-    let (_, rejected_side) = final_assistant_side(rejected, cot)?;
-
-    let prompt = chosen.messages[..chosen_idx].to_vec();
-
-    Ok(PreferenceRecord {
-        prompt,
-        chosen: chosen_side,
-        rejected: rejected_side,
-        prompt_hash: prompt_hash.clone(),
-    })
-}
-
-/// The index of the final assistant turn and its [`PreferenceSide`] (clean content + sibling
-/// reasoning under `cot` + the record id + the bias-corrected aggregate).
-fn final_assistant_side(
-    record: &TrainingRecord,
-    cot: CotPolicy,
-) -> Result<(usize, PreferenceSide)> {
-    let idx = record
-        .messages
-        .iter()
-        .rposition(|m| m.role == Role::Assistant)
-        .ok_or_else(|| {
-            FormatError::Projection(format!("record {} has no assistant turn", record.record_id))
-        })?;
-    let msg = &record.messages[idx];
-    let reasoning = match cot {
-        CotPolicy::Stripped => None,
-        CotPolicy::Supervised | CotPolicy::Masked => msg.reasoning.clone(),
-    };
-    let side = PreferenceSide {
-        content: content_text(&msg.content),
-        reasoning,
-        record_id: record.record_id.clone(),
-        aggregate: record.judging.aggregate,
-    };
-    Ok((idx, side))
-}
-
-/// The clean text of a [`Content`] (mirrors [`crate::render()`]'s flattening). An explicitly
-/// absent value ([`Content::Null`]) flattens to the empty string, matching the render targets.
-fn content_text(content: &Content) -> String {
-    match content {
-        Content::Text(s) => s.clone(),
-        Content::Parts(parts) => parts
-            .iter()
-            .filter_map(|p| match p {
-                gw_schema::ContentPart::Text { text } => Some(text.as_str()),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join(""),
-        Content::Null => String::new(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use gw_schema::{
-        FunctionCall, Generation, Hashes, Judging, Lifecycle, Message, Provenance, TeacherRef,
-        ToolCall, Verification,
+        Content, FunctionCall, Generation, Hashes, Judging, Lifecycle, Message, Provenance,
+        TeacherRef, ToolCall, Verification,
     };
 
     fn msg(role: Role, content: &str, reasoning: Option<&str>) -> Message {
@@ -277,39 +189,6 @@ mod tests {
         .unwrap();
         assert!(!p.rendered.contains("<think>"));
         assert!(!p.cot_masked);
-    }
-
-    #[test]
-    fn preference_pairs_on_shared_prompt_hash() {
-        let chosen = record("a", "h1", "96", "good cot", 0.9);
-        let rejected = record("b", "h1", "97", "bad cot", 0.3);
-        let pref = project_preference(&chosen, &rejected, CotPolicy::Supervised).unwrap();
-        assert_eq!(pref.prompt_hash, "h1");
-        assert_eq!(pref.chosen.content, "96");
-        assert_eq!(pref.rejected.content, "97");
-        assert_eq!(pref.chosen.reasoning.as_deref(), Some("good cot"));
-        assert_eq!(pref.chosen.aggregate, Some(0.9));
-        assert_eq!(pref.prompt.len(), 1);
-        assert_eq!(pref.prompt[0].role, Role::User);
-    }
-
-    #[test]
-    fn preference_stripped_drops_reasoning() {
-        let chosen = record("a", "h1", "96", "good cot", 0.9);
-        let rejected = record("b", "h1", "97", "bad cot", 0.3);
-        let pref = project_preference(&chosen, &rejected, CotPolicy::Stripped).unwrap();
-        assert!(pref.chosen.reasoning.is_none());
-        assert!(pref.rejected.reasoning.is_none());
-    }
-
-    #[test]
-    fn preference_mismatched_prompt_hash_errors() {
-        let chosen = record("a", "h1", "96", "c", 0.9);
-        let rejected = record("b", "h2", "97", "c", 0.3);
-        assert!(matches!(
-            project_preference(&chosen, &rejected, CotPolicy::Supervised),
-            Err(FormatError::Projection(_))
-        ));
     }
 
     /// A two-assistant-turn record (user/assistant/user/assistant), prompt-completion-shaped.

@@ -78,7 +78,7 @@ const fn preserves_tool_signals(target: TrlFormat) -> bool {
 ///
 /// Returns `None` for a conversation that declares no tool fields at all (the text-only case, which
 /// must keep rendering exactly as before on every target).
-fn first_tool_violation(messages: &[Message]) -> Option<(usize, Vec<ToolSignal>)> {
+pub(crate) fn first_tool_violation(messages: &[Message]) -> Option<(usize, Vec<ToolSignal>)> {
     let mut first: Option<usize> = None;
     let mut signals: Vec<ToolSignal> = Vec::new();
     for (index, msg) in messages.iter().enumerate() {
