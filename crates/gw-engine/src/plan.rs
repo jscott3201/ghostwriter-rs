@@ -107,7 +107,7 @@ impl PreparedRun {
             input_plan: plan.identity.clone(),
             execution: SemanticDeclaration::new(
                 "gw-engine/generation-admission",
-                "3",
+                "4",
                 crate::behavior::contract(area)?,
             ),
             clients,

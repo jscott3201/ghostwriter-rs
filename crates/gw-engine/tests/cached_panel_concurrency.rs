@@ -135,8 +135,8 @@ async fn distinct_cached_panel_misses_reach_http_before_either_response_is_relea
         .held(0, entered.clone(), held.clone())
     })
     .await;
-    let mut judges = three_judges()[..2].to_vec();
-    judges.push(judges[0].clone().with_max_tokens(1));
+    let judges = three_judges()[..2].to_vec();
+    let area = area_k1(judges.clone(), lenient_thresholds());
     let engine = Engine::new(
         clients(
             store.clone(),
@@ -144,7 +144,7 @@ async fn distinct_cached_panel_misses_reach_http_before_either_response_is_relea
             Arc::new(server.provider()),
             EventSink::disconnected(),
         ),
-        area_k1(judges, lenient_thresholds()),
+        area.clone(),
         1,
     );
     let running = tokio::spawn(async move {
@@ -181,16 +181,61 @@ async fn distinct_cached_panel_misses_reach_http_before_either_response_is_relea
             .iter()
             .map(|vote| vote.judge_model.as_str())
             .collect::<Vec<_>>(),
-        ["judge-a", "judge-b", "judge-a"]
-    );
-    assert_eq!(
-        record.judging.panel[0].raw_response,
-        record.judging.panel[2].raw_response
+        ["judge-a", "judge-b"]
     );
     let raw: serde_json::Value =
         serde_json::from_str(record.judging.panel[0].raw_response.as_ref().unwrap()).unwrap();
     assert_eq!(raw["attempt_origin"]["run_id"], "overlap");
     assert!(raw["attempt_origin"]["attempt_id"].is_string());
+    assert_eq!(store.model_attempts("overlap").await.unwrap().len(), 2);
+
+    // Repeated positions remain supported at the low-level collection boundary. They reuse the
+    // actual paid origins above, preserve ordering, and do not become another consensus vote.
+    let mut audit_panel = judges;
+    audit_panel.push(audit_panel[0].clone().with_max_tokens(1));
+    let candidate = gw_format::render(
+        &record.messages,
+        gw_schema::TrlFormat::OpenAiMessages,
+        gw_schema::CotPolicy::Supervised,
+    )
+    .unwrap();
+    let collected = gw_judge::grade_panel_cached(
+        &store,
+        &ExplodingTeacher,
+        &audit_panel,
+        &area.rubric,
+        &candidate,
+        &gw_storage::record_hash(&record).unwrap(),
+        |_| gw_judge::PanelFailure::Fatal,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        collected
+            .iter()
+            .map(|grade| grade.judge_model.as_str())
+            .collect::<Vec<_>>(),
+        ["judge-a", "judge-b", "judge-a"]
+    );
+    assert_eq!(collected[0], collected[2]);
+    for (position, grade) in collected[..2].iter().enumerate() {
+        assert_eq!(grade.to_vote(), record.judging.panel[position]);
+    }
+    assert_eq!(collected[0].raw["attempt_origin"], raw["attempt_origin"]);
+    assert!(matches!(
+        gw_judge::HybridGrader::new(area.thresholds).grade(
+            None,
+            &collected,
+            &[],
+            None,
+            &gw_judge::CorrelationMatrix::uniform_offdiagonal(3, area.correlation_rho),
+        ),
+        Err(gw_judge::JudgeError::DuplicateJudgeEvidence {
+            first: 0,
+            duplicate: 2
+        })
+    ));
+    assert_eq!(server.requests.lock().unwrap().len(), 2);
     assert_eq!(store.model_attempts("overlap").await.unwrap().len(), 2);
 }
 

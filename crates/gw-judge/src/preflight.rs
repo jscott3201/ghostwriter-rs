@@ -63,12 +63,14 @@ pub fn validate_correlation_prior(judge_count: usize, rho: f64) -> Result<()> {
     Ok(())
 }
 
-/// Assess the resolved generation panel before any provider spending.
+/// Assess count feasibility for the generation panel before any provider spending.
 ///
 /// The cold start uses equal weights and a constant assumed `rho`. Every possible nonempty
 /// decisive count is considered: `n_eff = d / (1 + (d - 1) * rho)`. This assessment establishes
 /// mathematical attainability under that assumption, not empirical calibration or future acceptance.
 /// Review-only intent bypasses only attainability; numeric domains and a nonempty panel still apply.
+/// Call [`crate::validate_judge_panel`] for effective request validity and distinctness; a count
+/// alone cannot establish those facts. The engine's resolved assessment performs both checks.
 ///
 /// # Errors
 /// Rejects empty panels, invalid numeric settings, and unattainable automatic admission.

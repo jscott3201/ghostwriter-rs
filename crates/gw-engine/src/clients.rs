@@ -117,8 +117,11 @@ impl AreaConfig {
     /// Assess the resolved panel before generation or judge dispatch.
     ///
     /// # Errors
-    /// Rejects empty panels, invalid numeric domains, and unattainable automatic admission.
+    /// Rejects duplicate effective judge contracts, empty panels, invalid numeric domains, and
+    /// unattainable automatic admission. Review-only bypasses only feasibility.
     pub fn assess_admission(&self) -> crate::Result<gw_judge::PanelAssessment> {
+        gw_judge::validate_judge_panel(&self.judges, &self.rubric)
+            .map_err(|error| crate::EngineError::Invariant(error.to_string()))?;
         gw_judge::assess_panel(
             self.judges.len(),
             self.thresholds,

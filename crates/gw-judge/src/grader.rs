@@ -126,12 +126,14 @@ impl HybridGrader {
     ///
     /// This is the pure composition step — it spends nothing. The verifier authoritative gate fires
     /// FIRST: a hard verifier reject sinks the record regardless of the panel. Otherwise the panel
-    /// consensus is computed and gated by `n_eff`, then thresholded.
+    /// consensus requires distinct effective request/interpretation evidence, is gated by `n_eff`,
+    /// then thresholded. Review-only intent bypasses neither evidence validity nor distinctness.
     ///
     /// # Errors
     /// - [`JudgeError::EmptyPanel`] if there is no verifier hard-reject AND no panel grades (nothing
     ///   could decide the record).
-    /// - [`JudgeError::Invariant`] if the correlation matrix dimension does not match the panel.
+    /// - [`JudgeError::DuplicateJudgeEvidence`] for repeated effective judge contracts.
+    /// - [`JudgeError::Invariant`] for missing/inconsistent live evidence or invalid consensus inputs.
     pub fn grade(
         &self,
         verifier: Option<&VerifierGrade>,
@@ -203,6 +205,7 @@ impl HybridGrader {
                 "no verifier hard-reject and no panel grades; nothing can decide the record".into(),
             ));
         }
+        crate::effective_contract::validate_grade_evidence(panel)?;
 
         let (decision, judging) = self.decide(panel, ratings, area, r)?;
         Ok(GradeOutcome {
@@ -410,6 +413,14 @@ mod tests {
 
     fn grade(slug: &str, score: f64, verdict: Verdict) -> Grade {
         Grade {
+            effective_contract: Some(
+                crate::EffectiveJudgeContract::json_score(&crate::build_judge_request(
+                    &crate::PanelJudge::new(slug, "family"),
+                    "rubric",
+                    "candidate",
+                ))
+                .unwrap(),
+            ),
             judge_model: slug.into(),
             score,
             verdict,

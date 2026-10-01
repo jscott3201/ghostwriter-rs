@@ -69,8 +69,13 @@ fn verdict_token(v: crate::decision::Verdict) -> &'static str {
 }
 
 /// Re-hydrate a [`Grade`] from a cached JSON value. Missing/garbled fields degrade gracefully (an
-/// unreadable verdict becomes `Uncertain`), so malformed cache values do not crash a re-run.
-pub(crate) fn grade_from_cache_value(value: &Value) -> Grade {
+/// unreadable verdict becomes `Uncertain`), so malformed cache values do not crash a re-run. Live
+/// evidence comes from the exact request whose current cache key matched, not from cached labels;
+/// the consensus boundary rejects inconsistent grade metadata.
+pub(crate) fn grade_from_cache_value(
+    value: &Value,
+    effective_contract: crate::EffectiveJudgeContract,
+) -> Grade {
     use crate::decision::Verdict;
     let verdict = match value.get("verdict").and_then(Value::as_str) {
         Some("accept") => Verdict::Accept,
@@ -86,6 +91,7 @@ pub(crate) fn grade_from_cache_value(value: &Value) -> Grade {
         object.entry("attempt_origin").or_insert(Value::Null);
     }
     Grade {
+        effective_contract: Some(effective_contract),
         judge_model: value
             .get("judge_model")
             .and_then(Value::as_str)
@@ -137,6 +143,7 @@ pub async fn grade_one_cached<P: Provider + ?Sized>(
     content_hash: &str,
 ) -> Result<Grade> {
     let request = build_judge_request(judge, rubric, candidate_render);
+    let effective_contract = crate::EffectiveJudgeContract::json_score(&request)?;
     let fingerprint = request_fingerprint(&request, judge.rubric_id.as_deref())?;
     if let Some(cached) = store
         .cache_get(
@@ -147,7 +154,7 @@ pub async fn grade_one_cached<P: Provider + ?Sized>(
         )
         .await?
     {
-        return Ok(grade_from_cache_value(&cached));
+        return Ok(grade_from_cache_value(&cached, effective_contract));
     }
     let grade = grade_request(provider, judge, request).await?;
     store
@@ -215,6 +222,7 @@ mod tests {
     #[test]
     fn grade_round_trips_through_cache_value() {
         let g = Grade {
+            effective_contract: None,
             judge_model: "m".into(),
             score: 0.82,
             verdict: Verdict::Accept,
@@ -229,7 +237,18 @@ mod tests {
             rubric_id: Some("math".into()),
         };
         let v = grade_to_cache_value(&g);
-        let back = grade_from_cache_value(&v);
+        let contract = crate::EffectiveJudgeContract::json_score(&build_judge_request(
+            &PanelJudge::new("m", "family").with_sampling(JudgeSampling {
+                temperature: 0.3,
+                top_p: Some(0.9),
+                seed: Some(42),
+            }),
+            "rubric",
+            "candidate",
+        ))
+        .unwrap();
+        let back = grade_from_cache_value(&v, contract.clone());
+        assert_eq!(back.effective_contract, Some(contract));
         assert_eq!(back.score, g.score);
         assert_eq!(back.verdict, g.verdict);
         assert_eq!(back.temperature, g.temperature);

@@ -21,25 +21,8 @@ pub fn judge_request_contract(
     judge: &crate::PanelJudge,
     rubric: &str,
 ) -> Result<serde_json::Value> {
-    let sampling = judge.sampling;
-    if !sampling.temperature.is_finite()
-        || !(0.0..=2.0).contains(&sampling.temperature)
-        || sampling
-            .top_p
-            .is_some_and(|p| !p.is_finite() || !(0.0..=1.0).contains(&p))
-    {
-        return Err(JudgeError::Invariant(
-            "judge sampling requires finite temperature in [0,2] and top_p in [0,1]".into(),
-        ));
-    }
-    if judge.effective_max_tokens() == 0
-        || matches!(judge.reasoning, Some(crate::JudgeReasoning::MaxTokens(0)))
-    {
-        return Err(JudgeError::Invariant(
-            "judge effective completion and reasoning token caps must be positive".into(),
-        ));
-    }
     let request = crate::build_judge_request(judge, rubric, "");
+    crate::EffectiveJudgeContract::json_score(&request)?;
     Ok(
         serde_json::json!({"request": request, "request_identity": request_fingerprint(&request, judge.rubric_id.as_deref())?, "family": judge.family, "rubric_id": judge.rubric_id, "scoring": JudgeScoring::JsonScore.as_str(), "interpretation_version": JUDGE_INTERPRETATION_VERSION}),
     )

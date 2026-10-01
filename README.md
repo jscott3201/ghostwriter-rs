@@ -550,10 +550,10 @@ reject_below     = 0.60   # aggregate <  this -> Reject
 min_n_eff_ratio  = 0.50   # floor on effective/nominal judge count
 min_n_eff        = 1.5    # absolute effective-judge floor, else -> NeedsReview
 
-# ─── the judge panel (one or more; same-family judges are de-weighted) ──────
+# ─── the judge panel (one or more distinct effective requests) ─────────────
 [[area.judges]]
 slug   = "deepseek/deepseek-v4-pro"
-family = "deepseek"        # coarse family tag for same-family exclusion
+family = "deepseek"        # audit annotation; does not establish independence
 # optional per-judge overrides: rubric_id, max_tokens, reasoning_max_tokens, reasoning_effort
 
 # ─── optional end-of-run export ─────────────────────────────────────────────
@@ -587,13 +587,24 @@ must be nonempty, score bands must satisfy finite `0 <= reject_below <= accept_t
 the effective-count floors must be finite and in range (`min_n_eff >= 0`, ratio in `[0,1]`). The
 correlation prior is finite in `[0,1]` and must be positive and nonidentity for multiple judges.
 
+Each panel position must have a distinct effective judge request and response interpretation.
+Identical requests, family aliases, rubric audit IDs, equivalent token caps, and signed-zero
+sampling variants cannot create additional evidence. Actual model, prompt, sampling, and reasoning
+differences remain distinct contracts; they do not establish empirical independence. The library
+grader requires the same evidence on live grades. The low-level cached collector still preserves
+positions and coalesces matching cache keys for audit, but repeated positions cannot enter consensus.
+
 Under equal cold-start weights, `d` decisive votes have
 `n_eff = d / (1 + (d - 1) * correlation_rho)`. Preflight considers every `d` from one through the
 number of judges, because uncertain votes are excluded. Some `d` must meet both the absolute and
 relative floors. The default prior `0.7` and absolute floor `1.5` cannot do so, even with a larger
-panel. `review_only` bypasses this attainability check while keeping all numeric safeguards. Its
+panel. `review_only` bypasses this attainability check while keeping evidence and numeric safeguards. Its
 intent is stored with each candidate; otherwise admitted candidates remain `NeedsReview` on replay
 and rederivation. Verifier hard failures still reject.
+
+This evidence rule is pinned in the generation/admission manifest. Runs recorded under the previous
+behavior need a new run ID for execution. Stored decisions and effective counts are preserved;
+provider-free inspection, export, and publication recovery remain available.
 
 **An attainable example under an assumed prior:** the following two-judge panel assumes `rho = 0.2`.
 Two decisive judges then give `n_eff = 1.667` and `n_eff/d = 0.833`, clearing both stated floors.

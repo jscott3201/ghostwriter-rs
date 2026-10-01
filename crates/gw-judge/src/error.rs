@@ -45,6 +45,16 @@ pub enum JudgeError {
     #[error("consensus called on an empty panel: {0}")]
     EmptyPanel(String),
 
+    /// Two zero-based panel positions have the same effective request and interpretation. Audit
+    /// labels cannot turn that repeated contract into independent consensus evidence.
+    #[error("duplicate effective judge evidence at panel positions {first} and {duplicate}")]
+    DuplicateJudgeEvidence {
+        /// First position carrying this contract.
+        first: usize,
+        /// Later position repeating the contract.
+        duplicate: usize,
+    },
+
     /// A grading INVARIANT was violated by the caller — e.g. a calibration-weight vector whose
     /// length does not match the panel, or a non-finite weight. A programmer/config fault: terminal,
     /// surfaced loud at the seam rather than silently producing a wrong consensus.
