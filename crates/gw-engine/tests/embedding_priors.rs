@@ -286,7 +286,12 @@ async fn resumed_item_does_not_dedup_against_its_own_admitted_vector() {
         .unwrap()
         .remove(0);
     prior.record_id = "resume-own-s0-seed0-a9-c9".into();
-    prior.provenance.run_id = "resume-own".into();
+    prior
+        .origin
+        .generated_mut()
+        .expect("generated record")
+        .provenance
+        .run_id = "resume-own".into();
 
     let teacher = Arc::new(ScriptedTeacher::new(vec![good_cot(0.01)], 1));
     let teacher_probe = Arc::clone(&teacher);
@@ -328,7 +333,12 @@ async fn pre_cancelled_resume_stops_prior_seeding_before_embed() {
         .unwrap()
         .remove(0);
     prior.record_id = "cancel-seeding-s0-seed0-a9-c9".into();
-    prior.provenance.run_id = "cancel-seeding".into();
+    prior
+        .origin
+        .generated_mut()
+        .expect("generated record")
+        .provenance
+        .run_id = "cancel-seeding".into();
 
     let no_teacher: Arc<dyn Provider> = Arc::new(ScriptedTeacher::new(vec![], 0));
     let no_judge: Arc<dyn Provider> = Arc::new(ScriptedJudge::new(vec![]));

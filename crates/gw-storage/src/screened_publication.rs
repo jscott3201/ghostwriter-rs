@@ -58,13 +58,17 @@ impl Store {
         // Only this private construction after callback success can attach publication authority.
         let plan = tokio::task::spawn_blocking(move || -> Result<ExportPlan> {
             validate(&records, &screening)?;
-            check_bindings(&records, &screening)?;
+            check_bindings(
+                &records,
+                &screening,
+                gw_schema::ExportSchemaVersion::CURRENT,
+            )?;
             let output: Vec<_> = records
                 .iter()
-                .filter(|r| r.provenance.run_id == screening.declaration.output.run_id)
+                .filter(|r| r.run_id() == screening.declaration.output.run_id)
                 .cloned()
                 .collect();
-            let mut plan = ExportPlan::prepare(&output, options)?;
+            let mut plan = ExportPlan::prepare_registered(&output, options)?;
             let selected: std::collections::BTreeSet<_> = screening
                 .eligible_output
                 .iter()
@@ -106,10 +110,20 @@ impl Store {
     }
 }
 
-fn check_bindings(records: &[TrainingRecord], plan: &FrozenScreeningPlan) -> Result<()> {
+fn check_bindings(
+    records: &[TrainingRecord],
+    plan: &FrozenScreeningPlan,
+    version: gw_schema::ExportSchemaVersion,
+) -> Result<()> {
     let current = records
         .iter()
-        .map(|r| crate::capture_screening_input(r, &plan.declaration.policy))
+        .map(|r| {
+            crate::screening_binding::capture_screening_input_for(
+                r,
+                &plan.declaration.policy,
+                version,
+            )
+        })
         .collect::<Result<Vec<_>>>()?;
     if current != plan.population {
         return Err(integrity(
@@ -127,7 +141,11 @@ pub(crate) async fn check_population(
         let records =
             crate::record_data::screening_population(tx, &witness.plan.declaration.runs.run_ids)
                 .await?;
-        check_bindings(&records, &witness.plan)?;
+        check_bindings(
+            &records,
+            &witness.plan,
+            artifact.manifest.column_schema_version,
+        )?;
     }
     Ok(())
 }

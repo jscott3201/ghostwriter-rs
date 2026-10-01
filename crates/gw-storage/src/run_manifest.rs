@@ -10,7 +10,7 @@ pub enum RunMode {
     /// Resume only an existing compatible run; unknown IDs fail closed.
     Replay,
 }
-pub(crate) type StoredManifest = (String, Option<i64>, Option<String>);
+pub(crate) type StoredManifest = (String, Option<i64>, Option<String>, String);
 
 pub(crate) fn mismatch(run_id: &str, reason: impl Into<String>) -> StorageError {
     StorageError::RunManifest {
@@ -28,13 +28,16 @@ pub(crate) fn check(
     manifest
         .validate()
         .map_err(|reason| mismatch(run_id, reason))?;
-    let Some((original, shards, digest)) = existing else {
+    let Some((original, shards, digest, kind)) = existing else {
         return if mode == RunMode::Replay {
             Err(mismatch(run_id, "unknown run ID for replay"))
         } else {
             Ok(())
         };
     };
+    if kind != "generated" {
+        return Err(mismatch(run_id, "reference import cannot enter generation"));
+    }
     let stored: RunManifest = serde_json::from_str(original)
         .map_err(|_| mismatch(run_id, "legacy, unpinned, or malformed semantic manifest"))?;
     stored
@@ -68,7 +71,7 @@ impl Store {
         mode: RunMode,
     ) -> Result<()> {
         let existing: Option<StoredManifest> = sqlx::query_as(
-            "SELECT config_json, shard_count, prompts_hash FROM runs WHERE run_id=?",
+            "SELECT config_json, shard_count, prompts_hash, run_kind FROM runs WHERE run_id=?",
         )
         .bind(run_id)
         .fetch_optional(self.pool())

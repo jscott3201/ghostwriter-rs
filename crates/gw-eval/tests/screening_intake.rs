@@ -44,7 +44,12 @@ fn missing_source_sibling_or_parent_evidence_never_shrinks_the_population() {
                 "undeclared_sibling_set"
             }
             2 => {
-                rows[1].provenance.parent_ids = vec!["external-parent".into()];
+                rows[1]
+                    .origin
+                    .generated_mut()
+                    .expect("generated fixture")
+                    .provenance
+                    .parent_ids = vec!["external-parent".into()];
                 "missing_or_ambiguous_parent"
             }
             _ => {
@@ -64,10 +69,19 @@ fn missing_source_sibling_or_parent_evidence_never_shrinks_the_population() {
 #[test]
 fn missing_expected_source_is_distinct_from_a_rejected_sibling_completion() {
     let mut a = record("a", "ordinary shared sibling prompt");
-    a.generation.n_completions = Some(2);
+    a.origin
+        .generated_mut()
+        .expect("generated record")
+        .generation
+        .n_completions = Some(2);
     let mut sibling = a.clone();
     sibling.record_id = "sibling".into();
-    sibling.generation.completion_index = Some(1);
+    sibling
+        .origin
+        .generated_mut()
+        .expect("generated record")
+        .generation
+        .completion_index = Some(1);
     sibling.lifecycle.state = LifecycleState::Rejected;
     let expected = record("missing-source", "expected separate source item");
     let full = vec![a.clone(), sibling.clone(), expected];
@@ -102,7 +116,12 @@ fn ambiguous_parent_ids_and_out_of_scope_parents_are_not_resolved_by_guessing() 
     let mut b = record("b", "second question");
     b.record_id = a.record_id.clone();
     let mut child = record("child", "third question");
-    child.provenance.parent_ids = vec![a.record_id.clone()];
+    child
+        .origin
+        .generated_mut()
+        .expect("generated fixture")
+        .provenance
+        .parent_ids = vec![a.record_id.clone()];
     let rows = vec![a, b, child];
     let plan = prepare_screening(&rows, &declaration(&rows), &protected(), None).unwrap();
     assert!(
@@ -112,7 +131,12 @@ fn ambiguous_parent_ids_and_out_of_scope_parents_are_not_resolved_by_guessing() 
     );
     assert!(!plan.edges.iter().any(|edge| edge.kind == "declared_parent"));
     let mut child = record("child", "third question");
-    child.provenance.parent_ids = vec!["external".into()];
+    child
+        .origin
+        .generated_mut()
+        .expect("generated fixture")
+        .provenance
+        .parent_ids = vec!["external".into()];
     let declared = declaration(&[child.clone()]);
     let before = prepare_screening(&[child.clone()], &declared, &protected(), None).unwrap();
     let after = prepare_screening(
@@ -140,21 +164,40 @@ fn excluded_dependencies_eligibility_and_in_scope_additions_invalidate_old_plans
     for variant in 0..7 {
         let mut changed = rows.clone();
         match variant {
-            0 => changed[1].provenance.parent_ids = vec![changed[0].record_id.clone()],
+            0 => {
+                changed[1]
+                    .origin
+                    .generated_mut()
+                    .expect("generated fixture")
+                    .provenance
+                    .parent_ids = vec![changed[0].record_id.clone()]
+            }
             1 => {
                 changed[1].task_provenance.as_mut().unwrap().split.role = TaskSplitRole::Validation
             }
             2 => changed[1].lifecycle.state = LifecycleState::Admitted,
             3 => {
                 let mut extra = record("extra", "unrelated added row");
-                extra.provenance.run_id = rows[1].provenance.run_id.clone();
+                extra
+                    .origin
+                    .generated_mut()
+                    .expect("generated record")
+                    .provenance
+                    .run_id = rows[1].run_id().to_owned();
                 extra.lifecycle.state = LifecycleState::Rejected;
                 changed.push(extra);
             }
             4 => {
                 changed.pop();
             }
-            5 => changed[1].generation.n_completions = Some(2),
+            5 => {
+                changed[1]
+                    .origin
+                    .generated_mut()
+                    .expect("generated record")
+                    .generation
+                    .n_completions = Some(2)
+            }
             _ => changed[1].judging.verdict = Some(Verdict::Reject),
         }
         if matches!(variant, 0 | 1 | 2 | 5 | 6) {
@@ -329,8 +372,18 @@ fn cyclic_lineage_is_incomplete_and_never_recurses() {
         record("a", "first question"),
         record("b", "second question"),
     ];
-    rows[0].provenance.parent_ids = vec!["b".into()];
-    rows[1].provenance.parent_ids = vec!["a".into()];
+    rows[0]
+        .origin
+        .generated_mut()
+        .expect("generated fixture")
+        .provenance
+        .parent_ids = vec!["b".into()];
+    rows[1]
+        .origin
+        .generated_mut()
+        .expect("generated fixture")
+        .provenance
+        .parent_ids = vec!["a".into()];
     let plan = prepare_screening(&rows, &declaration(&rows), &protected(), None).unwrap();
     assert!(
         plan.incomplete
@@ -345,7 +398,11 @@ fn an_unknown_relative_split_is_missing_evidence_not_a_claimed_split_conflict() 
     let a = record("a", "ordinary question");
     let mut b = record("b", "another question");
     b.task_provenance = None;
-    b.provenance.parent_ids = vec!["a".into()];
+    b.origin
+        .generated_mut()
+        .expect("generated fixture")
+        .provenance
+        .parent_ids = vec!["a".into()];
     let rows = vec![a, b];
     let plan = prepare_screening(&rows, &declaration(&rows), &protected(), None).unwrap();
     assert_eq!(plan.lexical_status, LexicalScreeningStatus::Incomplete);

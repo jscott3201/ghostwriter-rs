@@ -28,26 +28,28 @@ pub fn candidate(prompt: usize, index: u32, score: Option<f64>) -> TrainingRecor
             message(Role::Assistant, format!("candidate answer {index}")),
         ],
         tools: None,
-        provenance: Provenance {
-            run_id: "run-1".into(),
-            parent_ids: vec![],
-            teacher: TeacherRef {
-                provider: "fixture".into(),
-                slug: "synthetic".into(),
-                served_by: None,
-                model_card_revision: None,
+        origin: gw_schema::RecordOrigin::Generated(Box::new(gw_schema::GeneratedOrigin {
+            provenance: Provenance {
+                run_id: "run-1".into(),
+                parent_ids: vec![],
+                teacher: TeacherRef {
+                    provider: "fixture".into(),
+                    slug: "synthetic".into(),
+                    served_by: None,
+                    model_card_revision: None,
+                },
+                user_synth_model: None,
+                user_turn_kind: None,
+                in_scope_safe: Some(true),
+                judge_models: vec![],
+                harness_version: "fixture".into(),
+                git_commit: None,
             },
-            user_synth_model: None,
-            user_turn_kind: None,
-            in_scope_safe: Some(true),
-            judge_models: vec![],
-            harness_version: "fixture".into(),
-            git_commit: None,
-        },
-        generation: Generation {
-            completion_index: Some(index),
-            ..Default::default()
-        },
+            generation: Generation {
+                completion_index: Some(index),
+                ..Default::default()
+            },
+        })),
         task_provenance: None,
         verification_contract: None,
         execution_evidence: None,

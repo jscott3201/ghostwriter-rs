@@ -199,7 +199,7 @@ pub async fn drive_to_judged(
 /// Propagates a [`gw_storage`] hashing error (a content field that cannot be canonicalized).
 pub fn evidence_key(rec: &TrainingRecord) -> Result<EvidenceBinding> {
     Ok(EvidenceBinding {
-        task: rec.provenance.run_id.clone(),
+        task: rec.run_id().to_owned(),
         attempt: rec.record_id.clone(),
         patch_hash: gw_storage::completion_hash(&rec.messages)?,
     })

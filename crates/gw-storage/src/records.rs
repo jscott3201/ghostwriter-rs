@@ -70,8 +70,25 @@ impl Store {
     /// # Errors
     /// Returns a serialization/integrity or SQL error, including a missing run foreign key.
     pub async fn replace_record_for_import(&self, record: &TrainingRecord) -> Result<()> {
+        if record.origin.generated().is_none() {
+            return Err(data::integrity(
+                &record.record_id,
+                "references require registered atomic import",
+            ));
+        }
         let stored = data::normalize(record)?;
         let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
+        data::generated_partition(&mut tx, &stored).await?;
+        // Administrative repair must work even when the old JSON or indexed projections are
+        // corrupt. Reference membership and its typed ledger protect the existing record ID.
+        let reference: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM reference_members WHERE record_id=?) OR EXISTS(SELECT 1 FROM records r JOIN runs x ON x.run_id=r.run_id WHERE r.record_id=? AND x.run_kind='reviewed_reference')")
+            .bind(&record.record_id).bind(&record.record_id).fetch_one(&mut *tx).await?;
+        if reference {
+            return Err(data::integrity(
+                &record.record_id,
+                "cannot replace a committed reference",
+            ));
+        }
         sqlx::query("DELETE FROM lifecycle_history WHERE record_id=?")
             .bind(&record.record_id)
             .execute(&mut *tx)

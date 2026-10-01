@@ -156,8 +156,8 @@ pub struct ScreeningRecordStratum {
     pub domain: Option<String>,
     /// Reviewed difficulty label, if present.
     pub difficulty: Option<String>,
-    /// Supplied teacher model identity.
-    pub teacher: String,
+    /// Supplied teacher model identity; absent for reviewed references.
+    pub teacher: Option<String>,
     /// Supported normalized text token count, including independently retained reasoning fields;
     /// None when a resource failure prevented a complete count.
     pub tokens: Option<u64>,

@@ -144,7 +144,12 @@ fn production_fences_prose_raw_score_nine_and_admit_alias_remain_usable() {
 fn cross_run_overlap_cannot_be_hidden_by_different_group_labels() {
     let mut fixture = Fixture::new();
     let mut record = fixture.records[0].clone();
-    record.provenance.run_id = "independent-looking-run".into();
+    record
+        .origin
+        .generated_mut()
+        .expect("generated record")
+        .provenance
+        .run_id = "independent-looking-run".into();
     record.record_id = "assessment-duplicate".into();
     fixture.evidence.assessment = vec![row(
         &fixture.panel,

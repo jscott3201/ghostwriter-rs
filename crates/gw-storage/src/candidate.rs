@@ -8,7 +8,7 @@ use gw_schema::{CandidateBinding, TrainingRecord};
 pub fn capture_candidate_binding(record: &TrainingRecord) -> crate::Result<CandidateBinding> {
     Ok(CandidateBinding {
         record_id: record.record_id.clone(),
-        run_id: record.provenance.run_id.clone(),
+        run_id: record.run_id().to_owned(),
         training_area: record.training_area.clone(),
         prompt_hash: crate::prompt_hash(&record.messages)?,
         record_hash: crate::record_hash(record)?,

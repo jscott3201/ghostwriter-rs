@@ -129,6 +129,11 @@ pub use task_identity::{
 
 // --- §1.4 provenance ---
 pub use provenance::{Provenance, TeacherRef};
+mod record_origin;
+pub use record_origin::{
+    ExportRecordOrigin, GeneratedOrigin, RecordOrigin, ReferenceActorKind, ReferenceAuthorship,
+    ReviewedReferenceOrigin,
+};
 
 // --- §1.5 generation ---
 pub use generation::{Generation, ReasoningEffort};
@@ -309,26 +314,28 @@ mod tests {
                 name: None,
             }],
             tools: None,
-            provenance: Provenance {
-                run_id: "run-1".into(),
-                parent_ids: vec![],
-                teacher: TeacherRef {
-                    provider: "openrouter".into(),
-                    slug: "z-ai/glm-5.2".into(),
-                    served_by: Some("Parasail".into()),
-                    model_card_revision: None,
+            origin: crate::RecordOrigin::Generated(Box::new(crate::GeneratedOrigin {
+                provenance: Provenance {
+                    run_id: "run-1".into(),
+                    parent_ids: vec![],
+                    teacher: TeacherRef {
+                        provider: "openrouter".into(),
+                        slug: "z-ai/glm-5.2".into(),
+                        served_by: Some("Parasail".into()),
+                        model_card_revision: None,
+                    },
+                    user_synth_model: None,
+                    user_turn_kind: Some("numeric_match".into()),
+                    in_scope_safe: Some(true),
+                    judge_models: vec![],
+                    harness_version: "0.1.0".into(),
+                    git_commit: None,
                 },
-                user_synth_model: None,
-                user_turn_kind: Some("numeric_match".into()),
-                in_scope_safe: Some(true),
-                judge_models: vec![],
-                harness_version: "0.1.0".into(),
-                git_commit: None,
-            },
-            generation: Generation {
-                reasoning_effort: Some(ReasoningEffort::Xhigh),
-                ..Default::default()
-            },
+                generation: Generation {
+                    reasoning_effort: Some(ReasoningEffort::Xhigh),
+                    ..Default::default()
+                },
+            })),
             task_provenance: None,
             verification_contract: None,
             // A carried execution report round-trips with the envelope: the persisted report IS the
@@ -367,3 +374,9 @@ mod gemma_model;
 pub use gemma_model::*;
 mod lora_checkpoint;
 pub use lora_checkpoint::*;
+
+mod reference_catalogue;
+pub use reference_catalogue::{
+    ReferenceActor, ReferenceCapture, ReferenceCatalogue, ReferenceMemberDeclaration,
+    ReferenceReview, ValidatedReferenceCatalogue, ValidatedReferenceMember, reference_task_digest,
+};

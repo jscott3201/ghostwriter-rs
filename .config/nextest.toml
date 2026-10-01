@@ -19,3 +19,9 @@ retries = 0
 # Run the full CI test set even if one test fails.
 fail-fast = false
 final-status-level = "slow"
+
+[[profile.default.overrides]]
+# Explicitly ignored local runtime qualification: 112 sequential owned reference executions.
+filter = 'test(reference_full_population_cached_runtime_roundtrip)'
+slow-timeout = { period = "60s", terminate-after = 10 }
+retries = 0

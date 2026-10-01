@@ -87,7 +87,7 @@ pub fn prepare_preference_pair(
         ));
     }
     if chosen.record_id == rejected.record_id
-        || chosen.provenance.run_id != rejected.provenance.run_id
+        || chosen.run_id() != rejected.run_id()
         || chosen.training_area != rejected.training_area
         || fresh_chosen.prompt_hash != fresh_rejected.prompt_hash
         || chosen.task_provenance != rejected.task_provenance

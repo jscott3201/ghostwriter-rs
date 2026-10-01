@@ -71,7 +71,12 @@ fn synthetic_records(artifact: &ExportArtifact, rows: &[Projected]) -> Vec<Train
             }))
             .unwrap();
             assert_eq!(
-                crate::capture_screening_input(&record, &plan.declaration.policy).unwrap(),
+                crate::screening_binding::capture_screening_input_for(
+                    &record,
+                    &plan.declaration.policy,
+                    artifact.manifest.column_schema_version
+                )
+                .unwrap(),
                 *binding
             );
             record
@@ -84,7 +89,14 @@ fn rebuild_report(artifact: &mut ExportArtifact, records: &[TrainingRecord]) {
     let plan = &mut witness.plan;
     plan.population = records
         .iter()
-        .map(|r| crate::capture_screening_input(r, &plan.declaration.policy).unwrap())
+        .map(|r| {
+            crate::screening_binding::capture_screening_input_for(
+                r,
+                &plan.declaration.policy,
+                artifact.manifest.column_schema_version,
+            )
+            .unwrap()
+        })
         .collect();
     plan.required_fields = records
         .iter()

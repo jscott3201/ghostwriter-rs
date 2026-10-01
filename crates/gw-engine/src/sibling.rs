@@ -421,7 +421,11 @@ async fn generate_and_persist(
 
     // Fill the sibling_group_id from the canonical prompt_hash (gw-generate leaves it None; gw-storage
     // is authoritative for hashes, so compute it here from the same canonical projection).
-    rec.generation.sibling_group_id = Some(sibling_group_id(&rec, &group.clients.store)?);
+    rec.origin
+        .generated_mut()
+        .expect("generated record")
+        .generation
+        .sibling_group_id = Some(sibling_group_id(&rec, &group.clients.store)?);
     rec.judging.admission_intent = group.area.admission_intent;
     let _ = group.shard; // shard rode into the record id; nothing else to stamp here.
 

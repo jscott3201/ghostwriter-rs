@@ -199,6 +199,7 @@ fn validate_source(
         || source.prompt_hash != row.prompt_hash
         || source.messages_json != row.messages_json
         || source.task_json != row.task_json
+        || source.origin_json != row.origin_json
     {
         return Err(integrity(
             "prepared SFT source row differs from actual captured Parquet",
@@ -260,7 +261,30 @@ fn validate_source(
             }
         }
         (None, None) => {
-            let kind = if declared.is_some() {
+            let origin = row
+                .origin_json
+                .as_ref()
+                .map(|json| serde_json::from_str::<gw_schema::ExportRecordOrigin>(json))
+                .transpose()?;
+            let reference = match &origin {
+                Some(gw_schema::ExportRecordOrigin::ReviewedReference(value)) => Some(value),
+                _ => None,
+            };
+            if let Some(reference) = reference {
+                use sha2::Digest;
+                let bytes = serde_json::to_vec(&serde_json::json!([
+                    "ghostwriter.reference-component.v1",
+                    reference.catalogue_id,
+                    reference.component
+                ]))?;
+                let expected = format!("{:x}", sha2::Sha256::digest(bytes));
+                if source.group_id != expected {
+                    return Err(integrity("prepared reference component identity differs"));
+                }
+            }
+            let kind = if reference.is_some() {
+                "reviewed_reference_component"
+            } else if declared.is_some() {
                 "declared_task_group"
             } else {
                 "source_record"

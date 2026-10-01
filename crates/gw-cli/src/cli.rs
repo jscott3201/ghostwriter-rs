@@ -28,6 +28,9 @@ pub struct Cli {
 /// The top-level command groups.
 #[derive(Debug, Subcommand, PartialEq)]
 pub enum Command {
+    /// Explicit registration and native-verified complete reference imports.
+    #[command(subcommand)]
+    Reference(ReferenceCommand),
     /// Portable reviewed numeric tasks and fresh rewards (no providers, models, or database).
     #[command(subcommand)]
     Reward(RewardCommand),
@@ -486,4 +489,15 @@ pub struct ScreenedExportArgs {
     /// Optional dataset version; rendering and supervision come from the frozen plan.
     #[arg(long)]
     pub dataset_version: Option<semver::Version>,
+}
+
+/// Local reference catalogue authority and fresh execution commands.
+#[derive(Debug, Subcommand, PartialEq)]
+pub enum ReferenceCommand {
+    /// Accept exact complete local catalogue bytes without executing code.
+    Register(crate::commands::reference::ReferenceArgs),
+    /// Import a previously registered catalogue through fresh native verification.
+    Import(crate::commands::reference::ReferenceImportArgs),
+    /// Publish a committed reference batch and acknowledge its Train records.
+    Export(crate::commands::reference::ReferenceExportArgs),
 }

@@ -44,6 +44,7 @@ pub(crate) fn snapshot(record: &TrainingRecord) -> Result<serde_json::Value> {
 
 pub(crate) fn normalize(record: &TrainingRecord) -> Result<TrainingRecord> {
     snapshot(record)?;
+    crate::reference_records::validate_record(record)?;
     let mut stored = record.clone();
     stored.hashes.record_hash = crate::record_hash(record)?;
     stored.hashes.prompt_hash = crate::prompt_hash(&record.messages)?;
@@ -57,7 +58,7 @@ pub(crate) fn decode(row: &SqliteRow) -> Result<TrainingRecord> {
     let normalized = normalize(&record)?;
     if record != normalized
         || row.try_get::<String, _>("record_id")? != record.record_id
-        || row.try_get::<String, _>("run_id")? != record.provenance.run_id
+        || row.try_get::<String, _>("run_id")? != record.run_id()
         || row.try_get::<String, _>("lifecycle_state")? != state_str(record.lifecycle.state)
         || row.try_get::<Option<String>, _>("verdict")? != record.judging.verdict.map(verdict_str)
         || row.try_get::<Option<f64>, _>("judge_aggregate")? != record.judging.aggregate
@@ -92,7 +93,7 @@ pub(crate) async fn write(
     at: &str,
 ) -> Result<()> {
     sqlx::query("INSERT INTO records (record_id, run_id, lifecycle_state, verdict, judge_aggregate, record_hash, prompt_hash, record_json, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(record_id) DO UPDATE SET run_id=excluded.run_id, lifecycle_state=excluded.lifecycle_state, verdict=excluded.verdict, judge_aggregate=excluded.judge_aggregate, record_hash=excluded.record_hash, prompt_hash=excluded.prompt_hash, record_json=excluded.record_json, updated_at=excluded.updated_at")
-        .bind(&record.record_id).bind(&record.provenance.run_id).bind(state_str(record.lifecycle.state))
+        .bind(&record.record_id).bind(record.run_id()).bind(state_str(record.lifecycle.state))
         .bind(record.judging.verdict.map(verdict_str)).bind(record.judging.aggregate)
         .bind(&record.hashes.record_hash).bind(&record.hashes.prompt_hash)
         .bind(serde_json::to_string(record)?).bind(at).execute(&mut **tx).await?;
@@ -172,8 +173,24 @@ pub(crate) async fn screening_population(
             records.push(record);
         }
     }
-    records.sort_by(|a, b| {
-        (&a.provenance.run_id, &a.record_id).cmp(&(&b.provenance.run_id, &b.record_id))
-    });
+    records.sort_by(|a, b| (a.run_id(), &a.record_id).cmp(&(b.run_id(), &b.record_id)));
     Ok(records)
+}
+
+/// Verify the typed partition before ordinary generated record insertion or fixture replacement.
+pub(crate) async fn generated_partition(
+    tx: &mut Transaction<'_, Sqlite>,
+    record: &TrainingRecord,
+) -> Result<()> {
+    let kind: Option<String> = sqlx::query_scalar("SELECT run_kind FROM runs WHERE run_id=?")
+        .bind(record.run_id())
+        .fetch_optional(&mut **tx)
+        .await?;
+    if kind.as_deref().is_some_and(|kind| kind != "generated") {
+        return Err(integrity(
+            &record.record_id,
+            "generated record requires generated run partition",
+        ));
+    }
+    Ok(())
 }

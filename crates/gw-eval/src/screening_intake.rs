@@ -11,7 +11,7 @@ pub(crate) fn hash(domain: &str, value: &impl Serialize) -> Result<String, Scree
 }
 pub(crate) fn key(record: &TrainingRecord) -> ScreeningRecordId {
     ScreeningRecordId {
-        run_id: record.provenance.run_id.clone(),
+        run_id: record.run_id().to_owned(),
         record_id: record.record_id.clone(),
     }
 }
@@ -50,10 +50,15 @@ pub(crate) fn population<'a>(
     records: &'a [TrainingRecord],
     declaration: &ScreeningDeclaration,
 ) -> Result<Vec<&'a TrainingRecord>, ScreeningError> {
-    let runs: BTreeSet<_> = declaration.runs.run_ids.iter().collect();
+    let runs: BTreeSet<_> = declaration
+        .runs
+        .run_ids
+        .iter()
+        .map(String::as_str)
+        .collect();
     let mut records: Vec<_> = records
         .iter()
-        .filter(|r| runs.contains(&r.provenance.run_id))
+        .filter(|r| runs.contains(&r.run_id()))
         .collect();
     records.sort_by_key(|r| key(r));
     for record in &records {
@@ -109,11 +114,22 @@ pub(crate) fn declared_edges(
     let mut by_id = BTreeMap::<&str, Vec<&TrainingRecord>>::new();
     let mut source_groups: BTreeMap<_, &TrainingRecord> = BTreeMap::new();
     let mut task_groups: BTreeMap<_, &TrainingRecord> = BTreeMap::new();
+    let mut reference_components: BTreeMap<_, &TrainingRecord> = BTreeMap::new();
     let mut source_members = BTreeMap::<_, Vec<_>>::new();
     let mut sibling_members = BTreeMap::<_, Vec<_>>::new();
     for record in records {
         by_id.entry(&record.record_id).or_default().push(*record);
         let id = subject(record);
+        if let RecordOrigin::ReviewedReference(origin) = &record.origin {
+            let component = (
+                &origin.catalogue_id,
+                &origin.component.namespace,
+                &origin.component.id,
+            );
+            if let Some(first) = reference_components.insert(component, record) {
+                edge(&mut edges, first, record, "reference_component");
+            }
+        }
         match (
             &record.task_provenance,
             &record.verification_contract,
@@ -147,9 +163,18 @@ pub(crate) fn declared_edges(
             _ => incomplete.push(issue("missing_task_evidence", id.clone())),
         }
         if let (Some(group), Some(count), Some(index)) = (
-            &record.generation.sibling_group_id,
-            record.generation.n_completions,
-            record.generation.completion_index,
+            record
+                .origin
+                .generated()
+                .and_then(|g| g.generation.sibling_group_id.as_ref()),
+            record
+                .origin
+                .generated()
+                .and_then(|g| g.generation.n_completions),
+            record
+                .origin
+                .generated()
+                .and_then(|g| g.generation.completion_index),
         ) {
             if count == 0
                 || index >= count
@@ -158,10 +183,10 @@ pub(crate) fn declared_edges(
                 incomplete.push(issue("invalid_sibling_identity", id));
             }
             sibling_members
-                .entry((&record.provenance.run_id, group))
+                .entry((record.run_id(), group))
                 .or_default()
                 .push(*record);
-        } else {
+        } else if record.origin.generated().is_some() {
             incomplete.push(issue("missing_sibling_evidence", id));
         }
     }
@@ -182,7 +207,7 @@ pub(crate) fn declared_edges(
     }
     for declared in &declaration.siblings {
         let members = sibling_members
-            .remove(&(&declared.run_id, &declared.sibling_group_id))
+            .remove(&(declared.run_id.as_str(), &declared.sibling_group_id))
             .unwrap_or_default();
         let actual: Vec<_> = members.iter().map(|r| key(r)).collect();
         let label = format!("{}/{}", declared.run_id, declared.sibling_group_id);
@@ -190,16 +215,27 @@ pub(crate) fn declared_edges(
             incomplete.push(issue("expected_sibling_membership", label.clone()));
         }
         if let Some(first) = members.first() {
-            let count = first.generation.n_completions.unwrap_or(0);
+            let count = first
+                .origin
+                .generated()
+                .and_then(|g| g.generation.n_completions)
+                .unwrap_or(0);
             let indices: BTreeSet<_> = members
                 .iter()
-                .filter_map(|r| r.generation.completion_index)
+                .filter_map(|r| {
+                    r.origin
+                        .generated()
+                        .and_then(|g| g.generation.completion_index)
+                })
                 .collect();
             let prefix = first.messages.split_last().map(|(_, prefix)| prefix);
             if count as usize != members.len()
                 || indices.len() != members.len()
                 || members.iter().any(|r| {
-                    r.generation.n_completions != Some(count)
+                    r.origin
+                        .generated()
+                        .and_then(|g| g.generation.n_completions)
+                        != Some(count)
                         || r.messages.split_last().map(|(_, prefix)| prefix) != prefix
                 })
             {
@@ -215,7 +251,12 @@ pub(crate) fn declared_edges(
     }
     let mut parent_edges = BTreeMap::<ScreeningRecordId, Vec<ScreeningRecordId>>::new();
     for record in records {
-        for parent in &record.provenance.parent_ids {
+        for parent in record
+            .origin
+            .generated()
+            .into_iter()
+            .flat_map(|g| &g.provenance.parent_ids)
+        {
             match by_id.get(parent.as_str()).map(Vec::as_slice) {
                 Some([found]) if key(found) != key(record) => {
                     edge(&mut edges, found, record, "declared_parent");

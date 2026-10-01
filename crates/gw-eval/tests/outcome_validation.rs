@@ -132,7 +132,12 @@ fn shortened_hashes_and_stale_tail_bytes_are_rejected() {
 fn duplicate_or_missing_completion_indices_never_use_input_order_to_select() {
     for missing in [false, true] {
         let (mut records, evidence) = corpus(2, true);
-        records[1].generation.completion_index = if missing { None } else { Some(0) };
+        records[1]
+            .origin
+            .generated_mut()
+            .expect("generated record")
+            .generation
+            .completion_index = if missing { None } else { Some(0) };
         let report = invalid(&records, &evidence);
         if missing {
             assert!(

@@ -88,8 +88,10 @@ impl Store {
                 }
             };
             let records = self.scan(&filter).await?;
-            let plan = tokio::task::spawn_blocking(move || ExportPlan::prepare(&records, options))
-                .await??;
+            let plan = tokio::task::spawn_blocking(move || {
+                ExportPlan::prepare_registered(&records, options)
+            })
+            .await??;
             let receipt = self
                 .prepare_export_receipt(&plan, &destination, purpose)
                 .await?;
@@ -342,7 +344,7 @@ mod tests {
         ));
         std::fs::create_dir(&dir).unwrap();
         let dst = dir.join("out.parquet");
-        let plan = ExportPlan::prepare(
+        let plan = ExportPlan::prepare_registered(
             &[],
             ExportOptions {
                 target: TrlFormat::ChatML,

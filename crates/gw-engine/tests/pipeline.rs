@@ -93,9 +93,33 @@ async fn teacher_reasoning_cap_reaches_request_and_provenance() {
         .await
         .unwrap();
     assert_eq!(all.len(), 1);
-    assert_eq!(all[0].generation.max_tokens, Some(20_000));
-    assert_eq!(all[0].generation.reasoning_max_tokens, Some(12_000));
-    assert_eq!(all[0].generation.reasoning_effort, None);
+    assert_eq!(
+        all[0]
+            .origin
+            .generated()
+            .expect("generated record")
+            .generation
+            .max_tokens,
+        Some(20_000)
+    );
+    assert_eq!(
+        all[0]
+            .origin
+            .generated()
+            .expect("generated record")
+            .generation
+            .reasoning_max_tokens,
+        Some(12_000)
+    );
+    assert_eq!(
+        all[0]
+            .origin
+            .generated()
+            .expect("generated record")
+            .generation
+            .reasoning_effort,
+        None
+    );
 }
 
 #[tokio::test]
@@ -143,7 +167,12 @@ async fn truncated_teacher_reasoning_retries_once_and_persists_record() {
     assert_eq!(all.len(), 1, "retry does not double-persist");
     assert_eq!(all[0].lifecycle.state, LifecycleState::Formatted);
     assert_eq!(
-        all[0].generation.max_tokens,
+        all[0]
+            .origin
+            .generated()
+            .expect("generated record")
+            .generation
+            .max_tokens,
         Some(15_000),
         "retry provenance records the bumped cap that produced the CoT"
     );
@@ -290,7 +319,14 @@ async fn best_of_k_admits_best_and_retains_rejected_siblings() {
     // All siblings share one sibling_group_id == prompt_hash.
     let group_ids: std::collections::BTreeSet<_> = all
         .iter()
-        .filter_map(|r| r.generation.sibling_group_id.clone())
+        .filter_map(|r| {
+            r.origin
+                .generated()
+                .expect("generated record")
+                .generation
+                .sibling_group_id
+                .clone()
+        })
         .collect();
     assert_eq!(
         group_ids.len(),
@@ -399,7 +435,12 @@ async fn best_of_k_aggregate_tie_admits_lowest_index_only() {
         .collect();
     assert_eq!(admitted.len(), 1);
     assert_eq!(
-        admitted[0].generation.completion_index,
+        admitted[0]
+            .origin
+            .generated()
+            .expect("generated record")
+            .generation
+            .completion_index,
         Some(0),
         "the tie is broken toward the lowest completion_index"
     );

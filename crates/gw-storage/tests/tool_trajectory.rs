@@ -106,23 +106,25 @@ fn tool_record(record_id: &str, run_id: &str) -> TrainingRecord {
         tags: vec!["tool-use".into()],
         messages: tool_trajectory(),
         tools: None,
-        provenance: Provenance {
-            run_id: run_id.into(),
-            parent_ids: vec![],
-            teacher: gw_schema::TeacherRef {
-                provider: "openrouter".into(),
-                slug: "z-ai/glm-5.2".into(),
-                served_by: Some("Parasail".into()),
-                model_card_revision: None,
+        origin: gw_schema::RecordOrigin::Generated(Box::new(gw_schema::GeneratedOrigin {
+            provenance: Provenance {
+                run_id: run_id.into(),
+                parent_ids: vec![],
+                teacher: gw_schema::TeacherRef {
+                    provider: "openrouter".into(),
+                    slug: "z-ai/glm-5.2".into(),
+                    served_by: Some("Parasail".into()),
+                    model_card_revision: None,
+                },
+                user_synth_model: None,
+                user_turn_kind: None,
+                in_scope_safe: Some(true),
+                judge_models: vec![],
+                harness_version: "0.1.0".into(),
+                git_commit: None,
             },
-            user_synth_model: None,
-            user_turn_kind: None,
-            in_scope_safe: Some(true),
-            judge_models: vec![],
-            harness_version: "0.1.0".into(),
-            git_commit: None,
-        },
-        generation: Default::default(),
+            generation: Default::default(),
+        })),
         task_provenance: None,
         verification_contract: None,
         execution_evidence: None,
@@ -322,8 +324,16 @@ fn record_hash_distinguishes_null_content_from_empty_text() {
 fn record_hash_still_ignores_non_content_fields() {
     let a = tool_record("a", "run-t");
     let mut b = tool_record("b", "run-t");
-    b.provenance.run_id = "run-other".into();
-    b.provenance.git_commit = Some("deadbeef".into());
+    b.origin
+        .generated_mut()
+        .expect("generated record")
+        .provenance
+        .run_id = "run-other".into();
+    b.origin
+        .generated_mut()
+        .expect("generated fixture")
+        .provenance
+        .git_commit = Some("deadbeef".into());
     b.judging.verdict = Some(Verdict::Reject);
     b.lifecycle.state = LifecycleState::Error;
     assert_eq!(

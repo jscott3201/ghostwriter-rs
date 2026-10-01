@@ -286,7 +286,15 @@ async fn noncontent_fields_and_history_are_part_of_the_expected_snapshot() {
             "cost" => updated.cost.usd = 1.0,
             "verification" => updated.verification.all_passed = true,
             "judging" => updated.judging.aggregate = Some(0.8),
-            "provenance" => updated.provenance.teacher.served_by = Some("new-route".into()),
+            "provenance" => {
+                updated
+                    .origin
+                    .generated_mut()
+                    .expect("generated fixture")
+                    .provenance
+                    .teacher
+                    .served_by = Some("new-route".into())
+            }
             "history" => updated.lifecycle.history[0].at = "2026-02-01T00:00:00Z".into(),
             "task_provenance" => {
                 updated.task_provenance.as_mut().unwrap().split.revision = "new-split".into()

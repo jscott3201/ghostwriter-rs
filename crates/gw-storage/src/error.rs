@@ -93,6 +93,10 @@ pub enum StorageError {
     #[error("model attempt evidence error: {0}")]
     Attempt(String),
 
+    /// Reference admission was cancelled before its durable commit decision.
+    #[error("reference import cancelled before commit")]
+    ReferenceImportCancelled,
+
     /// An artifact, receipt, or selected source snapshot failed integrity validation.
     #[error("export integrity error: {0}")]
     Export(String),

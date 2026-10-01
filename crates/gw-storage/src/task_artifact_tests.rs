@@ -69,14 +69,14 @@ fn write_raw(path: &Path, batch: RecordBatch, artifact: &ExportArtifact) {
 }
 
 #[test]
-fn v3_roundtrip_retains_task_contract_and_declarations_with_null_plain_prompts() {
+fn current_roundtrip_retains_task_contract_and_declarations_with_null_plain_prompts() {
     let record = task_record("task");
     let mut plain = task_record("plain");
     plain.task_provenance = None;
     let plan = ExportPlan::prepare(&[record.clone(), plain], options()).unwrap();
     assert_eq!(
         plan.artifact.manifest.column_schema_version,
-        ExportSchemaVersion::ReviewedTasks
+        ExportSchemaVersion::CURRENT
     );
     let output = Temp::new();
     write_parquet(&plan.rows, &plan.artifact, File::create(&output.0).unwrap()).unwrap();
@@ -91,7 +91,7 @@ fn v3_roundtrip_retains_task_contract_and_declarations_with_null_plain_prompts()
         .next()
         .unwrap()
         .unwrap();
-    assert_eq!(batch.num_columns(), 9);
+    assert_eq!(batch.num_columns(), 10);
     let tasks = batch
         .column_by_name("task_json")
         .unwrap()
@@ -108,7 +108,7 @@ fn v3_roundtrip_retains_task_contract_and_declarations_with_null_plain_prompts()
 }
 
 #[test]
-fn v3_rejects_malformed_substituted_or_noncanonical_task_json_and_wrong_schema() {
+fn current_rejects_malformed_substituted_or_noncanonical_task_json_and_wrong_schema() {
     let plan = ExportPlan::prepare(&[task_record("task")], options()).unwrap();
     for variant in 0..5 {
         let mut rows = plan.rows.clone();
@@ -136,12 +136,12 @@ fn v3_rejects_malformed_substituted_or_noncanonical_task_json_and_wrong_schema()
         let output = Temp::new();
         write_raw(
             &output.0,
-            build_batch(&rows, ExportSchemaVersion::ReviewedTasks).unwrap(),
+            build_batch(&rows, ExportSchemaVersion::CURRENT).unwrap(),
             &claimed,
         );
         assert!(verify_artifact(&output.0).is_err(), "variant {variant}");
     }
-    let batch = build_batch(&plan.rows, ExportSchemaVersion::ReviewedTasks).unwrap();
+    let batch = build_batch(&plan.rows, ExportSchemaVersion::CURRENT).unwrap();
     let mut fields: Vec<_> = batch
         .schema()
         .fields()

@@ -16,6 +16,8 @@ pub enum ExportPurpose {
     Engine,
     /// Export bookkeeping only; generation lifecycle and run status remain untouched.
     Standalone,
+    /// Publication of a registered reference batch; advances only its eligible Train records.
+    Reference,
 }
 
 impl ExportPurpose {
@@ -23,6 +25,7 @@ impl ExportPurpose {
         match self {
             Self::Engine => "engine",
             Self::Standalone => "standalone",
+            Self::Reference => "reference",
         }
     }
 }
@@ -100,6 +103,7 @@ impl Store {
         let purpose = match purpose.as_str() {
             "engine" => ExportPurpose::Engine,
             "standalone" => ExportPurpose::Standalone,
+            "reference" => ExportPurpose::Reference,
             _ => return Err(integrity("unsupported publication acknowledgment mode")),
         };
         let artifact: ExportArtifact = serde_json::from_str(&artifact)?;
@@ -118,7 +122,13 @@ impl Store {
 
     pub(crate) async fn restore_export_plan(&self, receipt: &Receipt) -> Result<ExportPlan> {
         let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
-        let records = selected_records(&mut tx, &receipt.artifact, &receipt.members).await?;
+        let records = selected_records(
+            &mut tx,
+            &receipt.artifact,
+            &receipt.members,
+            receipt.purpose,
+        )
+        .await?;
         let rows = checked_projection(&receipt.artifact, &receipt.members, &records)?;
         tx.commit().await?;
         Ok(ExportPlan {
@@ -133,7 +143,7 @@ impl Store {
         destination: &str,
         purpose: ExportPurpose,
     ) -> Result<Receipt> {
-        if purpose == ExportPurpose::Engine
+        if purpose != ExportPurpose::Standalone
             && !matches!(plan.artifact.scope, ExportScope::Run { .. })
         {
             return Err(integrity("engine publication requires a run scope"));
@@ -141,7 +151,7 @@ impl Store {
         let publication_id = publication_identity(&plan.artifact.artifact_id, destination, purpose);
         let members = plan.members()?;
         let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
-        let records = selected_records(&mut tx, &plan.artifact, &members).await?;
+        let records = selected_records(&mut tx, &plan.artifact, &members, purpose).await?;
         checked_projection(&plan.artifact, &members, &records)?;
         sqlx::query("INSERT INTO export_receipts \
             (publication_id, artifact_id, destination, purpose, artifact_json, members_json, state, prepared_at) \
@@ -182,7 +192,13 @@ impl Store {
         {
             return Err(integrity("prepared publication receipt changed"));
         }
-        let records = selected_records(&mut tx, &receipt.artifact, &receipt.members).await?;
+        let records = selected_records(
+            &mut tx,
+            &receipt.artifact,
+            &receipt.members,
+            receipt.purpose,
+        )
+        .await?;
         checked_projection(&receipt.artifact, &receipt.members, &records)?;
         if state == "acknowledged" {
             tx.commit().await?;
@@ -190,7 +206,7 @@ impl Store {
         }
         let mut advanced = Vec::new();
         let at = now_rfc3339();
-        if purpose == ExportPurpose::Engine {
+        if purpose != ExportPurpose::Standalone {
             if !matches!(receipt.artifact.scope, ExportScope::Run { .. }) {
                 return Err(integrity("engine receipt lost its run scope"));
             }
@@ -257,6 +273,7 @@ async fn selected_records(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     artifact: &ExportArtifact,
     members: &[Member],
+    purpose: ExportPurpose,
 ) -> Result<Vec<TrainingRecord>> {
     crate::screened_publication::check_population(tx, artifact).await?;
     let mut records = Vec::with_capacity(members.len());
@@ -271,9 +288,21 @@ async fn selected_records(
             return Err(integrity("selected export record is no longer eligible"));
         }
         if let ExportScope::Run { run_id } = &artifact.scope
-            && record.provenance.run_id != *run_id
+            && record.run_id() != *run_id
         {
             return Err(integrity("selected export record changed run"));
+        }
+        crate::reference_records::eligible(tx, &record).await?;
+        match purpose {
+            ExportPurpose::Engine if record.origin.generated().is_none() => {
+                return Err(integrity("engine publication requires generated records"));
+            }
+            ExportPurpose::Reference if record.origin.generated().is_some() => {
+                return Err(integrity(
+                    "reference publication requires registered reference records",
+                ));
+            }
+            _ => (),
         }
         records.push(record);
     }

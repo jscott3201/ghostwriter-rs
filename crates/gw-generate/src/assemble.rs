@@ -90,8 +90,10 @@ pub fn assemble(
         tags: Vec::new(),
         messages,
         tools: None,
-        provenance,
-        generation,
+        origin: gw_schema::RecordOrigin::Generated(Box::new(gw_schema::GeneratedOrigin {
+            provenance,
+            generation,
+        })),
         task_provenance: gated.candidate.task_provenance.clone(),
         // Carry the user-turn verification contract onto the record so the engine's Verify rail can
         // run the answer-correctness check (incl. on a crash-resume of the verify edge). `Oracle::None`
@@ -397,17 +399,40 @@ mod tests {
         let rec = assemble(&ctx(), &g, turn(), teacher_ref(), generation(), None);
         // The serialized VerificationKind variant is mirrored (gw-judge reads this).
         assert_eq!(
-            rec.provenance.user_turn_kind.as_deref(),
+            rec.origin
+                .generated()
+                .expect("generated fixture")
+                .provenance
+                .user_turn_kind
+                .as_deref(),
             Some("refusal_expected")
         );
-        assert_eq!(rec.provenance.in_scope_safe, Some(true));
         assert_eq!(
-            rec.provenance.user_synth_model.as_deref(),
+            rec.origin
+                .generated()
+                .expect("generated fixture")
+                .provenance
+                .in_scope_safe,
+            Some(true)
+        );
+        assert_eq!(
+            rec.origin
+                .generated()
+                .expect("generated fixture")
+                .provenance
+                .user_synth_model
+                .as_deref(),
             Some("z-ai/glm-5.2")
         );
         // served_by is captured from the stream onto the teacher ref.
         assert_eq!(
-            rec.provenance.teacher.served_by.as_deref(),
+            rec.origin
+                .generated()
+                .expect("generated fixture")
+                .provenance
+                .teacher
+                .served_by
+                .as_deref(),
             Some("Parasail")
         );
     }
@@ -430,13 +455,31 @@ mod tests {
         assert_eq!(rec.cost.reasoning_tokens, 150);
         assert_eq!(rec.cost.usd, 0.0042);
         // Seed inputs land in the reproducibility block.
-        assert_eq!(rec.generation.persona.as_deref(), Some("curious_user"));
         assert_eq!(
-            rec.generation.taxonomy_node.as_deref(),
+            rec.origin
+                .generated()
+                .expect("generated record")
+                .generation
+                .persona
+                .as_deref(),
+            Some("curious_user")
+        );
+        assert_eq!(
+            rec.origin
+                .generated()
+                .expect("generated record")
+                .generation
+                .taxonomy_node
+                .as_deref(),
             Some("math.arithmetic")
         );
         assert_eq!(
-            rec.generation.prompt_template_id.as_deref(),
+            rec.origin
+                .generated()
+                .expect("generated record")
+                .generation
+                .prompt_template_id
+                .as_deref(),
             Some("magpie_v1")
         );
     }
@@ -450,10 +493,31 @@ mod tests {
             sampling: crate::request::SamplingPreset::official().with_seed(2),
         };
         let rec = assemble(&ctx(), &g, turn(), teacher_ref(), generation(), Some(plan));
-        assert_eq!(rec.generation.n_completions, Some(4));
-        assert_eq!(rec.generation.completion_index, Some(2));
+        assert_eq!(
+            rec.origin
+                .generated()
+                .expect("generated record")
+                .generation
+                .n_completions,
+            Some(4)
+        );
+        assert_eq!(
+            rec.origin
+                .generated()
+                .expect("generated record")
+                .generation
+                .completion_index,
+            Some(2)
+        );
         // The group id is the engine's to fill from the canonical prompt_hash.
-        assert_eq!(rec.generation.sibling_group_id, None);
+        assert_eq!(
+            rec.origin
+                .generated()
+                .expect("generated record")
+                .generation
+                .sibling_group_id,
+            None
+        );
     }
 
     #[test]

@@ -40,13 +40,25 @@ impl ExportPlan {
     /// # Errors
     /// Rejects duplicate record IDs, a run-scope mismatch, or an unprojectable record.
     pub fn prepare(records: &[TrainingRecord], options: ExportOptions) -> Result<Self> {
+        if records.iter().any(|r| r.origin.generated().is_none()) {
+            return Err(integrity(
+                "reference export requires application-owned registration and batch eligibility",
+            ));
+        }
+        Self::prepare_registered(records, options)
+    }
+
+    pub(crate) fn prepare_registered(
+        records: &[TrainingRecord],
+        options: ExportOptions,
+    ) -> Result<Self> {
         let mut ids = BTreeSet::new();
         for record in records {
             if !ids.insert(&record.record_id) {
                 return Err(integrity("duplicate record ID in export population"));
             }
             if let ExportScope::Run { run_id } = &options.scope
-                && record.provenance.run_id != *run_id
+                && record.run_id() != *run_id
             {
                 return Err(integrity("record does not belong to the export run"));
             }
@@ -115,10 +127,17 @@ fn frame(hash: &mut Hasher, bytes: &[u8]) {
 
 pub(crate) fn projected_hash(row: &Projected, version: ExportSchemaVersion) -> Result<String> {
     let domain = match version {
-        ExportSchemaVersion::CanonicalMessages if row.task_json.is_none() => {
+        ExportSchemaVersion::CanonicalMessages
+            if row.task_json.is_none() && row.origin_json.is_none() =>
+        {
             "ghostwriter.export.projected-row.v1"
         }
-        ExportSchemaVersion::ReviewedTasks => "ghostwriter.export.projected-row.v2-reviewed-tasks",
+        ExportSchemaVersion::ReviewedTasks if row.origin_json.is_none() => {
+            "ghostwriter.export.projected-row.v2-reviewed-tasks"
+        }
+        ExportSchemaVersion::RecordOrigins if row.origin_json.is_some() => {
+            "ghostwriter.export.projected-row.v3-record-origins"
+        }
         _ => return Err(integrity("unsupported projected row/schema combination")),
     };
     let mut hash = Hasher::new_derive_key(domain);
@@ -150,7 +169,10 @@ pub(crate) fn projected_hash(row: &Projected, version: ExportSchemaVersion) -> R
     }
     hash.update(&row.reasoning_tokens.to_be_bytes());
     frame(&mut hash, row.messages_json.as_bytes());
-    if version == ExportSchemaVersion::ReviewedTasks {
+    if matches!(
+        version,
+        ExportSchemaVersion::ReviewedTasks | ExportSchemaVersion::RecordOrigins
+    ) {
         match &row.task_json {
             Some(value) => {
                 hash.update(&[1]);
@@ -160,6 +182,15 @@ pub(crate) fn projected_hash(row: &Projected, version: ExportSchemaVersion) -> R
                 hash.update(&[0]);
             }
         }
+    }
+    if version == ExportSchemaVersion::RecordOrigins {
+        frame(
+            &mut hash,
+            row.origin_json
+                .as_ref()
+                .expect("v4 origin presence checked")
+                .as_bytes(),
+        );
     }
     Ok(hash.finalize().to_hex().to_string())
 }
@@ -304,6 +335,9 @@ fn verify_reader_with_rows<R: ChunkReader + 'static>(
 pub(crate) fn validate_rows(artifact: &ExportArtifact, rows: &[Projected]) -> Result<()> {
     export_schema(artifact.manifest.column_schema_version)?;
     crate::screening_witness::validate(artifact, rows)?;
+    for row in rows {
+        crate::reference_projection::validate(row, artifact.manifest.column_schema_version)?;
+    }
     if artifact.manifest.n_admitted != rows.len() as u64
         || artifact.manifest.n_records < artifact.manifest.n_admitted
     {
@@ -350,8 +384,20 @@ fn read_batch(batch: &RecordBatch, version: ExportSchemaVersion) -> Result<Vec<P
     let prompts = string(3)?;
     let verdicts = string(4)?;
     let messages = string(7)?;
-    let tasks = if version == ExportSchemaVersion::ReviewedTasks {
+    let tasks = if matches!(
+        version,
+        ExportSchemaVersion::ReviewedTasks | ExportSchemaVersion::RecordOrigins
+    ) {
         Some(string(8)?)
+    } else {
+        None
+    };
+    let origins = if version == ExportSchemaVersion::RecordOrigins {
+        let column = string(9)?;
+        if column.null_count() != 0 {
+            return Err(integrity("null origin in v4 row"));
+        }
+        Some(column)
     } else {
         None
     };
@@ -390,6 +436,7 @@ fn read_batch(batch: &RecordBatch, version: ExportSchemaVersion) -> Result<Vec<P
                 reasoning_tokens: tokens.value(i),
                 messages_json: messages.value(i).into(),
                 task_json,
+                origin_json: origins.map(|column| column.value(i).to_owned()),
             })
         })
         .collect()

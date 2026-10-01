@@ -155,6 +155,9 @@ pub struct PreparedSftExampleSource {
     /// Exact original reviewed task block or explicit null.
     #[serde(deserialize_with = "required_option")]
     pub task_json: Option<String>,
+    /// Exact version-four origin projection; absent only for historical source artifacts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_json: Option<String>,
     /// Logical source artifact ID.
     pub artifact_id: String,
     /// Source-record, declared-task-group, or screened-component grouping basis.

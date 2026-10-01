@@ -131,7 +131,7 @@ pub use publication::{ExportPublication, PublicationDisposition};
 pub use receipts::ExportPurpose;
 pub use record_mutations::{RecordWriteOutcome, RecordWriteStatus};
 pub use records::RecordFilter;
-pub use runledger::{ResumePoint, RunStatus};
+pub use runledger::{ResumePoint, RunKind, RunStatus};
 pub use store::{Store, now_rfc3339};
 
 #[cfg(test)]
@@ -159,3 +159,16 @@ mod startup_tests;
 mod lora_checkpoint;
 mod lora_tensors;
 pub use lora_checkpoint::{LoraCheckpointReport, verify_lora_checkpoint};
+
+mod reference_registration;
+pub use reference_registration::RegisteredReferenceCatalogue;
+
+mod reference_import;
+mod reference_records;
+pub use reference_import::ReferenceImportOutcome;
+pub use reference_records::ReferenceMemberObservation;
+
+mod reference_projection;
+
+#[cfg(test)]
+mod reference_tests;

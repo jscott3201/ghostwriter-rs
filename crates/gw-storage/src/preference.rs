@@ -88,10 +88,14 @@ fn checked_hash(stored: &str, fresh: String) -> Result<String> {
 /// Rejects blank source identities, nonfinite material numbers, out-of-range aggregates, stale
 /// hashes, or serialization errors. Performs no I/O.
 pub fn capture_preference_source(record: &TrainingRecord) -> Result<PreferenceSourceSnapshot> {
+    let generated = record
+        .origin
+        .generated()
+        .ok_or_else(|| invalid("reviewed references are not generated preference sources"))?;
     for identity in [
-        &record.record_id,
-        &record.provenance.run_id,
-        &record.training_area,
+        record.record_id.as_str(),
+        record.run_id(),
+        record.training_area.as_str(),
     ] {
         if identity.trim().is_empty() {
             return Err(invalid("preference source identities must be nonempty"));
@@ -101,7 +105,7 @@ pub fn capture_preference_source(record: &TrainingRecord) -> Result<PreferenceSo
     Ok(PreferenceSourceSnapshot {
         record_id: record.record_id.clone(),
         training_area: record.training_area.clone(),
-        provenance: record.provenance.clone(),
+        provenance: generated.provenance.clone(),
         record_hash: checked_hash(&record.hashes.record_hash, record_hash(record)?)?,
         prompt_hash: checked_hash(&record.hashes.prompt_hash, prompt_hash(&record.messages)?)?,
         completion_hash: checked_hash(

@@ -227,7 +227,10 @@ fn prepare(
             area: record.training_area.clone(),
             domain: task.map(|t| t.observations.domain.clone()),
             difficulty: task.map(|t| t.observations.difficulty.label.clone()),
-            teacher: record.provenance.teacher.slug.clone(),
+            teacher: record
+                .origin
+                .generated()
+                .map(|g| g.provenance.teacher.slug.clone()),
             tokens: bounded.then(|| {
                 projections[i]
                     .segments

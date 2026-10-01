@@ -117,6 +117,12 @@ impl Store {
         to: Option<LifecycleState>,
         detail: Option<&str>,
     ) -> Result<RecordWriteOutcome> {
+        if record.origin.generated().is_none() {
+            return Err(conflict(
+                &record.record_id,
+                "references require complete registered batch import",
+            ));
+        }
         let mut stored = data::normalize(record)?;
         let kind = if to.is_some() {
             "insert_transition"
@@ -125,6 +131,7 @@ impl Store {
         };
         let id = command_id(kind, None, &stored, to, detail)?;
         let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
+        data::generated_partition(&mut tx, &stored).await?;
         if let Some(outcome) = already_applied(&mut tx, &stored.record_id, &id).await? {
             tx.commit().await?;
             return Ok(outcome);
@@ -185,12 +192,31 @@ impl Store {
         detail: Option<&str>,
     ) -> Result<RecordWriteOutcome> {
         if expected.record_id != updated.record_id
-            || expected.provenance.run_id != updated.provenance.run_id
+            || expected.run_id() != updated.run_id()
             || expected.lifecycle != updated.lifecycle
         {
             return Err(conflict(
                 &expected.record_id,
                 "command changed record identity or authoritative lifecycle",
+            ));
+        }
+        if (expected.origin.generated().is_none() || updated.origin.generated().is_none())
+            && expected != updated
+        {
+            return Err(conflict(
+                &expected.record_id,
+                "reference content and origin are immutable",
+            ));
+        }
+        if expected.origin.generated().is_none()
+            && !matches!(
+                to,
+                LifecycleState::Formatted | LifecycleState::Rejected | LifecycleState::Error
+            )
+        {
+            return Err(conflict(
+                &expected.record_id,
+                "reference lifecycle requires truthful formatting, exclusion, or reference publication acknowledgment",
             ));
         }
         let mut stored = data::normalize(updated)?;
@@ -204,6 +230,7 @@ impl Store {
             .await?
             .ok_or_else(|| StorageError::NotFound(format!("record {}", stored.record_id)))?;
         data::check_history(&mut tx, &current).await?;
+        crate::reference_records::eligible(&mut tx, &current).await?;
         if data::snapshot(&current)? != data::snapshot(expected)? {
             return Err(conflict(
                 &stored.record_id,

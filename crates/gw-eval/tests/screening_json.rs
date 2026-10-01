@@ -140,7 +140,11 @@ fn object_keys_remain_exact_prompt_structure() {
     let a = with_arguments(json!({"source": 1}));
     let mut b = a.clone();
     b.record_id = "b".into();
-    b.provenance.run_id = "run-b".into();
+    b.origin
+        .generated_mut()
+        .expect("generated record")
+        .provenance
+        .run_id = "run-b".into();
     let task = b.task_provenance.as_mut().unwrap();
     task.task_id = "b".into();
     task.source.item = "b".into();

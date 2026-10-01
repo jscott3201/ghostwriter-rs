@@ -65,7 +65,13 @@ pub async fn revise_once(
     crate::grade::validate_record_verification(original, area)?;
     area.assess_admission()?;
 
-    let completion_index = original.generation.completion_index.unwrap_or(0);
+    let completion_index = original
+        .origin
+        .generated()
+        .ok_or_else(|| EngineError::Invariant("references cannot enter model revision".into()))?
+        .generation
+        .completion_index
+        .unwrap_or(0);
     let retry_id = record_id(run_id, shard, seed.seed, 1, completion_index);
 
     // Crash-resume + never-re-spend: a retry already persisted is driven from its last state, never
@@ -131,7 +137,13 @@ async fn generate_retry(
     area: &AreaConfig,
     control: RunControl<'_>,
 ) -> Result<GenerationOutcome<TrainingRecord>> {
-    let completion_index = original.generation.completion_index.unwrap_or(0);
+    let completion_index = original
+        .origin
+        .generated()
+        .ok_or_else(|| EngineError::Invariant("references cannot enter model revision".into()))?
+        .generation
+        .completion_index
+        .unwrap_or(0);
     // Seed-item identity is content-independent so only this item's own priors are excluded.
     let item_id = crate::priors::record_item_id(retry_id).ok_or_else(|| {
         EngineError::Invariant(format!("retry id has no item prefix: {retry_id}"))
@@ -186,7 +198,13 @@ async fn generate_retry(
 
     let plan = gw_generate::SiblingPlan {
         completion_index,
-        n_completions: original.generation.n_completions.unwrap_or(1),
+        n_completions: original
+            .origin
+            .generated()
+            .ok_or_else(|| EngineError::Invariant("references cannot enter model revision".into()))?
+            .generation
+            .n_completions
+            .unwrap_or(1),
         sampling: call.sampling,
     };
     let mut rec = assemble(
@@ -198,9 +216,17 @@ async fn generate_retry(
         Some(plan),
     );
     // Keep the retry in the same sibling group as the original (same prompt → same prompt_hash).
-    rec.generation.sibling_group_id = Some(prompt_hash(&rec.messages)?);
+    rec.origin
+        .generated_mut()
+        .expect("generated record")
+        .generation
+        .sibling_group_id = Some(prompt_hash(&rec.messages)?);
     // Record the lineage: the retry derives from the original Revising record.
-    rec.provenance.parent_ids = vec![original.record_id.clone()];
+    rec.origin
+        .generated_mut()
+        .expect("assembled generated record")
+        .provenance
+        .parent_ids = vec![original.record_id.clone()];
     rec.judging.admission_intent = area.intent_for(original);
     // Tag the retry so `step::reconcile` downgrades a SECOND revise straight to Rejected (the single
     // bound: the retry never writes a second `revising` transition).

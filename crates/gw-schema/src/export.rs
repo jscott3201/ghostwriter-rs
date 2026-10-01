@@ -69,9 +69,12 @@ pub enum MultiTurnLoss {
 ///   `reasoning_json` is REMOVED: it duplicated `messages[i].reasoning` in a second column that
 ///   could only agree with the first by index, so a reorder or a partial rewrite silently forked
 ///   the two. Existing verified v2 publications retain this exact contract during recovery.
-/// - [`ReviewedTasks`](ExportSchemaVersion::ReviewedTasks) (v3, current) — the v2 conversation
+/// - [`ReviewedTasks`](ExportSchemaVersion::ReviewedTasks) (v3) — the v2 conversation
 ///   columns plus nullable `task_json`, a self-contained [`crate::ExportTaskProjection`]. New
-///   publications write v3; frozen receipts retain their stored version.
+///   frozen receipts retain this exact version.
+///
+/// - [`RecordOrigins`](ExportSchemaVersion::RecordOrigins) (v4, current) adds required strict
+///   `origin_json`; reference rows carry redacted bindings with null judge fields.
 ///
 /// v1 → v2 is an intentional BREAK for any consumer reading `reasoning_json` or parsing
 /// `messages_json` as `Vec<{role, content}>`. It is recorded in
@@ -86,12 +89,14 @@ pub enum ExportSchemaVersion {
     CanonicalMessages = 2,
     /// v3 — the v2 columns plus nullable canonical `task_json` containing [`crate::ExportTaskProjection`].
     ReviewedTasks = 3,
+    /// v4 — v3 columns plus required strict `origin_json` with truthful reference bindings.
+    RecordOrigins = 4,
 }
 
 impl ExportSchemaVersion {
     /// The default version for new publications. Frozen publications retain their stored version
     /// when recovery writes their shards again.
-    pub const CURRENT: Self = Self::ReviewedTasks;
+    pub const CURRENT: Self = Self::RecordOrigins;
 }
 
 impl Default for ExportSchemaVersion {
@@ -175,7 +180,7 @@ mod tests {
     fn current_version_serializes_as_a_named_token() {
         assert_eq!(
             serde_json::to_string(&ExportSchemaVersion::CURRENT).unwrap(),
-            "\"reviewed_tasks\""
+            "\"record_origins\""
         );
         let m = ExportManifest {
             column_schema_version: ExportSchemaVersion::CURRENT,
@@ -192,7 +197,7 @@ mod tests {
         };
         let s = serde_json::to_string(&m).unwrap();
         assert!(
-            s.contains(r#""column_schema_version":"reviewed_tasks""#),
+            s.contains(r#""column_schema_version":"record_origins""#),
             "{s}"
         );
         assert_eq!(serde_json::from_str::<ExportManifest>(&s).unwrap(), m);
@@ -211,7 +216,7 @@ mod tests {
         assert_eq!(ExportSchemaVersion::ReviewedTasks as u8, 3);
         assert_eq!(
             ExportSchemaVersion::CURRENT,
-            ExportSchemaVersion::ReviewedTasks
+            ExportSchemaVersion::RecordOrigins
         );
         assert!(ExportSchemaVersion::CURRENT > ExportSchemaVersion::RoleContentText);
     }

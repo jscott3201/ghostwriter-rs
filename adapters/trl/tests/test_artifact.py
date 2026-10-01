@@ -26,7 +26,7 @@ def changed_column(table, name, values):
     return table.set_column(index, table.schema.field(index), pa.array(values, type=table.schema.field(index).type))
 
 
-@pytest.mark.parametrize("version", ["v2", "v3"])
+@pytest.mark.parametrize("version", ["v2", "v3", "v4"])
 @pytest.mark.parametrize("kind", ["empty", "text"])
 def test_rust_golden_snapshot_report_and_raw_messages(gw, fixture_dir, version, kind):
     snapshot = read_snapshot(fixture_dir / f"{version}-{kind}.parquet", gw)

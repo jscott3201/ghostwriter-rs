@@ -90,7 +90,7 @@ pub enum TaskPermittedUse {
     Redistribution,
 }
 
-/// Rights evidence and the human assertion it supports.
+/// Rights evidence and the operator-declared assertions it supports.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReviewedTaskRights {

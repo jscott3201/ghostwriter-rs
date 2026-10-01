@@ -231,7 +231,7 @@ omitted where the official template omits it.
 
 ## Integrity, grouping, and limits
 
-The Rust bridge shares the existing complete v2/v3 artifact verifier: exact schema,
+The Rust bridge shares the existing complete v2/v3/v4 artifact verifier: exact schema,
 authoritative metadata, every batch, required values, message/task validation,
 sorted unique IDs, counts, and logical identity. Missing legacy metadata is an
 error for the bridge. Its versioned report carries the verified `ExportArtifact`,
@@ -743,3 +743,13 @@ adapters, unchanged frozen state, native inspection and fresh reload. Full-relea
 shape checks use the official architecture on the meta device. Neither result
 establishes actual pretrained loading, CUDA/BF16 execution, accelerator memory
 fit, learned benefit, or an immutable publisher-parent revision.
+
+
+### Reference origins
+
+Version-four `record_origins` rows carry exact `origin_json` into every prepared example.
+The native verifier checks the reference module and suite bindings, declared Train use,
+and absent judge fields. Preparation binds origin to the captured Parquet and uses the
+reference component for grouping unless an explicit screened component is present.
+Historical v2/v3 artifacts retain their exact columns and identities. These exported
+declarations do not authenticate an external reviewer or reconstruct local registration.

@@ -57,6 +57,9 @@ pub fn canonical_json_hash(value: &Value) -> Result<String> {
 /// its lifecycle advances. Both the flat `reasoning` text AND the `reasoning_details` content
 /// payloads ARE content (different CoT → different hash); only the volatile per-detail
 /// `id` / `index` / `signature` / `format` are excluded.
+/// Reviewed references additionally bind their versioned origin, so their accepted catalogue,
+/// member and native verification identities cannot be silently reassigned. Generated records
+/// retain the original content projection and hash identity.
 ///
 /// # Errors
 /// Returns [`StorageError::Serde`](crate::StorageError::Serde) if the record fails to serialize.
@@ -81,6 +84,9 @@ pub fn record_hash(rec: &TrainingRecord) -> Result<String> {
     projection.insert("messages".into(), Value::Array(messages));
     if let Some(tools) = &rec.tools {
         projection.insert("tools".into(), serde_json::to_value(tools)?);
+    }
+    if let gw_schema::RecordOrigin::ReviewedReference(origin) = &rec.origin {
+        projection.insert("reference_origin_v1".into(), serde_json::to_value(origin)?);
     }
     Ok(blake3_hex(&canonical_bytes(&Value::Object(projection))?))
 }

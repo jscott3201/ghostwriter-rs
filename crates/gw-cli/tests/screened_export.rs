@@ -64,13 +64,29 @@ async fn actual_screened_cli_publication_generates_verified_consumer_golden_arti
         let mut b = dialogue("screened-b", "earlier right");
         let collision = case.starts_with("collision");
         if !collision {
-            b.provenance.run_id = a.provenance.run_id.clone();
+            b.origin
+                .generated_mut()
+                .expect("generated record")
+                .provenance
+                .run_id = a.run_id().to_owned();
             b.messages[1] = a.messages[1].clone();
             b.messages[3].content =
                 Content::Text("longer final answer from the second candidate".into());
-            a.generation.n_completions = Some(2);
-            b.generation.n_completions = Some(2);
-            b.generation.completion_index = Some(1);
+            a.origin
+                .generated_mut()
+                .expect("generated record")
+                .generation
+                .n_completions = Some(2);
+            b.origin
+                .generated_mut()
+                .expect("generated record")
+                .generation
+                .n_completions = Some(2);
+            b.origin
+                .generated_mut()
+                .expect("generated record")
+                .generation
+                .completion_index = Some(1);
         }
         let rows = vec![a, b];
         let mut declared = declaration(&rows);
@@ -85,7 +101,7 @@ async fn actual_screened_cli_publication_generates_verified_consumer_golden_arti
             declared.output.record_ids.clear();
         }
         if case == "collision-b" {
-            declared.output.run_id = rows[1].provenance.run_id.clone();
+            declared.output.run_id = rows[1].run_id().to_owned();
             declared.output.record_ids = vec![rows[1].record_id.clone()];
         }
         let sets = protected();
@@ -152,7 +168,7 @@ async fn actual_screened_cli_publication_generates_verified_consumer_golden_arti
             .await
             .unwrap();
         assert_eq!(std::fs::read(out.artifact()).unwrap(), bytes);
-        let name = format!("screened-{case}.parquet");
+        let name = format!("v4-screened-{case}.parquet");
         if let Some(destination) = std::env::var_os("GW_REGENERATE_SCREENED_TRL_FIXTURES") {
             std::fs::write(std::path::Path::new(&destination).join(&name), &bytes).unwrap();
         }

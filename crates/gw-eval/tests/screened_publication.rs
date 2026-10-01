@@ -14,7 +14,11 @@ use std::sync::{
 async fn complete_source_plan_publishes_exact_filtered_scope_with_population_proof() {
     let a = record("a", "ordinary training question");
     let mut b = record("b", "alpha beta gamma delta epsilon zeta eta theta");
-    b.provenance.run_id = a.provenance.run_id.clone();
+    b.origin
+        .generated_mut()
+        .expect("generated record")
+        .provenance
+        .run_id = a.run_id().to_owned();
     let mut c = record("c", "unrelated held out question");
     c.task_provenance.as_mut().unwrap().split.role = TaskSplitRole::Test;
     let rows = vec![a, b, c];

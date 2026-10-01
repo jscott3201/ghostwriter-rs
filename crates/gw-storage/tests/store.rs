@@ -6,96 +6,12 @@
 use std::sync::Arc;
 
 use arrow::array::{Array, StringArray};
-use gw_schema::{
-    Content, Generation, Hashes, JudgeVote, Judging, Lifecycle, LifecycleState, Message,
-    Provenance, ReasoningDetail, ReasoningEffort, TeacherRef, TrainingRecord, TrlFormat, Verdict,
-};
+use gw_schema::{Content, LifecycleState, ReasoningDetail, TrlFormat, Verdict};
 use gw_storage::{RecordFilter, ResumePoint, RunStatus, Store};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
-/// Build a minimal-but-valid record for `run_id` with the given id and verdict/aggregate.
-fn record(
-    record_id: &str,
-    run_id: &str,
-    verdict: Option<Verdict>,
-    agg: Option<f64>,
-) -> TrainingRecord {
-    let mut judging = Judging {
-        verdict,
-        aggregate: agg,
-        ..Default::default()
-    };
-    if let Some(a) = agg {
-        judging.panel.push(JudgeVote {
-            judge_model: "judge-x".into(),
-            rubric_id: Some("rubric-1".into()),
-            temperature: Some(0.0),
-            top_p: None,
-            seed: None,
-            score: a,
-            dimensions: None,
-            rationale: None,
-            raw_response: None,
-        });
-    }
-    TrainingRecord {
-        record_id: record_id.into(),
-        schema_version: semver::Version::new(1, 0, 0),
-        dataset_version: None,
-        training_area: "rust-async".into(),
-        tags: vec!["tokio".into()],
-        messages: vec![
-            Message {
-                role: gw_schema::Role::User,
-                content: Content::Text("What is 12*8?".into()),
-                reasoning: None,
-                reasoning_details: None,
-                tool_calls: None,
-                tool_call_id: None,
-                name: None,
-            },
-            Message {
-                role: gw_schema::Role::Assistant,
-                content: Content::Text("96".into()),
-                reasoning: Some("12*8 = 96".into()),
-                reasoning_details: None,
-                tool_calls: None,
-                tool_call_id: None,
-                name: None,
-            },
-        ],
-        tools: None,
-        provenance: Provenance {
-            run_id: run_id.into(),
-            parent_ids: vec![],
-            teacher: TeacherRef {
-                provider: "openrouter".into(),
-                slug: "z-ai/glm-5.2".into(),
-                served_by: Some("Parasail".into()),
-                model_card_revision: None,
-            },
-            user_synth_model: None,
-            user_turn_kind: None,
-            in_scope_safe: Some(true),
-            judge_models: vec![],
-            harness_version: "0.1.0".into(),
-            git_commit: None,
-        },
-        generation: Generation {
-            reasoning_effort: Some(ReasoningEffort::Xhigh),
-            ..Default::default()
-        },
-        task_provenance: None,
-        verification_contract: None,
-        execution_evidence: None,
-        verification: Default::default(),
-        judging,
-        reasoning_quality: None,
-        lifecycle: Lifecycle::default(),
-        hashes: Hashes::default(),
-        cost: Default::default(),
-    }
-}
+mod store_support;
+use store_support::record;
 
 async fn seeded_store() -> Store {
     let store = Store::open_in_memory().await.unwrap();
@@ -367,10 +283,27 @@ async fn record_hash_is_content_only_allowlist() {
     let mut m = base.clone();
     m.record_id = "id-B".into();
     m.dataset_version = Some(semver::Version::new(0, 1, 0));
-    m.provenance.run_id = "run-999".into();
-    m.provenance.teacher.served_by = Some("Wafer".into());
-    m.provenance.harness_version = "9.9.9".into();
-    m.provenance.git_commit = Some("deadbeef".into());
+    m.origin
+        .generated_mut()
+        .expect("generated record")
+        .provenance
+        .run_id = "run-999".into();
+    m.origin
+        .generated_mut()
+        .expect("generated fixture")
+        .provenance
+        .teacher
+        .served_by = Some("Wafer".into());
+    m.origin
+        .generated_mut()
+        .expect("generated fixture")
+        .provenance
+        .harness_version = "9.9.9".into();
+    m.origin
+        .generated_mut()
+        .expect("generated fixture")
+        .provenance
+        .git_commit = Some("deadbeef".into());
     if let Some(vote) = m.judging.panel.first_mut() {
         vote.raw_response = Some("a totally different raw judge response".into());
         vote.seed = Some(12345);
@@ -386,8 +319,16 @@ async fn record_hash_is_content_only_allowlist() {
     m.verification.all_passed = true;
     m.cost.usd = 1.23;
     m.cost.reasoning_tokens = 999;
-    m.generation.completion_index = Some(3);
-    m.generation.sibling_group_id = Some("sib-7".into());
+    m.origin
+        .generated_mut()
+        .expect("generated record")
+        .generation
+        .completion_index = Some(3);
+    m.origin
+        .generated_mut()
+        .expect("generated record")
+        .generation
+        .sibling_group_id = Some("sib-7".into());
     m.lifecycle.state = LifecycleState::Exported;
     m.lifecycle.attempts = 5;
     m.lifecycle.history.push(gw_schema::StateTransition {

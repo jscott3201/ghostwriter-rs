@@ -59,7 +59,12 @@ pub(crate) fn analyze_outcomes(
         // Indices are present and unique after validation. Sorting first reproduces the engine's
         // strict-greater update: a score tie preserves the lowest completion index.
         let mut ordered = group;
-        ordered.sort_by_key(|record| record.generation.completion_index);
+        ordered.sort_by_key(|record| {
+            record
+                .origin
+                .generated()
+                .and_then(|g| g.generation.completion_index)
+        });
         let mut selected = ordered[0];
         for candidate in &ordered[1..] {
             if candidate.judging.aggregate > selected.judging.aggregate {
@@ -429,7 +434,11 @@ fn eligible_groups<'a>(
         }
         let mut indices = BTreeSet::new();
         for record in &scored {
-            match record.generation.completion_index {
+            match record
+                .origin
+                .generated()
+                .and_then(|g| g.generation.completion_index)
+            {
                 None => invalid(
                     report,
                     OutcomeReason::MissingCompletionIndex {

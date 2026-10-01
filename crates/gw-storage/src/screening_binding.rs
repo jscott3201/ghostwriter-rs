@@ -18,7 +18,18 @@ pub fn capture_screening_input(
     record: &TrainingRecord,
     policy: &ScreeningPolicy,
 ) -> Result<ScreeningInputBinding> {
-    let mut parents = record.provenance.parent_ids.clone();
+    capture_screening_input_for(record, policy, gw_schema::ExportSchemaVersion::CURRENT)
+}
+
+pub(crate) fn capture_screening_input_for(
+    record: &TrainingRecord,
+    policy: &ScreeningPolicy,
+    version: gw_schema::ExportSchemaVersion,
+) -> Result<ScreeningInputBinding> {
+    let origin = (version == gw_schema::ExportSchemaVersion::RecordOrigins)
+        .then(|| record.origin.projection());
+    let generated = record.origin.generated();
+    let mut parents = generated.map_or_else(Vec::new, |g| g.provenance.parent_ids.clone());
     parents.sort();
     if parents.iter().any(|parent| parent.trim().is_empty())
         || parents.windows(2).any(|p| p[0] == p[1])
@@ -26,7 +37,7 @@ pub fn capture_screening_input(
         return Err(integrity("duplicate or empty declared parent identity"));
     }
     let key = ScreeningRecordId {
-        run_id: record.provenance.run_id.clone(),
+        run_id: record.run_id().to_owned(),
         record_id: record.record_id.clone(),
     };
     let record_hash = crate::record_hash(record)?;
@@ -36,17 +47,26 @@ pub fn capture_screening_input(
         record.task_provenance.as_ref(),
         record.verification_contract.as_ref(),
         record.judging.verdict,
+        origin.as_ref(),
     )?;
+    let mut input = serde_json::json!({
+        "record":key,"record_hash":record_hash,"export_projection_id":export_projection_id,"task":record.task_provenance,
+        "messages":record.messages,"tools":record.tools,
+        "verification_contract":record.verification_contract,"parents":parents,
+        "siblings":generated.map(|g| serde_json::json!({"group":g.generation.sibling_group_id,"index":g.generation.completion_index,"count":g.generation.n_completions})),
+        "eligible":crate::is_selected_admitted(record),"verdict":record.judging.verdict,
+        "teacher":generated.map(|g| &g.provenance.teacher),"policy":policy
+    });
+    if let Some(origin) = &origin {
+        input["origin"] = serde_json::to_value(origin)?;
+    }
     let screening_input_id = screening_hash(
-        "screening-record-input-v2",
-        &serde_json::json!({
-            "record":key,"record_hash":record_hash,"export_projection_id":export_projection_id,"task":record.task_provenance,
-            "messages":record.messages,"tools":record.tools,
-            "verification_contract":record.verification_contract,"parents":parents,
-            "siblings":{"group":record.generation.sibling_group_id,"index":record.generation.completion_index,"count":record.generation.n_completions},
-            "eligible":crate::is_selected_admitted(record),"verdict":record.judging.verdict,
-            "teacher":record.provenance.teacher,"policy":policy
-        }),
+        if origin.is_some() {
+            "screening-record-input-v3-origins"
+        } else {
+            "screening-record-input-v2"
+        },
+        &input,
     )?;
     Ok(ScreeningInputBinding {
         record: key,
@@ -65,12 +85,21 @@ pub(crate) fn screening_projection_id(
     task: Option<&TaskProvenance>,
     verification_contract: Option<&VerificationContract>,
     verdict: Option<Verdict>,
+    origin: Option<&gw_schema::ExportRecordOrigin>,
 ) -> Result<String> {
+    let mut value = serde_json::json!({
+        "training_area":training_area,"messages":messages,"task":task,
+        "verification_contract":verification_contract,"verdict":verdict
+    });
+    if let Some(origin) = origin {
+        value["origin"] = serde_json::to_value(origin)?;
+    }
     screening_hash(
-        "screening-export-projection-v1",
-        &serde_json::json!({
-            "training_area":training_area,"messages":messages,"task":task,
-            "verification_contract":verification_contract,"verdict":verdict
-        }),
+        if origin.is_some() {
+            "screening-export-projection-v2-origins"
+        } else {
+            "screening-export-projection-v1"
+        },
+        &value,
     )
 }

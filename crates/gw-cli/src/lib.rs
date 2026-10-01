@@ -83,6 +83,11 @@ pub async fn run() -> anyhow::Result<CommandOutcome> {
 /// Propagates the dispatched handler's error.
 pub async fn dispatch(cli: Cli) -> anyhow::Result<CommandOutcome> {
     match cli.command {
+        Command::Reference(command) => match command {
+            cli::ReferenceCommand::Register(args) => commands::reference::register(args).await,
+            cli::ReferenceCommand::Import(args) => commands::reference::import(args).await,
+            cli::ReferenceCommand::Export(args) => commands::reference::export(args).await,
+        },
         Command::Reward(command) => match command {
             RewardCommand::Export { tasks } => commands::reward::export(&tasks),
             RewardCommand::Verify { .. } => commands::reward::verify_stdin(),

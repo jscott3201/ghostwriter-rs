@@ -77,7 +77,7 @@ pub struct ReviewedCodingTask {
     pub task_id: String,
     /// Reviewed source identity and immutable revision.
     pub source: TaskSource,
-    /// Human-reviewed rights assertions.
+    /// Operator-declared reviewed rights assertions.
     pub rights: ReviewedTaskRights,
     /// Whole-family grouping for split disjointness.
     pub group: NamespacedTaskId,
