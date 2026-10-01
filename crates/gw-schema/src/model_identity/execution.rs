@@ -52,8 +52,9 @@ document! {
         pub additional_artifacts: Declaration<Vec<ArtifactIdentity>>,
         /// Effective tokenizer identity or an explicit unknown.
         pub tokenizer: Declaration<ModelComponentReference>,
-        /// Effective template identity or an explicit unknown.
-        pub chat_template: Declaration<ModelComponentReference>,
+        /// Effective template identity, explicitly declared absence, or unknown. A text
+        /// completion or embedding profile may declare absence; chat requires a present pin.
+        pub chat_template: Declaration<Option<ModelComponentReference>>,
         /// Runtime implementation and behavior revision.
         pub runtime: Declaration<SemanticDeclaration>,
         /// Output/reasoning parser implementation and behavior revision.
@@ -79,8 +80,12 @@ impl ModelExecutionSemantics {
             }
             Ok(())
         })?;
-        component(&self.tokenizer, ModelFilePurpose::Tokenizer)?;
-        component(&self.chat_template, ModelFilePurpose::ChatTemplate)?;
+        self.tokenizer
+            .check(|value| component(value, ModelFilePurpose::Tokenizer))?;
+        self.chat_template.check(|value| match value {
+            Some(value) => component(value, ModelFilePurpose::ChatTemplate),
+            None => Ok(()),
+        })?;
         self.runtime.check(semantic)?;
         self.parser.check(semantic)?;
         self.configuration.check(ContentDigest::validate)
@@ -98,18 +103,13 @@ impl ModelExecutionSemantics {
         SemanticExecutionIdentity::of(&self.sorted())
     }
 }
-fn component(
-    value: &Declaration<ModelComponentReference>,
-    purpose: ModelFilePurpose,
-) -> Result<()> {
-    value.check(|value| {
-        value.validate()?;
-        if value.file.purpose == purpose {
-            Ok(())
-        } else {
-            Err(ModelIdentityError("incorrect execution component purpose"))
-        }
-    })
+fn component(value: &ModelComponentReference, purpose: ModelFilePurpose) -> Result<()> {
+    value.validate()?;
+    if value.file.purpose == purpose {
+        Ok(())
+    } else {
+        Err(ModelIdentityError("incorrect execution component purpose"))
+    }
 }
 document! {
     /// Requested model execution declaration, without runtime or policy authority.

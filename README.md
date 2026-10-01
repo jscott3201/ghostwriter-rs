@@ -870,6 +870,11 @@ present link supplies an artifact identity as `value`. Omitting the link or a de
 invalid. These three states have distinct artifact hashes; declared absence remains a supplied
 claim requiring independent review and does not establish model eligibility.
 
+Chat-template declarations use the same three states: unknown, a pinned component, or explicit
+`{"status":"declared","value":null}` absence. Existing present and unknown JSON and identities
+are preserved. Chat preparation requires a present template; text completion and embedding may
+declare absence. Supported text profiles still require a pinned tokenizer.
+
 Model-policy references separately identify review, catalog, rights, lineage, serving-terms, and
 output-terms documents for a declared
 artifact, role, and intended use, including embeddings, teachers, judges, prompt synthesis, students, and
@@ -959,6 +964,69 @@ trust. A positive report establishes only this offline artifact assessment. It d
 model files were acquired or loaded, verify a deployment, qualify an actual client, or authorize
 cache reuse or a model call. Existing request, manifest, cache, receipt, and concurrency behavior is
 unchanged; this module performs no file, environment, credential, or network access.
+
+## Offline serving profiles and gateway evidence
+
+`gw_providers::serving_profile` provides versioned configured profiles, pure request preparation,
+injected authentication, an offline chat-response normalizer, and supplied-snapshot consistency
+checks. These APIs prepare and compare data. They are not connected to the live clients, engine,
+CLI, manifests, caches, or request receipts and grant no execution authority.
+
+`ServingProfile` holds the endpoint, authentication references, strict routing policy, and
+operational defaults. Its separate `ProfileBehavior` declares the wire dialect, supported
+operations, controls, and literal effort values. Only that behavior projection enters the serving
+semantic declaration. Endpoints, credential-reference names, replica defaults, client in-flight
+limits, rate limits, retry/deadline policy, and accounting policy are excluded. Backend batching,
+client concurrency, and replica scaling have separate fields; declared capacity is not measured
+throughput. `ServingProfile::modal` uses explicit `ObservationOnly` defaults.
+
+The supported wire mappings are OpenRouter chat and vLLM-shaped chat, text-completion, and embedding
+requests. Capabilities are supplied configuration claims, not approvals of any model or deployment.
+Preparation requires complete pinned execution declarations and a matching profile/adapter behavior.
+It uses canonical messages and sampling values, rejects unsupported required controls, and records
+every omitted optional control. Effort names pass through exactly; `max` and `xhigh` are never
+treated as equivalents. Template kwargs are explicit model/recipe declarations. OpenRouter
+preparation requires a nonempty `provider.only` allowlist and emits `allow_fallbacks: false` and
+`require_parameters: true`; no unapproved fallback is prepared. See
+[OpenRouter provider routing](https://openrouter.ai/docs/guides/routing/provider-selection).
+
+Authentication is explicit: no auth, one bearer-secret reference, or two distinct Modal proxy
+references. Parsing and preparation do not resolve secrets. A separate injected resolver supplies
+the values; missing, empty, whitespace-bearing, or invalid header values fail with static errors.
+Modal token ID and token secret map to sensitive `Modal-Key` and `Modal-Secret` headers. Resolved
+secrets and headers have redacted debug output and cannot be serialized. There is no SDK/CLI
+credential discovery or no-auth fallback. See
+[Modal proxy authentication](https://modal.com/docs/guide/webhook-proxy-auth).
+
+The additive `normalize_chat_chunk` decoder reconciles `reasoning` and `reasoning_content` once
+when both agree and rejects conflicting aliases. Content stays separate, structured reasoning
+objects retain their fields, and missing token/cost values remain unknown rather than zero.
+Native and normalized termination reasons remain distinct. This decoder handles supplied chat
+JSON payloads; it does not replace the live stream decoder or measure tokenizer behavior. See
+[vLLM reasoning outputs](https://docs.vllm.ai/en/latest/features/reasoning_outputs/).
+
+`GatewayRequest` requires an immutable semantic target and its resolving declaration. An exact
+instance/incarnation pin is optional, so equivalent replicas can satisfy the same fleet target.
+`GatewayResponseEvidence` binds the actual replica evidence to endpoint, body digest, correlation,
+and physical attempt. `check_gateway_consistency` compares these supplied documents against the
+private immutable prepared request, supplied artifact declarations, and an explicit evaluation time
+and revocation snapshot. Matching self-reported request/response body hashes alone are insufficient.
+Every retry needs its own attempt and destination evidence.
+
+The report separates semantic agreement, request/replica binding, and validity. A known mismatch
+outranks unrelated unknown fields. Unknown values never establish completeness; unsupported
+versions or measurement formats, installed-only claims, missing declarations, expiry, revocation,
+and conflicting bindings cannot produce an aggregate `Consistent` result. Reports retain the
+exact request/attempt coordinates and actual evidence identity that were checked.
+
+The recognized loader-report format declares `ghostwriter/loaded-generation-report`, revision `1`,
+with `{"scope":"loaded_generation"}`. Recognizing that format does not authenticate its claims.
+Real qualification must establish that the serving replica measured the actual loaded artifacts
+and effective configuration, that restart/reload changes its incarnation, and that the gateway
+retains that same loaded generation atomically through inference. It must also authenticate the
+response evidence and enforce freshness/revocation immediately before each physical send. Offline
+fixtures establish none of those deployment lifecycle guarantees. Artifact policy eligibility and
+actual-client/cache qualification remain separate requirements; no production model is approved here.
 
 ---
 

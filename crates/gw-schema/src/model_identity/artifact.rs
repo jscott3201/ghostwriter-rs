@@ -163,8 +163,9 @@ document! {
         pub lineage: ModelArtifactLineage,
         /// Pinned tokenizer file or an explicit unknown.
         pub tokenizer: Declaration<ModelComponentReference>,
-        /// Pinned chat-template file or an explicit unknown.
-        pub chat_template: Declaration<ModelComponentReference>,
+        /// Pinned chat template, explicitly declared absence, or unknown. Absence is a claim,
+        /// never inferred from missing data; supported chat preparation requires a template.
+        pub chat_template: Declaration<Option<ModelComponentReference>>,
     }
 }
 impl PinnedModelArtifact {
@@ -184,26 +185,28 @@ impl PinnedModelArtifact {
             }
         }
         self.lineage.validate()?;
-        self.component(&self.tokenizer, ModelFilePurpose::Tokenizer)?;
-        self.component(&self.chat_template, ModelFilePurpose::ChatTemplate)
+        self.tokenizer
+            .check(|value| self.component(value, ModelFilePurpose::Tokenizer))?;
+        self.chat_template.check(|value| match value {
+            Some(value) => self.component(value, ModelFilePurpose::ChatTemplate),
+            None => Ok(()),
+        })
     }
     fn component(
         &self,
-        component: &Declaration<ModelComponentReference>,
+        component: &ModelComponentReference,
         purpose: ModelFilePurpose,
     ) -> Result<()> {
-        component.check(|component| {
-            component.validate()?;
-            if component.file.purpose != purpose {
-                return Err(ModelIdentityError("incorrect model component purpose"));
-            }
-            if component.source == self.source && !self.files.contains(&component.file) {
-                return Err(ModelIdentityError(
-                    "component does not match artifact inventory",
-                ));
-            }
-            Ok(())
-        })
+        component.validate()?;
+        if component.file.purpose != purpose {
+            return Err(ModelIdentityError("incorrect model component purpose"));
+        }
+        if component.source == self.source && !self.files.contains(&component.file) {
+            return Err(ModelIdentityError(
+                "component does not match artifact inventory",
+            ));
+        }
+        Ok(())
     }
     /// Hash canonical JSON in the artifact domain, excluding only the display label.
     /// File and additional-parent order is ignored; locators, revisions, paths, purposes,
