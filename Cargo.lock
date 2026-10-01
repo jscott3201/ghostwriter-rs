@@ -1346,6 +1346,7 @@ dependencies = [
 name = "gw-eval"
 version = "0.1.0"
 dependencies = [
+ "gw-format",
  "gw-schema",
  "gw-storage",
  "semver",

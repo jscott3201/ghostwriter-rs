@@ -1,6 +1,6 @@
 //! `gw-eval` — the OFF-PATH, headless, GPU-free, read-only evaluation/diagnostics crate.
 //!
-//! Two model-free instruments reading persisted records and externally supplied evidence:
+//! Model-free instruments reading persisted records and externally supplied evidence:
 //!
 //! - [`separation`] — descriptive verifier mixedness and judge-score spread, with optional
 //!   independent [`outcomes`] for a frozen corpus. Qualification applies to the declared
@@ -11,9 +11,12 @@
 //!   a `k·σ`-noise-band A/B comparison showing
 //!   no regression with at least one win. The decision is re-derivable at a new `k` without
 //!   re-running eval.
+//! - [`screening`] — frozen source lexical groups, supplied split enforcement and protected
+//!   matching for a declared finite corpus. Semantic checks remain NotRun and effective student
+//!   tokenizer/template prompt separation remains Unknown.
 //!
 //! No model calls, no network, no GPU, no terminal. Dependency graph:
-//! `{gw-schema, gw-storage} → gw-eval`. The pure analysis cores ([`separation::analyze`],
+//! `{gw-schema, gw-storage, gw-format} → gw-eval`. The pure analysis cores ([`separation::analyze`],
 //! [`promote::promote`]) are infallible and unit-testable without async; thin async wrappers
 //! (e.g. [`separation::analyze_store`]) read a [`gw_storage::Store`].
 //!
@@ -25,6 +28,11 @@ mod error;
 mod outcome_analysis;
 pub mod outcomes;
 pub mod promote;
+pub mod screening;
+mod screening_groups;
+mod screening_intake;
+mod screening_lexical;
+mod screening_projection;
 pub mod separation;
 
 #[cfg(test)]

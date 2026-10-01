@@ -25,7 +25,7 @@
   <path class="edge" d="M450 214 L450 246" marker-end="url(#arrow)"/>
   <path class="edge" d="M450 310 L450 342" marker-end="url(#arrow)"/>
   <path class="edge" d="M450 406 L450 438" marker-end="url(#arrow)"/>
-  <!-- eval side branch: from schema + storage -->
+  <!-- eval side branch: from schema + storage + format -->
   <path class="edge" stroke-dasharray="5 4" d="M620 95 C770 95 800 95 800 175 L800 250 C800 300 770 300 712 300" marker-end="url(#arrow)"/>
 
   <!-- Tier 1: contract -->
@@ -86,7 +86,7 @@
     <text class="t" x="792" y="297" text-anchor="middle" font-size="14">gw-eval</text>
     <text class="role" x="792" y="313" text-anchor="middle">off-path diagnostics</text>
   </g>
-  <text class="role" x="792" y="262" text-anchor="middle" font-style="italic">reads schema + storage</text>
+  <text class="role" x="792" y="262" text-anchor="middle" font-style="italic">schema + storage + format</text>
 
   <text class="sub" x="450" y="556" text-anchor="middle">schema &#8594; {format, providers, storage} &#8594; {generate, judge} &#8594; engine &#8594; {cli, tui}</text>
   <text class="role" x="450" y="576" text-anchor="middle">resolver 3 &#183; edition 2024 &#183; Rust 1.95 &#183; MIT OR Apache-2.0</text>

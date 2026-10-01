@@ -16,7 +16,7 @@ A Cargo workspace (`crates/*`), acyclic by construction:
 
 ```
 gw-schema → {gw-format, gw-providers, gw-storage} → {gw-generate, gw-judge} → gw-engine → {gw-tui, gw-cli}
-{gw-schema, gw-storage} → gw-eval
+{gw-schema, gw-storage, gw-format} → gw-eval
 ```
 
 - `gw-schema` depends on **nothing** internal and performs **no I/O** — it is the

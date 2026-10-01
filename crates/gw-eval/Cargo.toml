@@ -14,6 +14,7 @@ workspace = true
 [dependencies]
 gw-schema.workspace = true
 gw-storage.workspace = true
+gw-format.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

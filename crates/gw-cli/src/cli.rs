@@ -65,12 +65,34 @@ pub enum GenCommand {
 /// The `eval` subcommands.
 #[derive(Debug, Subcommand, PartialEq)]
 pub enum EvalCommand {
+    /// Freeze descriptive source lexical groups/splits from supplied files; semantic checks do not run.
+    Screen(ScreeningArgs),
     /// Fit supplied judge observations against independent labels offline; never qualifies quality.
     FitCalibration(FitCalibrationArgs),
     /// Descriptive score diagnostics and an optional independent-outcome check; prints JSON.
     AuditSeparation(AuditSeparationArgs),
     /// Variance-aware promotion gate over two `eval_results.json` files; prints the report as JSON.
     Promote(PromoteArgs),
+}
+
+/// Provider-free supplied corpus inputs. This command cannot establish current database membership.
+#[derive(Debug, clap::Args, PartialEq)]
+pub struct ScreeningArgs {
+    /// Full records as a JSON array; every supplied member of the declared runs is captured.
+    #[arg(long, value_name = "FILE")]
+    pub records: PathBuf,
+    /// Strict declared run/task/sibling/output scope and pinned exact policy JSON.
+    #[arg(long, value_name = "FILE")]
+    pub declaration: PathBuf,
+    /// Array of strict protected manifests including their local synthetic or authorized contents.
+    #[arg(long, value_name = "FILE")]
+    pub protected: PathBuf,
+    /// Revalidate this predecessor and retain established component identities on extension.
+    #[arg(long, value_name = "FILE", conflicts_with = "check_plan")]
+    pub previous: Option<PathBuf>,
+    /// Exactly recompute and verify this plan against all supplied inputs before printing it.
+    #[arg(long, value_name = "FILE")]
+    pub check_plan: Option<PathBuf>,
 }
 
 /// Offline calibration inputs; no database, provider credentials, or model calls are used.
