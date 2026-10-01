@@ -1,4 +1,4 @@
-# Verified Qwen3 SFT labels and numeric rewards
+# Verified text-profile SFT labels and numeric rewards
 
 This external Python adapter reads one canonical Ghostwriter Parquet snapshot,
 asks `gw artifact verify --stdin` to verify **those exact bytes**, and prepares
@@ -8,22 +8,32 @@ identities, character and token ownership, and a versioned immutable input build
 The installed command saves that build, verifies it through Rust, and replays the
 pinned tokenizer before any optional trainer handoff.
 
-The supported candidate is
-[Qwen/Qwen3-0.6B at c1899de289a04d12100db370d81485cdf75e47ca](https://huggingface.co/Qwen/Qwen3-0.6B/tree/c1899de289a04d12100db370d81485cdf75e47ca).
-The pinned official tokenizer and template are the rendering/token oracle. The
-repository declares Apache-2.0; its parent model revision and full execution
-lineage remain unresolved. Label and trainer-handoff qualification is separate from
+Two named text profiles use the same source verifier, loss ownership, saved-input
+format, replay, and trainer handoff:
+
+| Profile | Exact publisher release | Official rendering entry point |
+| --- | --- | --- |
+| `qwen3_text_v1` (default) | [Qwen/Qwen3-0.6B, c1899de289a04d12100db370d81485cdf75e47ca](https://huggingface.co/Qwen/Qwen3-0.6B/tree/c1899de289a04d12100db370d81485cdf75e47ca) | Tokenizer chat template |
+| `gemma4_e2b_text_v1` | [google/gemma-4-E2B-it, 3e22461f65e89153144f8adb70e3b8c2cc9845a7](https://huggingface.co/google/gemma-4-E2B-it/tree/3e22461f65e89153144f8adb70e3b8c2cc9845a7) | Known `Gemma4Processor` with the captured template and tokenizer |
+
+The pinned official rendering and tokenization are the independent oracle for
+each profile. Both publisher cards declare Apache-2.0; parent revisions and full
+execution lineage remain unresolved. Label and trainer-handoff qualification is separate from
 the bounded full-SFT checkpoint path described below. Local software qualification
 uses freshly initialized tiny models and establishes no learned quality benefit.
 
 ## Reproduce the qualified environment
 
-The checked lock was resolved and exercised on **CPython 3.12.14, macOS ARM64,
-CPU**, with TRL 1.14.1, Transformers 4.56.2, tokenizers 0.22.0, PyArrow 21.0.0,
-PyTorch 2.8.0, and Accelerate 1.4.0. It pins all 55 development dependencies and
-public-PyPI wheel hashes. It does not qualify Linux, CUDA, other Python releases,
-or another dependency solution. The package requires Python 3.12 and checks the
-installed dependency versions before preparation.
+Both checked environments were exercised on **CPython 3.12.14, macOS ARM64, CPU**.
+Qwen retains its 55-package `requirements.lock`: Transformers 4.56.2, tokenizers
+0.22.0, and safetensors 0.6.2. Gemma uses the separate 64-package
+`requirements-gemma.lock`: Transformers 5.18.0, tokenizers 0.23.2, safetensors 0.8.0,
+torchvision 0.23.0, and Pillow 12.3.0. Both use TRL 1.14.1, PyArrow 21.0.0,
+PyTorch 2.8.0, and Accelerate 1.4.0. The locks include public-PyPI wheel hashes.
+Keep the profiles in separate environments: their exact dependencies conflict.
+The package extras declare the actual profile requirements and the adapter checks
+every qualified version before preparation. Linux, CUDA, other Python releases,
+and other dependency solutions remain unqualified.
 
 From the repository root, with an installed CPython 3.12 interpreter:
 
@@ -32,15 +42,28 @@ uv venv --python python3.12 adapters/trl/.venv
 uv pip sync --python adapters/trl/.venv/bin/python --only-binary :all: \
   --require-hashes adapters/trl/requirements.lock
 uv pip install --python adapters/trl/.venv/bin/python --offline \
-  --no-deps --no-build-isolation -e adapters/trl
+  --no-build-isolation -e 'adapters/trl[qwen]'
 cargo build -p gw-cli --bin gw --locked
 ```
 
-Acquire only the six tokenizer/license/readme files listed in
-[`tokenizer_manifest.json`](src/ghostwriter_trl/tokenizer_manifest.json), at that
-exact revision. The following optional acquisition step uses the public Hub and
-downloads no weights, model config, or generation config. Use a new, empty output
-directory. Acquisition is separate from offline preparation.
+For Gemma, create a different environment and use its declared extra:
+
+```sh
+uv venv --python python3.12 adapters/trl/.venv-gemma
+uv pip sync --python adapters/trl/.venv-gemma/bin/python --only-binary :all: \
+  --require-hashes adapters/trl/requirements-gemma.lock
+uv pip install --python adapters/trl/.venv-gemma/bin/python --offline \
+  --no-build-isolation -e 'adapters/trl[gemma-e2b]'
+```
+
+Acquire only the files in the selected profile's manifest, at its exact revision:
+six files for [Qwen](src/ghostwriter_trl/tokenizer_manifest.json), or seven files
+totalling 32,226,083 bytes for [Gemma](src/ghostwriter_trl/profiles/gemma_manifest.json).
+Gemma captures the model card, tokenizer, template, processor configuration, model
+configuration, and generation configuration to identify the official text path.
+No profile downloads weights. Use a new, empty output directory. The following
+optional acquisition example is for Qwen; select the Gemma manifest, environment,
+and a separate output directory for Gemma. Acquisition is separate from preparation.
 
 ```sh
 adapters/trl/.venv/bin/python - <<'PY'
@@ -58,7 +81,7 @@ for entry in manifest["files"]:
 PY
 ```
 
-The adapter rejects extra files in this directory. It captures and hashes all six
+The adapter rejects extra files in this directory. It captures and hashes every pinned
 files, then loads their verified snapshot with `local_files_only=True` and
 `trust_remote_code=False`. It also checks the runtime tokenizer backend,
 complete special-token map, wrapper configuration, and official template hash. The pinned
@@ -76,6 +99,22 @@ adapters/trl/.venv/bin/ghostwriter-trl \
   --cot masked --turns all_assistant --max-length 2048 \
   --output prepared-sft
 ```
+
+For Gemma, select the profile and thinking preamble explicitly:
+
+```sh
+adapters/trl/.venv-gemma/bin/ghostwriter-trl \
+  --artifact dataset.parquet --gw "$PWD/target/debug/gw" \
+  --tokenizer "$PWD/gemma-e2b-tokenizer" --profile gemma4_e2b_text_v1 \
+  --thinking on --cot masked --turns all_assistant --max-length 2048 \
+  --output prepared-gemma --qualify-handoff
+```
+
+`--thinking on` adds the official Gemma system thinking preamble; `off` omits it.
+Gemma defaults to `off`, while Qwen retains its required `on` setting. Reasoning
+loss policy is selected independently with `--cot`. Both choices, together with
+`add_generation_prompt=False` and Gemma's `preserve_thinking=False`, are identity-bound.
+When loading through Python, pass `profile="gemma4_e2b_text_v1"` to `load_tokenizer`.
 
 The output directory must not already exist. Preparation writes:
 
@@ -124,7 +163,7 @@ dataloader. This requires at least two unequal-length examples. It constructs a
 small **random** CPU GPT-2 causal model covering the full tokenizer vocabulary,
 then checks the real tensors. It performs no model forward pass, optimizer step,
 pretrained-weight download, or cloud operation. The random architecture tests
-the handoff only; it is not a Qwen training run.
+the handoff only. Gemma weights, inference, optimization, and LoRA are outside this path.
 
 The qualified recipe uses `skip_prepare_dataset=True`, `max_length=None`, `packing=False`,
 `padding_free=False`, `assistant_only_loss=False`, `completion_only_loss=False`,
@@ -140,7 +179,7 @@ IDs/labels, right-padding IDs, attention masks, and `-100` padding labels.
 | --- | --- |
 | `supervised` | Reasoning, its thought wrapper, answer, and end-of-turn enter loss. |
 | `masked` | Reasoning and its complete wrapper remain in input with `-100`; answer and end-of-turn enter loss. |
-| `stripped` | Reasoning is removed; the official empty thought wrapper is masked; answer and end-of-turn enter loss. |
+| `stripped` | Reasoning is removed; Qwen's official empty thought wrapper is masked; Gemma emits no thought wrapper; answer and end-of-turn enter loss. |
 
 Headers, separators, system/user turns, and historical assistant turns are masked.
 Every accepted example must retain a whole nonwhitespace answer token after the
@@ -160,9 +199,10 @@ is supported, including absent reasoning. Ordered `reasoning.text` details are
 accepted only when their strictly increasing unique indices and exact concatenated
 text agree with present flat reasoning. Flat text is rendered once; original
 source bytes are retained. Tools, media, null content, other roles/positions,
-nonredundant structured reasoning, and all **26 pinned added-token literals** are
+nonredundant structured reasoning, and every **pinned added-token literal** are
 rejected in every clean source channel, including before stripping. This includes
-the six non-special FIM/repository tokens. The source filter derives from immutable
+all 26 Qwen tokens (including six non-special FIM/repository tokens) and all 24
+Gemma control tokens (including modality delimiters). The source filter derives from immutable
 pinned added-token data and cannot be weakened by editing a tokenizer's special-token
 list.
 
@@ -172,7 +212,7 @@ truncation. Explicit character ownership plus real fast-tokenizer offsets decide
 labels; prefix lengths and substring matching do not decide boundaries. Overlength
 examples and tokens crossing masked/supervised boundaries are rejected.
 
-The pinned tokenizer uses NFC normalization and original Python-codepoint offsets.
+The Qwen tokenizer uses NFC normalization and original Python-codepoint offsets.
 Some composed/reordered combining marks are omitted from raw offsets. The adapter
 accounts for complete canonical combining sequences conservatively, requires one
 owner and loss class per sequence, and rejects unexplained gaps. Leading combining
@@ -180,6 +220,14 @@ marks crossing role/reasoning/answer boundaries are rejected. Unsupported patter
 including the observed Hangul Jamo composition gap, are explicit rejections; this
 is not a claim of universal Unicode normalization support. Both original offsets
 and expanded ownership offsets remain auditable.
+
+Gemma preserves the qualified combining-mark and Hangul Jamo sequences in its
+original offsets. The same conservative ownership checks apply. Its BOS, thinking
+preamble, role headers, and trailing newline are masked; the selected model
+turn's answer and `<turn|>` enter loss. Absent or empty reasoning produces no
+thought wrapper. Whitespace-only reasoning follows the official template's
+truthiness and is preserved in supervised/masked input. Historical reasoning is
+omitted where the official template omits it.
 
 ## Integrity, grouping, and limits
 
@@ -216,6 +264,14 @@ The `tokenizer_target` is the tokenizer repository/revision. Student weights and
 execution/decision lineage remain explicitly `unbound`; semantic screening stays
 `not_run`, and effective prompt separation stays `unknown`.
 
+Current preparation emits recipe version 2, with an explicit closed profile name
+and renderer controls. The frame, payload, and manifest remain version 1. Rust
+checks exact profile commitments for tokenizer files, wrapper/backend policy,
+dependencies, vocabulary, and controls, including Gemma's BOS, thinking preamble,
+and end-of-turn structure. These structural checks do not execute tokenization.
+Recursive profile source and policies contribute to the installed preparation
+source identity.
+
 Rust checks all framing, shape, ownership, accounting, source rows, target partitions,
 and screened policy/component bindings before returning any imported payload. It
 reverifies the actual embedded Parquet; an invented report plus a recomputed outer
@@ -232,6 +288,12 @@ must still match, and all rendered features must replay exactly. This compatibil
 rule has regression coverage using altered producer-runtime declarations; execution
 qualification remains macOS ARM64 CPU only. A later adapter implementation with a
 different source identity requires preparation under that implementation.
+
+Historical version-one `.gwsft` files keep their exact bytes and identities and
+remain inspectable through `gw artifact verify-prepared`. The current installed
+adapter explicitly rejects replay of an older recipe or preparation-source hash.
+Prepare a new artifact from its captured canonical source with the current
+profile. No historical artifact is relabelled or overwritten during migration.
 
 Declared task groups/splits/rights are retained. Expanded prefixes keep their
 source group. A declared validation or test role is a counted record rejection
@@ -271,7 +333,9 @@ The adapter verifies the same captured bytes through Rust and checks strict vers
 metadata. Screened inputs currently require `open_ai_messages` with exactly matching CoT and turn
 policies. `all_assistant` requires `assistant_prefix_v1`; `final_turn_only` requires
 `full_conversation_final_v1`. These checks run before row decoding, including zero-row inputs.
-Gemma4 and mismatched policies fail before an output directory is created. Raw metadata version 1
+The export-format target `gemma4` and mismatched policies fail before an output
+directory is created. The `gemma4_e2b_text_v1` preparation profile consumes the
+canonical `open_ai_messages` source through the same checks. Raw metadata version 1
 retains its historical consumer behavior.
 
 Each expanded example uses the frozen connected component as its group, retains the original
@@ -288,7 +352,9 @@ outside this adapter's current evidence.
 
 ```sh
 GW_TRL_TOKENIZER="$PWD/qwen3-tokenizer" GW_TRL_GW="$PWD/target/debug/gw" \
-  adapters/trl/.venv/bin/python -m pytest -q adapters/trl/tests
+  adapters/trl/.venv/bin/python -m pytest -q adapters/trl/tests --ignore=adapters/trl/tests/gemma
+GW_TRL_GEMMA_TOKENIZER="$PWD/gemma-e2b-tokenizer" GW_TRL_GW="$PWD/target/debug/gw" \
+  adapters/trl/.venv-gemma/bin/python -m pytest -q adapters/trl/tests/gemma
 ```
 
 These tests require the real pinned tokenizer and local Rust verifier; missing
@@ -323,23 +389,33 @@ GW_REGENERATE_SCREENED_TRL_FIXTURES="$PWD/adapters/trl/tests/fixtures" \
   cargo nextest run -p gw-cli -E 'binary(screened_export)' --locked --profile ci
 ```
 
-Prepared fixtures (`tests/fixtures/prepared-*.gwsft`) are actual outputs of the
-installed pinned Python producer over these synthetic Parquet sources. Rust and
-Python consume the same frozen bytes and `tests/prepared_cases.json` independently.
+Historical prepared fixtures (`prepared-all.gwsft`, `prepared-empty.gwsft`, and
+`prepared-long.gwsft`) remain unchanged for native compatibility and explicit
+installed-replay rejection. `prepared-gemma.gwsft` is a separate current Gemma
+output over the same synthetic source, inspected directly by Rust. Python tests
+prepare private current fixtures through the selected installed profile; Rust
+and Python independently consume the same `tests/prepared_cases.json` mutation
+specification.
 The corpus includes recomputed-hash attacks on later examples, source/component and
 count mismatches, missing/duplicate/reordered examples, malformed framing/JSON, and
 structurally valid token/recipe edits that only official replay can reject. Tests also
 check all-rejected and empty inputs, unchanged IDs across producer/runtime differences,
 and complete loaded features through the real collator and SFTTrainer dataloader.
 Fail-if-called sentinels cover forward, generation, training, and optimizer steps.
-To intentionally regenerate prepared fixtures after installing the current adapter:
+To produce current synthetic fixtures after installing the adapter, choose a new
+output directory. Existing historical files are never replaced:
 
 ```sh
-GW_TRL_TOKENIZER="$PWD/qwen3-tokenizer" GW_TRL_GW="$PWD/target/debug/gw" \
-  adapters/trl/.venv/bin/python adapters/trl/tests/regenerate_prepared.py
+cd adapters/trl
+GW_TRL_GW="$PWD/../../target/debug/gw" .venv/bin/python -m tests.regenerate_prepared \
+  --profile qwen3_text_v1 --tokenizer "$PWD/../../qwen3-tokenizer" \
+  --output "$PWD/prepared-current"
 ```
 
 ## Completed full-SFT checkpoints
+
+This checkpoint path retains its Qwen-only release scope and Qwen environment.
+Gemma preparation does not qualify Gemma model loading or training.
 
 `ghostwriter-trl-train` consumes a verified `.gwsft` input, trains all parameters on
 one CPU process, and publishes one complete `.gwckpt` file. The original input
@@ -441,8 +517,9 @@ remains explicitly `declared`. Neither a content hash nor reloading authenticate
 historical optimizer execution.
 
 The training implementation has its own recursive source identity in a separate
-subpackage and console entry point. Adding training support does not change the
-existing preparation code identity or require old prepared inputs to be rebuilt.
+subpackage and console entry point. Training source is excluded from the
+preparation source identity, so optimizer-only changes do not require rebuilding
+otherwise compatible prepared inputs.
 Tiny random Qwen3 models live only in the test fixtures; no installed command
 selects fixture authority. Qualification covers actual repeated/partial and long
 training batches, independent supervision counts and reload logits, BF16/tied
@@ -451,6 +528,8 @@ The exercised Python platform remains CPython 3.12 on macOS ARM64 CPU. Pretraine
 acquisition/training, Linux Python training, CUDA, and learning benefit are unqualified.
 
 ## Fresh numeric rewards
+
+Numeric rewards retain the Qwen tokenizer and Qwen environment described below.
 
 The `ghostwriter_trl.reward_artifact` and `ghostwriter_trl.rewards` modules support one
 synchronous numeric reward callback for the pinned

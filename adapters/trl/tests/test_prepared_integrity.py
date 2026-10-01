@@ -74,8 +74,8 @@ def mutate(data, case):
 
 @pytest.mark.parametrize("case", CASES, ids=lambda case: case["name"])
 def test_shared_independent_corpus(case, gw, fixture_dir, tokenizer):
-    # Frozen bytes were produced by the installed pinned Python producer. Rust consumes the exact
-    # same corpus independently; altered cases recompute the complete outer digest where possible.
+    # Current producer inputs share the mutation specifications used by Rust's historical fixture
+    # suite. Altered cases recompute the complete outer digest where possible.
     data = (fixture_dir / "prepared-all.gwsft").read_bytes()
     changed = mutate(data, case)
     rust = subprocess.run([str(gw), "artifact", "verify-prepared", "--stdin"], input=changed, capture_output=True)

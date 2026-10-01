@@ -7,6 +7,7 @@ from .artifact import ContractError, read_snapshot
 from .prepared import prepare, read_prepared, save_prepared
 from .handoff import qualify_prepared_handoff
 from .tokenizer import load_tokenizer
+from .profiles import NAMES, QWEN
 
 
 def main() -> None:
@@ -15,6 +16,8 @@ def main() -> None:
     parser.add_argument("--artifact", required=True, type=Path)
     parser.add_argument("--gw", required=True, type=Path)
     parser.add_argument("--tokenizer", required=True, type=Path)
+    parser.add_argument("--profile", choices=NAMES, default=QWEN)
+    parser.add_argument("--thinking", choices=("on", "off"), help="explicit Gemma thinking preamble; Qwen requires on")
     parser.add_argument("--cot", required=True, choices=("supervised", "masked", "stripped"))
     parser.add_argument("--turns", required=True, choices=("final_turn_only", "all_assistant"))
     parser.add_argument("--max-length", required=True, type=int)
@@ -25,8 +28,10 @@ def main() -> None:
         if args.output.exists():
             raise ContractError("output directory already exists")
         snapshot = read_snapshot(args.artifact, args.gw)
-        tokenizer = load_tokenizer(args.tokenizer)
-        data = prepare(snapshot, tokenizer, cot=args.cot, turns=args.turns, max_length=args.max_length)
+        tokenizer = load_tokenizer(args.tokenizer, profile=args.profile)
+        thinking = None if args.thinking is None else args.thinking == "on"
+        data = prepare(snapshot, tokenizer, cot=args.cot, turns=args.turns, max_length=args.max_length,
+                       profile=args.profile, enable_thinking=thinking)
         args.output.mkdir(parents=True, exist_ok=False)
         save_prepared(args.output / "prepared.gwsft", data)
         loaded = read_prepared(args.output / "prepared.gwsft", args.gw, tokenizer)

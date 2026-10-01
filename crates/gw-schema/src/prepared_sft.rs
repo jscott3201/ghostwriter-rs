@@ -76,8 +76,9 @@ pub struct PreparedSftManifest {
     pub qualification_limits: Value,
 }
 
-/// Producer recipe. Opaque tokenizer details are committed and shape-checked here, then checked
-/// against the actual pinned local tokenizer by Python replay; Rust does not implement BPE.
+/// Producer recipe. Version two pins a named text profile's files, wrapper, and dependencies.
+/// Historical version-one tokenizer declarations retain their original shape validation.
+/// Python replay checks actual official rendering and tokenization; Rust does not implement BPE.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PreparedSftRecipe {
@@ -87,6 +88,9 @@ pub struct PreparedSftRecipe {
     pub adapter_version: String,
     /// Installed adapter source/package-policy identity.
     pub adapter_source_sha256: String,
+    /// Explicit version-two text profile; absent only on historical version-one recipes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preparation_profile: Option<crate::PreparedSftProfile>,
     /// Complete qualified dependency versions.
     pub dependencies: BTreeMap<String, String>,
     /// Tokenizer repository/files/template identity, distinct from student weights.

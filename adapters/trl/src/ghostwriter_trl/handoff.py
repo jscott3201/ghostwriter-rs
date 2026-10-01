@@ -4,6 +4,7 @@ from pathlib import Path
 import tempfile
 
 from .artifact import ContractError
+from .profiles import QWEN
 from .tokenizer import check_dependencies, validate_tokenizer
 
 FEATURE_KEYS = ("input_ids", "attention_mask", "labels")
@@ -30,12 +31,12 @@ def audit_batch(batch, expected: list[dict], pad_token_id: int) -> dict:
     return {"rows": len(observed), "shape": list(batch["input_ids"].shape), "nonpadding_preserved": True, "padding_masked": True}
 
 
-def qualify_handoff(examples: list[dict], tokenizer) -> dict:
+def qualify_handoff(examples: list[dict], tokenizer, *, profile: str = QWEN) -> dict:
     """Construct a small random CPU model and inspect batches; never run forward or optimization."""
     if len(examples) < 2 or len({len(e["input_ids"]) for e in examples}) < 2:
         raise ContractError("handoff qualification requires at least two unequal-length examples")
-    check_dependencies()
-    validate_tokenizer(tokenizer)
+    check_dependencies(profile)
+    validate_tokenizer(tokenizer, profile)
     import torch
     from datasets import Dataset
     from transformers import GPT2Config, GPT2LMHeadModel
@@ -85,4 +86,5 @@ def qualify_prepared_handoff(prepared, tokenizer) -> dict:
     from .prepared import VerifiedPrepared
     if type(prepared) is not VerifiedPrepared:
         raise ContractError("handoff source must be an actual verified and replayed prepared input")
-    return {"build_id": prepared.build_id, **qualify_handoff(prepared.examples, tokenizer)}
+    profile = prepared.manifest["recipe"]["preparation_profile"]["name"]
+    return {"build_id": prepared.build_id, **qualify_handoff(prepared.examples, tokenizer, profile=profile)}

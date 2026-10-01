@@ -218,8 +218,8 @@ or record lifecycle. Historical sidecars are ignored and left untouched.
 
 ### Verified SFT token labels
 
-The [external TRL adapter](adapters/trl/README.md) prepares explicit loss labels for the pinned
-Qwen3-0.6B tokenizer. It verifies one immutable Parquet byte snapshot through Rust, checks every
+The [external TRL adapter](adapters/trl/README.md) prepares explicit loss labels for pinned
+Qwen3-0.6B and Gemma 4 E2B text profiles in separately locked environments. It verifies one immutable Parquet byte snapshot through Rust, checks every
 rendering against the official template, and supports supervised, masked, and stripped reasoning
 with explicit assistant-prefix expansion. Its local CPU qualification inspects the real collator
 and SFTTrainer dataloader without loading pretrained weights or running a training step.

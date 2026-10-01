@@ -134,8 +134,10 @@ impl PreparedSftRecipe {
             MultiTurnLoss::AllAssistant => "assistant_prefix_v1",
             MultiTurnLoss::FinalTurnOnly => "full_conversation_final_v1",
         };
-        if self.version != 1
-            || self.adapter_version.trim().is_empty()
+        if !matches!(
+            (self.version, &self.preparation_profile),
+            (1, None) | (2, Some(_))
+        ) || self.adapter_version.trim().is_empty()
             || !hex(&self.adapter_source_sha256)
             || self.dependencies.is_empty()
             || self
@@ -157,6 +159,9 @@ impl PreparedSftRecipe {
         )?;
         for value in self.runtime.as_object().ok_or("invalid runtime")?.values() {
             text(value)?;
+        }
+        if let Some(profile) = &self.preparation_profile {
+            return profile.validate_recipe(self);
         }
         keys(&self.tokenizer_target, &["repository", "revision"])?;
         keys(
@@ -364,6 +369,9 @@ impl PreparedSftExample {
     fn validate(&self, vocab: u32, recipe: &PreparedSftRecipe) -> Result<(), &'static str> {
         let length = self.input_ids.len();
         let characters: Vec<_> = self.rendered.chars().collect();
+        if let Some(profile) = &recipe.preparation_profile {
+            profile.validate_example(self)?;
+        }
         if length == 0
             || length as u64 > recipe.max_length
             || self.rendered.is_empty()
