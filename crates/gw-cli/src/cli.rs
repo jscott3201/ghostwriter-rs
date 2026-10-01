@@ -100,6 +100,10 @@ pub enum GenCommand {
 /// The `eval` subcommands.
 #[derive(Debug, Subcommand, PartialEq)]
 pub enum EvalCommand {
+    /// Execute a saved pure Python function under the qualified cached local Docker recipe.
+    Coding(crate::commands::coding::CodingArgs),
+    /// Validate a saved coding declaration and explicitly re-execute its captured input locally.
+    CodingReplay(crate::commands::coding::CodingReplayArgs),
     /// Freeze descriptive source lexical groups/splits from supplied files; semantic checks do not run.
     Screen(ScreeningArgs),
     /// Fit supplied judge observations against independent labels offline; never qualifies quality.

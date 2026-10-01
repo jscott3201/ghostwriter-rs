@@ -28,7 +28,7 @@ pub struct SemanticTaskIdentity {
 pub struct TaskProvenance {
     /// Source task label; never interpreted as a content digest.
     pub task_id: String,
-    /// Identity derived from actual source, prompt, and numeric answer semantics.
+    /// Identity derived from source/prompt and numeric answers or the complete coding suite.
     pub identity: SemanticTaskIdentity,
     /// Reviewed immutable source and citation.
     pub source: TaskSource,
@@ -43,7 +43,7 @@ pub struct TaskProvenance {
 }
 
 /// Self-contained task block in a v3 export row. The conversation column supplies the actual prompt;
-/// this block retains its reviewed provenance and the record's sole numeric answer contract.
+/// this block retains reviewed provenance and the sole numeric or redacted coding contract.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExportTaskProjection {
@@ -180,7 +180,7 @@ impl TaskProvenance {
         })
     }
 
-    fn validate_declarations(&self) -> Result<(), &'static str> {
+    pub(crate) fn validate_declarations(&self) -> Result<(), &'static str> {
         for value in [
             &self.task_id,
             &self.source.namespace,
@@ -217,6 +217,9 @@ impl TaskProvenance {
         contract: &VerificationContract,
     ) -> Result<(), &'static str> {
         self.validate_declarations()?;
+        if let Oracle::CodingSuite { suite } = &contract.oracle {
+            suite.validate_split(self.split.role)?;
+        }
         let Content::Text(prompt) = &message.content else {
             return Err("numeric task prompt must be user text");
         };
@@ -277,6 +280,9 @@ fn semantic_identity(
     prompt: &str,
     contract: &VerificationContract,
 ) -> Result<SemanticTaskIdentity, &'static str> {
+    if matches!(contract.oracle, Oracle::CodingSuite { .. }) {
+        return crate::coding_task::coding_semantic_identity(source, prompt, contract);
+    }
     validate_numeric_contract(contract)?;
     let Oracle::Literal { expected } = &contract.oracle else {
         unreachable!("validated literal oracle")

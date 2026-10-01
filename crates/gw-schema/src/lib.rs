@@ -29,6 +29,10 @@
 //! NeedsReview }` and the config-side `JudgeSampling` policy folded into the contract.
 
 mod candidate;
+mod coding_task;
+mod coding_value;
+pub use coding_task::*;
+pub use coding_value::{CodingValue, coding_digest, strict_coding_json};
 mod message_validation;
 mod screening_source;
 mod tool_links;

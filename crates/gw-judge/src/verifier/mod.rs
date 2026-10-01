@@ -311,7 +311,7 @@ fn resolve_expected<S: SandboxOracle + ?Sized>(
             },
         },
         // A refusal-policy or open-ended oracle carries no comparable answer string.
-        Oracle::RefusalPolicy { .. } | Oracle::None => (None, false),
+        Oracle::RefusalPolicy { .. } | Oracle::CodingSuite { .. } | Oracle::None => (None, false),
     }
 }
 

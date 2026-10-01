@@ -1,0 +1,777 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "task_id": "merge-closed",
+      "source": {
+        "namespace": "ghostwriter-owned-fixtures",
+        "item": "merge_closed",
+        "revision": "1",
+        "citation": "examples/coding/README.md"
+      },
+      "rights": {
+        "basis": "owned",
+        "evidence": [
+          "Small original repository qualification fixture."
+        ],
+        "reviewer": "repository-fixture-review",
+        "permitted_uses": [
+          "training",
+          "evaluation",
+          "redistribution"
+        ]
+      },
+      "group": {
+        "namespace": "ghostwriter-owned-fixtures",
+        "id": "merge_closed"
+      },
+      "split": {
+        "manifest": {
+          "namespace": "ghostwriter-owned-fixtures",
+          "id": "coding-controls"
+        },
+        "revision": "1",
+        "role": "train"
+      },
+      "description": "Return closed integer intervals sorted and merged whenever they overlap or touch. Each input is a pair [start, end] with start <= end. Return new pairs; an empty input returns an empty list.",
+      "function": {
+        "entry_point": "merge_closed",
+        "parameters": [
+          "intervals"
+        ],
+        "representation": "complete_utf8_python_module_v1"
+      },
+      "visible_examples": [
+        {
+          "label": "visible-separated",
+          "arguments": [
+            {
+              "type": "array",
+              "value": [
+                {
+                  "type": "array",
+                  "value": [
+                    {
+                      "type": "integer",
+                      "value": 3
+                    },
+                    {
+                      "type": "integer",
+                      "value": 4
+                    }
+                  ]
+                },
+                {
+                  "type": "array",
+                  "value": [
+                    {
+                      "type": "integer",
+                      "value": 1
+                    },
+                    {
+                      "type": "integer",
+                      "value": 2
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "expected": {
+            "type": "array",
+            "value": [
+              {
+                "type": "array",
+                "value": [
+                  {
+                    "type": "integer",
+                    "value": 1
+                  },
+                  {
+                    "type": "integer",
+                    "value": 2
+                  }
+                ]
+              },
+              {
+                "type": "array",
+                "value": [
+                  {
+                    "type": "integer",
+                    "value": 3
+                  },
+                  {
+                    "type": "integer",
+                    "value": 4
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "train_cases": [
+        {
+          "label": "empty",
+          "arguments": [
+            {
+              "type": "array",
+              "value": []
+            }
+          ],
+          "expected": {
+            "type": "array",
+            "value": []
+          }
+        },
+        {
+          "label": "touching",
+          "arguments": [
+            {
+              "type": "array",
+              "value": [
+                {
+                  "type": "array",
+                  "value": [
+                    {
+                      "type": "integer",
+                      "value": 1
+                    },
+                    {
+                      "type": "integer",
+                      "value": 2
+                    }
+                  ]
+                },
+                {
+                  "type": "array",
+                  "value": [
+                    {
+                      "type": "integer",
+                      "value": 2
+                    },
+                    {
+                      "type": "integer",
+                      "value": 4
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "expected": {
+            "type": "array",
+            "value": [
+              {
+                "type": "array",
+                "value": [
+                  {
+                    "type": "integer",
+                    "value": 1
+                  },
+                  {
+                    "type": "integer",
+                    "value": 4
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "label": "negative-and-point",
+          "arguments": [
+            {
+              "type": "array",
+              "value": [
+                {
+                  "type": "array",
+                  "value": [
+                    {
+                      "type": "integer",
+                      "value": -4
+                    },
+                    {
+                      "type": "integer",
+                      "value": -1
+                    }
+                  ]
+                },
+                {
+                  "type": "array",
+                  "value": [
+                    {
+                      "type": "integer",
+                      "value": -2
+                    },
+                    {
+                      "type": "integer",
+                      "value": 0
+                    }
+                  ]
+                },
+                {
+                  "type": "array",
+                  "value": [
+                    {
+                      "type": "integer",
+                      "value": 0
+                    },
+                    {
+                      "type": "integer",
+                      "value": 0
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "expected": {
+            "type": "array",
+            "value": [
+              {
+                "type": "array",
+                "value": [
+                  {
+                    "type": "integer",
+                    "value": -4
+                  },
+                  {
+                    "type": "integer",
+                    "value": 0
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "protected_cases": [],
+      "comparison": "typed_json_exact_v1",
+      "runtime_recipe": "docker_linux_arm64_cpython_3_12_14_v1",
+      "observations": {
+        "domain": "python-standard-library",
+        "difficulty": {
+          "label": "small-control",
+          "basis": "Own bounded function fixture; no calibrated difficulty claim."
+        },
+        "qc": {
+          "answerable": true,
+          "difficulty_targeted": true,
+          "in_scope": true,
+          "reviewer": "repository-fixture-review",
+          "evidence": [
+            "Literal expected cases reviewed independently of the candidate implementations."
+          ]
+        }
+      }
+    },
+    {
+      "task_id": "runs",
+      "source": {
+        "namespace": "ghostwriter-owned-fixtures",
+        "item": "runs",
+        "revision": "1",
+        "citation": "examples/coding/README.md"
+      },
+      "rights": {
+        "basis": "owned",
+        "evidence": [
+          "Small original repository qualification fixture."
+        ],
+        "reviewer": "repository-fixture-review",
+        "permitted_uses": [
+          "training",
+          "evaluation",
+          "redistribution"
+        ]
+      },
+      "group": {
+        "namespace": "ghostwriter-owned-fixtures",
+        "id": "runs"
+      },
+      "split": {
+        "manifest": {
+          "namespace": "ghostwriter-owned-fixtures",
+          "id": "coding-controls"
+        },
+        "revision": "1",
+        "role": "train"
+      },
+      "description": "Return consecutive runs of identical Unicode codepoints as [character, count] pairs. Preserve run order and exact codepoints; perform no Unicode normalization.",
+      "function": {
+        "entry_point": "runs",
+        "parameters": [
+          "text"
+        ],
+        "representation": "complete_utf8_python_module_v1"
+      },
+      "visible_examples": [
+        {
+          "label": "visible-adjacent",
+          "arguments": [
+            {
+              "type": "string",
+              "value": "aab"
+            }
+          ],
+          "expected": {
+            "type": "array",
+            "value": [
+              {
+                "type": "array",
+                "value": [
+                  {
+                    "type": "string",
+                    "value": "a"
+                  },
+                  {
+                    "type": "integer",
+                    "value": 2
+                  }
+                ]
+              },
+              {
+                "type": "array",
+                "value": [
+                  {
+                    "type": "string",
+                    "value": "b"
+                  },
+                  {
+                    "type": "integer",
+                    "value": 1
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "train_cases": [
+        {
+          "label": "empty",
+          "arguments": [
+            {
+              "type": "string",
+              "value": ""
+            }
+          ],
+          "expected": {
+            "type": "array",
+            "value": []
+          }
+        },
+        {
+          "label": "nonadjacent",
+          "arguments": [
+            {
+              "type": "string",
+              "value": "aba"
+            }
+          ],
+          "expected": {
+            "type": "array",
+            "value": [
+              {
+                "type": "array",
+                "value": [
+                  {
+                    "type": "string",
+                    "value": "a"
+                  },
+                  {
+                    "type": "integer",
+                    "value": 1
+                  }
+                ]
+              },
+              {
+                "type": "array",
+                "value": [
+                  {
+                    "type": "string",
+                    "value": "b"
+                  },
+                  {
+                    "type": "integer",
+                    "value": 1
+                  }
+                ]
+              },
+              {
+                "type": "array",
+                "value": [
+                  {
+                    "type": "string",
+                    "value": "a"
+                  },
+                  {
+                    "type": "integer",
+                    "value": 1
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "label": "astral",
+          "arguments": [
+            {
+              "type": "string",
+              "value": "🙂🙂a"
+            }
+          ],
+          "expected": {
+            "type": "array",
+            "value": [
+              {
+                "type": "array",
+                "value": [
+                  {
+                    "type": "string",
+                    "value": "🙂"
+                  },
+                  {
+                    "type": "integer",
+                    "value": 2
+                  }
+                ]
+              },
+              {
+                "type": "array",
+                "value": [
+                  {
+                    "type": "string",
+                    "value": "a"
+                  },
+                  {
+                    "type": "integer",
+                    "value": 1
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "label": "combining",
+          "arguments": [
+            {
+              "type": "string",
+              "value": "éé"
+            }
+          ],
+          "expected": {
+            "type": "array",
+            "value": [
+              {
+                "type": "array",
+                "value": [
+                  {
+                    "type": "string",
+                    "value": "e"
+                  },
+                  {
+                    "type": "integer",
+                    "value": 1
+                  }
+                ]
+              },
+              {
+                "type": "array",
+                "value": [
+                  {
+                    "type": "string",
+                    "value": "́"
+                  },
+                  {
+                    "type": "integer",
+                    "value": 1
+                  }
+                ]
+              },
+              {
+                "type": "array",
+                "value": [
+                  {
+                    "type": "string",
+                    "value": "e"
+                  },
+                  {
+                    "type": "integer",
+                    "value": 1
+                  }
+                ]
+              },
+              {
+                "type": "array",
+                "value": [
+                  {
+                    "type": "string",
+                    "value": "́"
+                  },
+                  {
+                    "type": "integer",
+                    "value": 1
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "protected_cases": [],
+      "comparison": "typed_json_exact_v1",
+      "runtime_recipe": "docker_linux_arm64_cpython_3_12_14_v1",
+      "observations": {
+        "domain": "python-standard-library",
+        "difficulty": {
+          "label": "small-control",
+          "basis": "Own bounded function fixture; no calibrated difficulty claim."
+        },
+        "qc": {
+          "answerable": true,
+          "difficulty_targeted": true,
+          "in_scope": true,
+          "reviewer": "repository-fixture-review",
+          "evidence": [
+            "Literal expected cases reviewed independently of the candidate implementations."
+          ]
+        }
+      }
+    },
+    {
+      "task_id": "common-prefix",
+      "source": {
+        "namespace": "ghostwriter-owned-fixtures",
+        "item": "common_prefix",
+        "revision": "1",
+        "citation": "examples/coding/README.md"
+      },
+      "rights": {
+        "basis": "owned",
+        "evidence": [
+          "Small original repository qualification fixture."
+        ],
+        "reviewer": "repository-fixture-review",
+        "permitted_uses": [
+          "training",
+          "evaluation",
+          "redistribution"
+        ]
+      },
+      "group": {
+        "namespace": "ghostwriter-owned-fixtures",
+        "id": "common_prefix"
+      },
+      "split": {
+        "manifest": {
+          "namespace": "ghostwriter-owned-fixtures",
+          "id": "coding-controls"
+        },
+        "revision": "1",
+        "role": "test"
+      },
+      "description": "Return the longest exact Unicode codepoint prefix common to every input string. Return the empty string for an empty input list. Perform no Unicode normalization.",
+      "function": {
+        "entry_point": "common_prefix",
+        "parameters": [
+          "strings"
+        ],
+        "representation": "complete_utf8_python_module_v1"
+      },
+      "visible_examples": [
+        {
+          "label": "visible-prefix",
+          "arguments": [
+            {
+              "type": "array",
+              "value": [
+                {
+                  "type": "string",
+                  "value": "ab"
+                },
+                {
+                  "type": "string",
+                  "value": "abc"
+                }
+              ]
+            }
+          ],
+          "expected": {
+            "type": "string",
+            "value": "ab"
+          }
+        }
+      ],
+      "train_cases": [],
+      "protected_cases": [
+        {
+          "label": "empty",
+          "arguments": [
+            {
+              "type": "array",
+              "value": []
+            }
+          ],
+          "expected": {
+            "type": "string",
+            "value": ""
+          }
+        },
+        {
+          "label": "one",
+          "arguments": [
+            {
+              "type": "array",
+              "value": [
+                {
+                  "type": "string",
+                  "value": "solo"
+                }
+              ]
+            }
+          ],
+          "expected": {
+            "type": "string",
+            "value": "solo"
+          }
+        },
+        {
+          "label": "empty-member",
+          "arguments": [
+            {
+              "type": "array",
+              "value": [
+                {
+                  "type": "string",
+                  "value": ""
+                },
+                {
+                  "type": "string",
+                  "value": "abc"
+                }
+              ]
+            }
+          ],
+          "expected": {
+            "type": "string",
+            "value": ""
+          }
+        },
+        {
+          "label": "normalization-distinct",
+          "arguments": [
+            {
+              "type": "array",
+              "value": [
+                {
+                  "type": "string",
+                  "value": "é"
+                },
+                {
+                  "type": "string",
+                  "value": "é"
+                }
+              ]
+            }
+          ],
+          "expected": {
+            "type": "string",
+            "value": ""
+          }
+        },
+        {
+          "label": "astral",
+          "arguments": [
+            {
+              "type": "array",
+              "value": [
+                {
+                  "type": "string",
+                  "value": "🙂x"
+                },
+                {
+                  "type": "string",
+                  "value": "🙂y"
+                }
+              ]
+            }
+          ],
+          "expected": {
+            "type": "string",
+            "value": "🙂"
+          }
+        },
+        {
+          "label": "all-members",
+          "arguments": [
+            {
+              "type": "array",
+              "value": [
+                {
+                  "type": "string",
+                  "value": "abc"
+                },
+                {
+                  "type": "string",
+                  "value": "abd"
+                },
+                {
+                  "type": "string",
+                  "value": "z"
+                }
+              ]
+            }
+          ],
+          "expected": {
+            "type": "string",
+            "value": ""
+          }
+        },
+        {
+          "label": "oracle-isolation",
+          "arguments": [
+            {
+              "type": "array",
+              "value": [
+                {
+                  "type": "string",
+                  "value": "ORACLE_SENTINEL_HELDOUT_A"
+                },
+                {
+                  "type": "string",
+                  "value": "ORACLE_SENTINEL_HELDOUT_B"
+                }
+              ]
+            }
+          ],
+          "expected": {
+            "type": "string",
+            "value": "ORACLE_SENTINEL_HELDOUT_"
+          }
+        }
+      ],
+      "comparison": "typed_json_exact_v1",
+      "runtime_recipe": "docker_linux_arm64_cpython_3_12_14_v1",
+      "observations": {
+        "domain": "python-standard-library",
+        "difficulty": {
+          "label": "small-control",
+          "basis": "Own bounded function fixture; no calibrated difficulty claim."
+        },
+        "qc": {
+          "answerable": true,
+          "difficulty_targeted": true,
+          "in_scope": true,
+          "reviewer": "repository-fixture-review",
+          "evidence": [
+            "Literal expected cases reviewed independently of the candidate implementations."
+          ]
+        }
+      }
+    }
+  ]
+}

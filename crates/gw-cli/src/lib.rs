@@ -27,6 +27,7 @@
 //! See [`config`] and [`wire`].
 
 pub mod cli;
+pub mod coding;
 pub mod commands;
 pub mod config;
 pub mod seedsource;
@@ -112,6 +113,8 @@ pub async fn dispatch(cli: Cli) -> anyhow::Result<CommandOutcome> {
                 .map(|()| CommandOutcome::Success),
         },
         Command::Eval(eval_cmd) => match eval_cmd {
+            EvalCommand::Coding(args) => commands::coding::evaluate(args).await,
+            EvalCommand::CodingReplay(args) => commands::coding::replay(args).await,
             EvalCommand::Screen(args) => commands::screening::screen(args),
             EvalCommand::FitCalibration(args) => commands::calibration::fit(args),
             EvalCommand::AuditSeparation(args) => commands::eval::audit_separation(args).await,

@@ -406,6 +406,9 @@ mod task_tests;
 mod tests;
 
 #[cfg(test)]
+#[path = "coding_artifact_tests.rs"]
+mod coding_tests;
+#[cfg(test)]
 #[path = "snapshot_tests.rs"]
 mod snapshot_tests;
 
