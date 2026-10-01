@@ -132,23 +132,25 @@ fn chain_record(record_id: &str, messages: &[Message]) -> TrainingRecord {
         tags: vec!["tool-use".into()],
         messages: messages.to_vec(),
         tools: None,
-        provenance: Provenance {
-            run_id: RUN.into(),
-            parent_ids: vec![],
-            teacher: TeacherRef {
-                provider: "openrouter".into(),
-                slug: "z-ai/glm-5.2".into(),
-                served_by: None,
-                model_card_revision: None,
+        origin: gw_schema::RecordOrigin::Generated(Box::new(gw_schema::GeneratedOrigin {
+            provenance: Provenance {
+                run_id: RUN.into(),
+                parent_ids: vec![],
+                teacher: TeacherRef {
+                    provider: "openrouter".into(),
+                    slug: "z-ai/glm-5.2".into(),
+                    served_by: None,
+                    model_card_revision: None,
+                },
+                user_synth_model: None,
+                user_turn_kind: None,
+                in_scope_safe: Some(true),
+                judge_models: vec![],
+                harness_version: "0.1.0-smoke".into(),
+                git_commit: None,
             },
-            user_synth_model: None,
-            user_turn_kind: None,
-            in_scope_safe: Some(true),
-            judge_models: vec![],
-            harness_version: "0.1.0-smoke".into(),
-            git_commit: None,
-        },
-        generation: Default::default(),
+            generation: Default::default(),
+        })),
         task_provenance: None,
         verification_contract: Some(gw_schema::VerificationContract {
             kind: gw_schema::VerificationKind::None,
@@ -531,10 +533,7 @@ async fn one_tool_trajectory_survives_the_whole_chain_and_the_negatives_do_not()
         manifest.n_admitted, 1,
         "the two declined records must not be written"
     );
-    assert_eq!(
-        manifest.column_schema_version,
-        ExportSchemaVersion::ReviewedTasks
-    );
+    assert_eq!(manifest.column_schema_version, ExportSchemaVersion::CURRENT);
     assert!(!manifest.build_inputs_hash.is_empty());
 
     let shard = temp_path("chain.parquet");

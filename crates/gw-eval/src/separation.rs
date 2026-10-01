@@ -105,7 +105,7 @@ fn diagnostics(records: &[TrainingRecord], cfg: &SeparationConfig) -> Separation
     for record in records {
         let group = groups
             .entry((
-                &record.provenance.run_id,
+                record.run_id(),
                 &record.training_area,
                 &record.hashes.prompt_hash,
             ))

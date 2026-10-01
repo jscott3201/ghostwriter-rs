@@ -138,10 +138,18 @@ fn order_is_canonical_and_out_of_scope_records_do_not_change_the_claim() {
 #[test]
 fn declared_sibling_completion_preserves_the_frozen_group_and_split() {
     let mut a = record("a", "the shared sibling prompt");
-    a.generation.n_completions = Some(2);
+    a.origin
+        .generated_mut()
+        .expect("generated record")
+        .generation
+        .n_completions = Some(2);
     let mut b = a.clone();
     b.record_id = "b".into();
-    b.generation.completion_index = Some(1);
+    b.origin
+        .generated_mut()
+        .expect("generated record")
+        .generation
+        .completion_index = Some(1);
     b.messages[1].content = Content::Text("different sibling answer".into());
     b.lifecycle.state = LifecycleState::Rejected;
     let all = vec![a.clone(), b];
@@ -297,7 +305,12 @@ fn declared_source_revisions_and_cross_run_parent_edges_are_kept() {
     revision.task_provenance.as_mut().unwrap().source.revision = "revision-two".into();
     rebind_task(&mut revision);
     let mut child = record("child", "another independent task");
-    child.provenance.parent_ids = vec![revision.record_id.clone()];
+    child
+        .origin
+        .generated_mut()
+        .expect("generated fixture")
+        .provenance
+        .parent_ids = vec![revision.record_id.clone()];
     let rows = vec![a, revision, child];
     let plan = prepare_screening(&rows, &declaration(&rows), &protected(), None).unwrap();
     assert_eq!(plan.groups.len(), 1);

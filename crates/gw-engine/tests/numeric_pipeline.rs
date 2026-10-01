@@ -125,11 +125,23 @@ async fn arithmetic_corpus_exports_only_elected_verified_rows_and_reopens_exact_
         for record in &siblings {
             assert_eq!(record.task_provenance.as_ref(), Some(task));
             assert_eq!(
-                record.generation.sibling_group_id.as_deref(),
+                record
+                    .origin
+                    .generated()
+                    .expect("generated record")
+                    .generation
+                    .sibling_group_id
+                    .as_deref(),
                 Some(record.hashes.prompt_hash.as_str())
             );
             assert_ne!(
-                record.generation.sibling_group_id.as_deref(),
+                record
+                    .origin
+                    .generated()
+                    .expect("generated record")
+                    .generation
+                    .sibling_group_id
+                    .as_deref(),
                 Some(task.group.id.as_str())
             );
         }
@@ -167,7 +179,7 @@ async fn arithmetic_corpus_exports_only_elected_verified_rows_and_reopens_exact_
     assert_eq!(artifact.manifest.n_admitted, 2);
     assert_eq!(
         artifact.manifest.column_schema_version,
-        gw_schema::ExportSchemaVersion::ReviewedTasks
+        gw_schema::ExportSchemaVersion::CURRENT
     );
     let reader = ParquetRecordBatchReaderBuilder::try_new(File::open(temp.export().dst).unwrap())
         .unwrap()

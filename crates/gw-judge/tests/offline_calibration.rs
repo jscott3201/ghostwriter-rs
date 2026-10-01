@@ -38,7 +38,12 @@ fn held_out_labels_membership_and_source_container_never_change_fit_identity_or_
     fixture.evidence.assessment[0].label = CalibrationLabel::Known { value: 0.8 };
     let labels = fixture.snapshot();
     let mut other = candidate("different-held-member", "another held-out prompt");
-    other.provenance.run_id = "another-run".into();
+    other
+        .origin
+        .generated_mut()
+        .expect("generated record")
+        .provenance
+        .run_id = "another-run".into();
     fixture
         .evidence
         .assessment

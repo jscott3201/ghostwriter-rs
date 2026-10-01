@@ -62,6 +62,7 @@ pub(crate) struct Projected {
     pub reasoning_tokens: u32,
     pub messages_json: String,
     pub task_json: Option<String>,
+    pub origin_json: Option<String>,
 }
 
 /// Project a record into its export row. `messages_json` is the canonical conversation, serialized
@@ -72,8 +73,14 @@ pub(crate) struct Projected {
 /// `record_hash` falls back to a freshly computed content hash when the envelope's own hash is
 /// empty, so an externally-constructed record can never export `record_hash = ""`.
 pub(crate) fn project(rec: &TrainingRecord, version: ExportSchemaVersion) -> Result<Projected> {
+    if rec.origin.generated().is_none() && version != ExportSchemaVersion::RecordOrigins {
+        return Err(crate::artifact::integrity(
+            "reference origin cannot be down-projected",
+        ));
+    }
+    crate::reference_records::validate_record(rec)?;
     let task_json = match version {
-        ExportSchemaVersion::ReviewedTasks => rec
+        ExportSchemaVersion::ReviewedTasks | ExportSchemaVersion::RecordOrigins => rec
             .task_provenance
             .as_ref()
             .map(|task| {
@@ -121,7 +128,15 @@ pub(crate) fn project(rec: &TrainingRecord, version: ExportSchemaVersion) -> Res
         reasoning_tokens: rec.cost.reasoning_tokens,
         messages_json: canonical_messages_json(&rec.messages)?,
         task_json,
+        origin_json: (version == ExportSchemaVersion::RecordOrigins)
+            .then(|| canonical_origin_json(&rec.origin.projection()))
+            .transpose()?,
     })
+}
+
+pub(crate) fn canonical_origin_json(origin: &gw_schema::ExportRecordOrigin) -> Result<String> {
+    origin.validate().map_err(crate::artifact::integrity)?;
+    Ok(serde_json::to_string(&serde_json::to_value(origin)?)?)
 }
 
 pub(crate) fn canonical_task_json(task: &ExportTaskProjection) -> Result<String> {
@@ -169,8 +184,11 @@ pub(crate) fn export_schema(version: ExportSchemaVersion) -> Result<Arc<Schema>>
         Field::new("messages_json", DataType::Utf8, false),
     ];
     match version {
-        ExportSchemaVersion::ReviewedTasks => {
-            fields.push(Field::new("task_json", DataType::Utf8, true))
+        ExportSchemaVersion::ReviewedTasks | ExportSchemaVersion::RecordOrigins => {
+            fields.push(Field::new("task_json", DataType::Utf8, true));
+            if version == ExportSchemaVersion::RecordOrigins {
+                fields.push(Field::new("origin_json", DataType::Utf8, false));
+            }
         }
         ExportSchemaVersion::CanonicalMessages => (),
         ExportSchemaVersion::RoleContentText => {
@@ -210,13 +228,28 @@ pub(crate) fn build_batch(rows: &[Projected], version: ExportSchemaVersion) -> R
             rows.iter().map(|r| r.messages_json.as_str()),
         )),
     ];
-    if version == ExportSchemaVersion::ReviewedTasks {
+    if matches!(
+        version,
+        ExportSchemaVersion::ReviewedTasks | ExportSchemaVersion::RecordOrigins
+    ) {
         columns.push(Arc::new(StringArray::from_iter(
             rows.iter().map(|r| r.task_json.as_deref()),
         )));
     } else if rows.iter().any(|r| r.task_json.is_some()) {
         return Err(crate::artifact::integrity(
             "older export schema cannot represent task provenance",
+        ));
+    }
+    if version == ExportSchemaVersion::RecordOrigins {
+        if rows.iter().any(|r| r.origin_json.is_none()) {
+            return Err(crate::artifact::integrity("v4 requires origin_json"));
+        }
+        columns.push(Arc::new(StringArray::from_iter(
+            rows.iter().map(|r| r.origin_json.as_deref()),
+        )));
+    } else if rows.iter().any(|r| r.origin_json.is_some()) {
+        return Err(crate::artifact::integrity(
+            "older export schema cannot contain origin_json",
         ));
     }
     Ok(RecordBatch::try_new(export_schema(version)?, columns)?)
@@ -277,12 +310,14 @@ pub(crate) fn write_parquet<W: std::io::Write + Send>(
 /// #         tags: vec![],
 /// #         messages: vec![plain(Role::User, Content::Text("read it".into())), calling_turn, result_turn],
 /// #         tools: None,
-/// #         provenance: Provenance { run_id: "run-1".into(), parent_ids: vec![],
+/// #         origin: gw_schema::RecordOrigin::Generated(Box::new(gw_schema::GeneratedOrigin {
+/// #             provenance: Provenance { run_id: "run-1".into(), parent_ids: vec![],
 /// #             teacher: gw_schema::TeacherRef { provider: "openrouter".into(),
 /// #                 slug: "toy/teacher".into(), served_by: None, model_card_revision: None },
 /// #             user_synth_model: None, user_turn_kind: None, in_scope_safe: None,
 /// #             judge_models: vec![], harness_version: "0.1.0".into(), git_commit: None },
 /// #         generation: Default::default(),
+/// #         })),
 /// #         task_provenance: None,
 /// #         verification_contract: None,
 /// #         execution_evidence: None,
@@ -353,11 +388,15 @@ pub async fn export_parquet_bytes(
 /// Preference preparation reuses this predicate for its chosen side without admitting negatives
 /// into SFT export.
 pub fn is_selected_admitted(record: &TrainingRecord) -> bool {
-    record.judging.verdict == Some(Verdict::Admit)
-        && matches!(
-            record.lifecycle.state,
-            LifecycleState::Admitted | LifecycleState::Formatted | LifecycleState::Exported
-        )
+    (match &record.origin {
+        gw_schema::RecordOrigin::Generated(_) => record.judging.verdict == Some(Verdict::Admit),
+        gw_schema::RecordOrigin::ReviewedReference(_) => {
+            crate::reference_records::validate_record(record).is_ok()
+        }
+    }) && matches!(
+        record.lifecycle.state,
+        LifecycleState::Admitted | LifecycleState::Formatted | LifecycleState::Exported
+    )
 }
 
 /// BLAKE3 of the sorted per-row `record_hash`es — a stable, order-independent content hash of the

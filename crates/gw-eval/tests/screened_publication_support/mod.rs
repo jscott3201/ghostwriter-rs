@@ -26,8 +26,7 @@ impl Drop for Temp {
 }
 pub async fn setup(rows: &[TrainingRecord], out: &Temp) -> Store {
     let store = Store::open(out.0.join("store.sqlite")).await.unwrap();
-    let runs: std::collections::BTreeSet<_> =
-        rows.iter().map(|row| &row.provenance.run_id).collect();
+    let runs: std::collections::BTreeSet<_> = rows.iter().map(|row| row.run_id()).collect();
     for run in runs {
         store.insert_historical_run(run, "{}", None).await.unwrap();
     }

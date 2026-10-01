@@ -451,7 +451,15 @@ fn preference_identity_and_source_evidence_change_independently_of_content() {
                     .reason = "different authority evidence".into()
             }
             5 => changed.lifecycle.state = LifecycleState::Formatted,
-            6 => changed.provenance.teacher.model_card_revision = Some("new revision".into()),
+            6 => {
+                changed
+                    .origin
+                    .generated_mut()
+                    .expect("generated fixture")
+                    .provenance
+                    .teacher
+                    .model_card_revision = Some("new revision".into())
+            }
             _ => {
                 changed.reasoning_quality = Some(ReasoningQuality {
                     reasoning_score: Some(0.8),
@@ -564,10 +572,23 @@ fn preference_rejects_same_identity_cross_run_and_cross_area() {
         let (chosen, mut rejected) = pair();
         match field {
             0 => rejected.record_id = chosen.record_id.clone(),
-            1 => rejected.provenance.run_id = "different run".into(),
+            1 => {
+                rejected
+                    .origin
+                    .generated_mut()
+                    .expect("generated record")
+                    .provenance
+                    .run_id = "different run".into()
+            }
             2 => rejected.training_area = "different area".into(),
             3 => rejected.record_id.clear(),
-            _ => rejected.provenance.run_id.clear(),
+            _ => rejected
+                .origin
+                .generated_mut()
+                .expect("generated record")
+                .provenance
+                .run_id
+                .clear(),
         }
         if let Ok(snapshot) = capture_preference_source(&rejected) {
             let mut evidence = assessment(&chosen, &record("placeholder", "43", 0.3));

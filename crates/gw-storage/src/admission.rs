@@ -52,7 +52,7 @@ impl Store {
         }
         let mut tx = self.pool().begin_with("BEGIN IMMEDIATE").await?;
         let existing: Option<crate::run_manifest::StoredManifest> = sqlx::query_as(
-            "SELECT config_json, shard_count, prompts_hash FROM runs WHERE run_id = ?",
+            "SELECT config_json, shard_count, prompts_hash, run_kind FROM runs WHERE run_id = ?",
         )
         .bind(request.run_id)
         .fetch_optional(&mut *tx)

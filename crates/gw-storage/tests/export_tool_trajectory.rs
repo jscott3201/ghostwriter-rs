@@ -134,23 +134,25 @@ fn tool_record(record_id: &str, run_id: &str, verdict: Option<Verdict>) -> Train
         tags: vec!["tool-use".into()],
         messages: content_variants(),
         tools: None,
-        provenance: Provenance {
-            run_id: run_id.into(),
-            parent_ids: vec![],
-            teacher: gw_schema::TeacherRef {
-                provider: "openrouter".into(),
-                slug: "z-ai/glm-5.2".into(),
-                served_by: Some("Parasail".into()),
-                model_card_revision: None,
+        origin: gw_schema::RecordOrigin::Generated(Box::new(gw_schema::GeneratedOrigin {
+            provenance: Provenance {
+                run_id: run_id.into(),
+                parent_ids: vec![],
+                teacher: gw_schema::TeacherRef {
+                    provider: "openrouter".into(),
+                    slug: "z-ai/glm-5.2".into(),
+                    served_by: Some("Parasail".into()),
+                    model_card_revision: None,
+                },
+                user_synth_model: None,
+                user_turn_kind: None,
+                in_scope_safe: Some(true),
+                judge_models: vec![],
+                harness_version: "0.1.0".into(),
+                git_commit: None,
             },
-            user_synth_model: None,
-            user_turn_kind: None,
-            in_scope_safe: Some(true),
-            judge_models: vec![],
-            harness_version: "0.1.0".into(),
-            git_commit: None,
-        },
-        generation: Default::default(),
+            generation: Default::default(),
+        })),
         task_provenance: None,
         verification_contract: None,
         execution_evidence: None,
@@ -631,7 +633,7 @@ async fn unsettled_sibling_group_exports_no_rows() {
 ///    applies unchanged here.
 /// 2. The v1 shard shape (a parallel `reasoning_json` column) is gone rather than kept in step. It
 ///    is a documented, versioned break: a manifest written by this build names
-///    [`ExportSchemaVersion::ReviewedTasks`], and a manifest without that key reads back as v1,
+///    [`ExportSchemaVersion::CURRENT`], and a manifest without that key reads back as v1,
 ///    so a reader can tell which contract a file was written under.
 #[tokio::test]
 async fn export_records_what_it_cannot_preserve() {
@@ -650,10 +652,7 @@ async fn export_records_what_it_cannot_preserve() {
 
     // (2) The versioned transition: the shard names its contract, and the drifting parallel column
     // is not carried forward.
-    assert_eq!(
-        manifest.column_schema_version,
-        ExportSchemaVersion::ReviewedTasks
-    );
+    assert_eq!(manifest.column_schema_version, ExportSchemaVersion::CURRENT);
     let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes))
         .unwrap()
         .build()

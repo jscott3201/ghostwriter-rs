@@ -38,7 +38,12 @@ impl Fixture {
                     true,
                     &format!("p{prompt}"),
                 );
-                candidate.generation.completion_index = Some(index);
+                candidate
+                    .origin
+                    .generated_mut()
+                    .expect("generated record")
+                    .generation
+                    .completion_index = Some(index);
                 candidate.messages[1].content =
                     Content::Text(format!("independent candidate answer {index}"));
                 records.push(candidate);

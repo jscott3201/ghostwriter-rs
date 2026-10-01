@@ -97,7 +97,12 @@ fn repeated_prompt_occurrences_never_inflate_the_independent_count() {
     let (mut records, _) = corpus(100, true);
     for (index, record) in records.iter_mut().enumerate() {
         record.messages[0].content = Content::Text("one repeated prompt".into());
-        record.generation.completion_index = Some(index as u32);
+        record
+            .origin
+            .generated_mut()
+            .expect("generated record")
+            .generation
+            .completion_index = Some(index as u32);
     }
     let values: Vec<_> = (0..records.len())
         .map(|i| if i % 2 == 0 { 1.0 } else { 0.0 })

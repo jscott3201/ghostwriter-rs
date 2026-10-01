@@ -7,21 +7,20 @@ use serde::{Deserialize, Serialize};
 
 use crate::cost::Cost;
 use crate::execution_evidence::ExecutionEvidence;
-use crate::generation::Generation;
 use crate::hashes::Hashes;
 use crate::judging::Judging;
 use crate::lifecycle::Lifecycle;
 use crate::message::Message;
-use crate::provenance::Provenance;
 use crate::reasoning_quality::ReasoningQuality;
 use crate::verification::Verification;
 use crate::verification_contract::VerificationContract;
 
-/// The canonical training-record envelope. Required fields (JSON-Schema §1.12): `record_id`,
-/// `schema_version`, `training_area`, `messages`, `provenance`, `generation`, `lifecycle`.
+/// The canonical training-record envelope. Shared required fields are `record_id`,
+/// `schema_version`, `training_area`, `messages` and `lifecycle`. Generated-v1 records carry
+/// `provenance` and `generation`; reviewed references carry the strict versioned `origin`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TrainingRecord {
-    /// ULID / UUIDv7 (time-sortable).
+    /// Stable record identity: generation IDs or a reference batch/member content digest.
     pub record_id: String,
     /// Pinned `"1.0.0"` for v1.
     pub schema_version: semver::Version,
@@ -39,8 +38,9 @@ pub struct TrainingRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<serde_json::Value>>,
 
-    pub provenance: Provenance,
-    pub generation: Generation,
+    /// Actual origin, using the explicit generated-v1 or strict reference envelope codec.
+    #[serde(flatten)]
+    pub origin: crate::RecordOrigin,
     /// Reviewed task provenance, absent for plain prompts and historical records.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_provenance: Option<crate::TaskProvenance>,
@@ -72,4 +72,12 @@ pub struct TrainingRecord {
     pub hashes: Hashes,
     #[serde(default)]
     pub cost: Cost,
+}
+
+impl TrainingRecord {
+    /// Ledger partition without assuming a teacher or generation event.
+    #[must_use]
+    pub fn run_id(&self) -> &str {
+        self.origin.run_id()
+    }
 }

@@ -10,6 +10,15 @@ use serde_json::Value;
 use crate::error::Result;
 use crate::store::{Store, now_rfc3339};
 
+/// The activity actually represented by a run ledger row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunKind {
+    /// Model generation with its historical or pinned generation manifest.
+    Generated,
+    /// A complete registered reference import, with no generation manifest.
+    ReviewedReference,
+}
+
 /// A run's coarse status in the ledger. Stored as its snake_case wire string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunStatus {
@@ -47,6 +56,23 @@ pub struct ResumePoint {
 }
 
 impl Store {
+    /// Read the actual ledger kind without inventing a generation configuration.
+    ///
+    /// # Errors
+    /// Rejects unsupported persisted kinds or storage errors.
+    pub async fn run_kind(&self, run_id: &str) -> Result<Option<RunKind>> {
+        let kind: Option<String> = sqlx::query_scalar("SELECT run_kind FROM runs WHERE run_id=?")
+            .bind(run_id)
+            .fetch_optional(self.pool())
+            .await?;
+        match kind.as_deref() {
+            None => Ok(None),
+            Some("generated") => Ok(Some(RunKind::Generated)),
+            Some("reviewed_reference") => Ok(Some(RunKind::ReviewedReference)),
+            Some(_) => Err(crate::artifact::integrity("unsupported run kind")),
+        }
+    }
+
     /// Insert historical/imported run metadata for provider-free inspection and export.
     /// This never overwrites an existing row and does not authorize execution. Historical rows
     /// without a supported semantic manifest must use a new run ID for generation.

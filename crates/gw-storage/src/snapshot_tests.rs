@@ -47,12 +47,13 @@ fn plan(version: ExportSchemaVersion, empty: bool) -> ExportPlan {
 }
 
 #[test]
-fn snapshot_golden_artifacts_cover_empty_nonempty_v2_v3_and_raw_unicode() {
+fn snapshot_golden_artifacts_cover_empty_nonempty_v2_v3_v4_and_raw_unicode() {
     let fixture_root =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../adapters/trl/tests/fixtures");
     for (version, name) in [
         (ExportSchemaVersion::CanonicalMessages, "v2"),
         (ExportSchemaVersion::ReviewedTasks, "v3"),
+        (ExportSchemaVersion::RecordOrigins, "v4"),
     ] {
         for empty in [false, true] {
             let plan = plan(version, empty);
@@ -70,6 +71,11 @@ fn snapshot_golden_artifacts_cover_empty_nonempty_v2_v3_and_raw_unicode() {
             let file_name = format!("{name}-{}.parquet", if empty { "empty" } else { "text" });
             // Explicit regeneration only; ordinary tests never modify fixture files.
             if let Some(output) = std::env::var_os("GW_REGENERATE_TRL_FIXTURES") {
+                std::fs::write(Path::new(&output).join(&file_name), &encoded).unwrap();
+            }
+            if version == ExportSchemaVersion::RecordOrigins
+                && let Some(output) = std::env::var_os("GW_REGENERATE_ORIGIN_TRL_FIXTURES")
+            {
                 std::fs::write(Path::new(&output).join(&file_name), &encoded).unwrap();
             }
             let frozen = std::fs::read(fixture_root.join(&file_name)).unwrap();
@@ -122,7 +128,7 @@ fn snapshot_large_and_reviewed_task_fixtures() {
     large.artifact.manifest.n_admitted = 1025;
     large.artifact.manifest.build_inputs_hash = shard_content_hash(&large.rows);
     large.artifact.artifact_id = artifact_identity(&large.artifact, &large.rows).unwrap();
-    let reviewed = ExportPlan::prepare(
+    let mut reviewed = ExportPlan::prepare(
         &[super::task_tests::task_record("reviewed-task")],
         ExportOptions {
             target: TrlFormat::ChatML,
@@ -132,6 +138,11 @@ fn snapshot_large_and_reviewed_task_fixtures() {
         },
     )
     .unwrap();
+    reviewed.artifact.manifest.column_schema_version = ExportSchemaVersion::ReviewedTasks;
+    for row in &mut reviewed.rows {
+        row.origin_json = None;
+    }
+    reviewed.artifact.artifact_id = artifact_identity(&reviewed.artifact, &reviewed.rows).unwrap();
     for (name, plan) in [("v3-many.parquet", large), ("v3-task.parquet", reviewed)] {
         let mut encoded = Vec::new();
         write_parquet(&plan.rows, &plan.artifact, &mut encoded).unwrap();
@@ -161,7 +172,7 @@ fn snapshot_heldout_task_fixtures_remain_valid_artifacts() {
     ] {
         let mut record = super::task_tests::task_record("heldout-task");
         record.task_provenance.as_mut().unwrap().split.role = role;
-        let plan = ExportPlan::prepare(
+        let mut plan = ExportPlan::prepare(
             &[record],
             ExportOptions {
                 target: TrlFormat::ChatML,
@@ -171,6 +182,11 @@ fn snapshot_heldout_task_fixtures_remain_valid_artifacts() {
             },
         )
         .unwrap();
+        plan.artifact.manifest.column_schema_version = ExportSchemaVersion::ReviewedTasks;
+        for row in &mut plan.rows {
+            row.origin_json = None;
+        }
+        plan.artifact.artifact_id = artifact_identity(&plan.artifact, &plan.rows).unwrap();
         let mut encoded = Vec::new();
         write_parquet(&plan.rows, &plan.artifact, &mut encoded).unwrap();
         let file_name = format!("v3-{name}.parquet");

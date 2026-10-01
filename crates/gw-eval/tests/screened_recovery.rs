@@ -75,7 +75,13 @@ async fn excluded_inputs_and_all_in_scope_membership_changes_invalidate_prepared
             let history = store.lifecycle_history("a").await.unwrap();
             let mut changed = original[1].clone();
             match mutation {
-                "parent" => changed.provenance.parent_ids.push("a".into()),
+                "parent" => changed
+                    .origin
+                    .generated_mut()
+                    .expect("generated fixture")
+                    .provenance
+                    .parent_ids
+                    .push("a".into()),
                 "split" => {
                     changed.task_provenance.as_mut().unwrap().split.role = TaskSplitRole::Test
                 }
@@ -149,7 +155,7 @@ async fn excluded_aggregate_and_outside_run_addition_preserve_exact_prepared_rec
     store.replace_record_for_import(&changed).await.unwrap();
     let outside = record("outside", "irrelevant run question");
     store
-        .insert_historical_run(&outside.provenance.run_id, "{}", None)
+        .insert_historical_run(outside.run_id(), "{}", None)
         .await
         .unwrap();
     store.replace_record_for_import(&outside).await.unwrap();

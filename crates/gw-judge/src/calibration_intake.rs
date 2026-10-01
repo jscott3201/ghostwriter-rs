@@ -64,7 +64,7 @@ pub(crate) fn validate(
     }
     let mut actual = BTreeMap::new();
     for record in records {
-        let key = (&record.provenance.run_id, &record.record_id);
+        let key = (record.run_id(), &record.record_id);
         if actual.insert(key, record).is_some() {
             state.invalid(format!(
                 "duplicate loaded candidate {} in run {}",
@@ -85,7 +85,7 @@ pub(crate) fn validate(
             state.incomplete(format!("{name} partition must be nonempty"));
         }
         for row in rows {
-            let key = (&row.candidate.run_id, &row.candidate.record_id);
+            let key = (row.candidate.run_id.as_str(), &row.candidate.record_id);
             let context = format!("{name} candidate {} in run {}", key.1, key.0);
             if !candidates.insert(key) {
                 state.invalid(format!("{context}: duplicate candidate membership"));

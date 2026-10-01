@@ -48,7 +48,7 @@ async fn unchanged_judge_request_reuses_its_grade_across_runs() {
             .await
             .unwrap();
         assert_eq!(records.len(), 1);
-        assert_eq!(records[0].provenance.run_id, run_id);
+        assert_eq!(records[0].run_id(), run_id);
         let panel = records[0].judging.panel.clone();
         assert_eq!(panel.len(), 1);
         let audit: serde_json::Value =

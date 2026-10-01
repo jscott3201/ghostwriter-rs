@@ -95,6 +95,13 @@ recovery cannot guarantee remote exactly-once execution.
 `Error` is terminal-until-requeue: a faulted record carries its last error and attempt count, and a
 re-run picks it back up.
 
+### Reviewed reference imports
+
+`gw reference register`, `import`, and `export` provide an explicit local registration and
+atomic native-verified path for a complete 112-member reference population. All 48 held-out
+members remain in private storage. See [reviewed reference imports](docs/reviewed-references.md)
+for the capture, review, execution and publication contracts.
+
 ### Local coding evaluation
 
 `gw eval coding` evaluates a reviewed saved Python function using a cached, pinned
@@ -325,8 +332,8 @@ that replaces stale output. Publication failure fails the run; success events an
 acknowledgment. Standalone `gen export` leaves generation states unchanged.
 
 The authoritative footer key is `ghostwriter.export_artifact`. Metadata version 1 wraps the existing
-manifest, scope and `artifact_id`. New artifacts use the nine-column `reviewed_tasks` schema;
-frozen `canonical_messages` publications preserve their eight-column contract during recovery.
+manifest, scope and `artifact_id`. New artifacts use the ten-column `record_origins` schema.
+Frozen v2 `canonical_messages` and v3 `reviewed_tasks` publications preserve their original columns and identities during recovery.
 `gw_storage::verify_artifact` reads every batch and returns an explicit `MissingLegacyMetadata` result
 for historical files without this entry. Ordinary Parquet row readers can still read those files.
 No adjacent file is used to infer metadata.
@@ -347,7 +354,9 @@ For independent implementations of metadata identity version 1:
    `messages_json`. For column schema v3, use context
    `ghostwriter.export.projected-row.v2-reviewed-tasks`, encode those same fields, then append a
    task presence byte and framed canonical `task_json` when present. Encode the digest as lowercase
-   hexadecimal. Task JSON uses typed fields and recursively sorted object keys.
+   hexadecimal. For v4, use context `ghostwriter.export.projected-row.v3-record-origins`,
+   retain the v3 framing and append framed canonical `origin_json` (always present).
+   Task and origin JSON use strict typed fields and recursively sorted object keys.
 3. Hash the artifact with context `ghostwriter.export.artifact.v1`: unsigned 32-bit big-endian
    `metadata_version`; framed scope JSON; framed complete manifest JSON; unsigned 64-bit big-endian
    row count; each framed hexadecimal row digest in sorted order. Scope and manifest JSON use the
@@ -827,10 +836,12 @@ consumer decodes it straight back into `Message[]`. (The historical v1 `{role, c
 parallel `reasoning_json` pair was lossy — `reasoning_json` is gone, and `column_schema_version` in
 the manifest records which contract a shard was written under.) The CoT policy and the target are
 recorded as manifest metadata so a downstream trainer applies the matching loss mask and template.
-Current exports use column schema v3 (`reviewed_tasks`), which adds nullable `task_json`. It contains
+Current exports use column schema v4 (`record_origins`), adding required `origin_json` to v3's
+nullable `task_json`. Generated origin is explicit; reviewed references carry stable registration,
+batch, member, code and native-result bindings without fictitious teachers or judge scores. Task JSON contains
 typed task provenance plus the exact verification contract, validated against the row's prompt.
 Plain prompts have null task provenance. Task declarations participate in row and artifact identity.
-Verification and receipt recovery continue to honor v2's exact eight-column contract and hash
+Verification and receipt recovery continue to honor v2/v3's exact original columns and hash
 framing. A prepared or acknowledged publication keeps its stored column version, identity, selected
 members, and acknowledgment history when restored or republished; it is never upgraded during
 recovery. A v2 receipt rejects selected records that acquired task provenance after preparation.

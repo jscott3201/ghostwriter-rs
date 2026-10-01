@@ -58,7 +58,12 @@ async fn run_filter_cannot_silently_drop_declared_members() {
         store.replace_record_for_import(record).await.unwrap();
     }
     let mut other_run = candidate(999, 0, Some(1.0));
-    other_run.provenance.run_id = "run-2".into();
+    other_run
+        .origin
+        .generated_mut()
+        .expect("generated record")
+        .provenance
+        .run_id = "run-2".into();
     store.replace_record_for_import(&other_run).await.unwrap();
     let all = analyze_store(
         &store,

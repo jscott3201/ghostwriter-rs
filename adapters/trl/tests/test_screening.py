@@ -23,13 +23,14 @@ def encode(table, artifact):
     return sink.getvalue().to_pybytes()
 
 
+@pytest.mark.parametrize("prefix", ["screened", "v4-screened"])
 @pytest.mark.parametrize("kind,turns,count", [
     ("all", "all_assistant", 4), ("final", "final_turn_only", 2),
     ("empty", "all_assistant", 0), ("empty-final", "final_turn_only", 0),
     ("collision-a", "final_turn_only", 1), ("collision-b", "final_turn_only", 1),
 ])
-def test_screened_artifacts_preserve_bound_components_and_source_only_qualification(gw, fixture_dir, tokenizer, kind, turns, count):
-    snapshot = read_snapshot(fixture_dir / f"screened-{kind}.parquet", gw)
+def test_screened_artifacts_preserve_bound_components_and_source_only_qualification(gw, fixture_dir, tokenizer, kind, turns, count, prefix):
+    snapshot = read_snapshot(fixture_dir / f"{prefix}-{kind}.parquet", gw)
     artifact = snapshot.report["artifact"]
     witness = artifact["screening"]
     assert artifact["metadata_version"] == 3

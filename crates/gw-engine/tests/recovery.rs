@@ -50,7 +50,11 @@ async fn seed_assistant_generated(
         model_card_revision: None,
     };
     let mut rec = assemble(&ctx, &gated, turn, teacher_ref, call.generation(), None);
-    rec.generation.sibling_group_id = Some(prompt_hash(&rec.messages).unwrap());
+    rec.origin
+        .generated_mut()
+        .expect("generated record")
+        .generation
+        .sibling_group_id = Some(prompt_hash(&rec.messages).unwrap());
     store.replace_record_for_import(&rec).await.unwrap();
     store.get(record_id).await.unwrap()
 }
@@ -290,7 +294,11 @@ async fn seed_assistant_generated_named(
         model_card_revision: None,
     };
     let mut rec = assemble(&ctx, &gated, turn, teacher_ref, call.generation(), None);
-    rec.generation.sibling_group_id = Some(prompt_hash(&rec.messages).unwrap());
+    rec.origin
+        .generated_mut()
+        .expect("generated record")
+        .generation
+        .sibling_group_id = Some(prompt_hash(&rec.messages).unwrap());
     store.replace_record_for_import(&rec).await.unwrap();
     store.get(record_id).await.unwrap()
 }

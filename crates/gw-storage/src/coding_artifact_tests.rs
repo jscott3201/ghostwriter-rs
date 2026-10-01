@@ -29,7 +29,7 @@ fn coding_projection_roundtrips_without_private_oracles() {
             record
         })
         .collect::<Vec<_>>();
-    let plan = ExportPlan::prepare(
+    let mut plan = ExportPlan::prepare(
         &records,
         ExportOptions {
             target: TrlFormat::ChatML,
@@ -70,6 +70,14 @@ fn coding_projection_roundtrips_without_private_oracles() {
         verify_artifact_snapshot(bytes.clone()).unwrap().artifact,
         plan.artifact
     );
+    // Preserve the literal historical coding fixtures while also checking the current roundtrip.
+    plan.artifact.manifest.column_schema_version = ExportSchemaVersion::ReviewedTasks;
+    for row in &mut plan.rows {
+        row.origin_json = None;
+    }
+    plan.artifact.artifact_id = artifact_identity(&plan.artifact, &plan.rows).unwrap();
+    bytes.clear();
+    write_parquet(&plan.rows, &plan.artifact, &mut bytes).unwrap();
     let name = "v3-coding.parquet";
     if let Some(output) = std::env::var_os("GW_REGENERATE_TRL_FIXTURES") {
         std::fs::write(Path::new(&output).join(name), bytes).unwrap();

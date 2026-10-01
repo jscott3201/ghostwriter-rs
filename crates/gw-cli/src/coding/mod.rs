@@ -8,6 +8,7 @@ mod containment_tests;
 #[cfg(all(test, unix))]
 mod lifecycle_tests;
 mod process;
+pub(crate) mod reference;
 mod runtime;
 #[cfg(test)]
 mod tests;
@@ -25,6 +26,11 @@ use tokio_util::sync::CancellationToken;
 
 /// Opaque non-deserializable runtime result. Private construction prevents caller-supplied reports
 /// from reaching the new positive consumer. Dropping the evaluation future cancels its supervisor.
+///
+/// Saved declarations cannot be decoded into fresh runtime authority:
+/// ```compile_fail
+/// let observed: gw_cli::coding::ObservedCodingRun = serde_json::from_str("{}").unwrap();
+/// ```
 pub struct ObservedCodingRun {
     input: CapturedCodingInput,
     run_id: String,

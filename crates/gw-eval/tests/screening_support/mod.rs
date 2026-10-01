@@ -34,30 +34,32 @@ pub fn record(id: &str, prompt: &str) -> TrainingRecord {
         dataset_version: None,
         training_area: "synthetic-screening".into(),
         tags: vec![],
-        generation: Generation {
-            n_completions: Some(1),
-            completion_index: Some(0),
-            sibling_group_id: Some(gw_storage::prompt_hash(&messages).unwrap()),
-            ..Default::default()
-        },
-        messages,
+        messages: messages.clone(),
         tools: None,
-        provenance: Provenance {
-            run_id: format!("run-{id}"),
-            parent_ids: vec![],
-            teacher: TeacherRef {
-                provider: "fixture".into(),
-                slug: "synthetic".into(),
-                served_by: None,
-                model_card_revision: None,
+        origin: gw_schema::RecordOrigin::Generated(Box::new(gw_schema::GeneratedOrigin {
+            provenance: Provenance {
+                run_id: format!("run-{id}"),
+                parent_ids: vec![],
+                teacher: TeacherRef {
+                    provider: "fixture".into(),
+                    slug: "synthetic".into(),
+                    served_by: None,
+                    model_card_revision: None,
+                },
+                user_synth_model: None,
+                user_turn_kind: None,
+                in_scope_safe: Some(true),
+                judge_models: vec![],
+                harness_version: "fixture".into(),
+                git_commit: None,
             },
-            user_synth_model: None,
-            user_turn_kind: None,
-            in_scope_safe: Some(true),
-            judge_models: vec![],
-            harness_version: "fixture".into(),
-            git_commit: None,
-        },
+            generation: Generation {
+                n_completions: Some(1),
+                completion_index: Some(0),
+                sibling_group_id: Some(gw_storage::prompt_hash(&messages).unwrap()),
+                ..Default::default()
+            },
+        })),
         task_provenance: Some(TaskProvenance::from_task(&task).unwrap()),
         verification_contract: Some(task.verification.contract()),
         execution_evidence: None,
@@ -78,7 +80,7 @@ pub fn record(id: &str, prompt: &str) -> TrainingRecord {
 
 pub fn key(record: &TrainingRecord) -> ScreeningRecordId {
     ScreeningRecordId {
-        run_id: record.provenance.run_id.clone(),
+        run_id: record.run_id().to_owned(),
         record_id: record.record_id.clone(),
     }
 }
@@ -97,9 +99,13 @@ pub fn declaration(records: &[TrainingRecord]) -> ScreeningDeclaration {
                 .or_default()
                 .push(key(record));
         }
-        if let Some(group) = &record.generation.sibling_group_id {
+        if let Some(group) = record
+            .origin
+            .generated()
+            .and_then(|g| g.generation.sibling_group_id.as_ref())
+        {
             siblings
-                .entry((record.provenance.run_id.clone(), group.clone()))
+                .entry((record.run_id().to_owned(), group.clone()))
                 .or_default()
                 .push(key(record));
         }
@@ -109,16 +115,16 @@ pub fn declaration(records: &[TrainingRecord]) -> ScreeningDeclaration {
         runs: DeclaredRunSet {
             run_ids: records
                 .iter()
-                .map(|r| r.provenance.run_id.clone())
+                .map(|r| r.run_id().to_owned())
                 .collect::<std::collections::BTreeSet<_>>()
                 .into_iter()
                 .collect(),
         },
         output: ScreeningOutputScope {
-            run_id: records[0].provenance.run_id.clone(),
+            run_id: records[0].run_id().to_owned(),
             record_ids: records
                 .iter()
-                .filter(|r| r.provenance.run_id == records[0].provenance.run_id)
+                .filter(|r| r.run_id() == records[0].run_id())
                 .map(|r| r.record_id.clone())
                 .collect(),
         },
@@ -209,5 +215,10 @@ pub fn rebind_task(record: &mut TrainingRecord) {
     };
     record.task_provenance = Some(TaskProvenance::from_task(&task).unwrap());
     record.verification_contract = Some(task.verification.contract());
-    record.generation.sibling_group_id = Some(gw_storage::prompt_hash(&record.messages).unwrap());
+    record
+        .origin
+        .generated_mut()
+        .expect("generated record")
+        .generation
+        .sibling_group_id = Some(gw_storage::prompt_hash(&record.messages).unwrap());
 }

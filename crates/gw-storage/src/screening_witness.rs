@@ -136,7 +136,10 @@ pub(crate) fn validate(artifact: &ExportArtifact, rows: &[crate::export::Project
     let declaration = &plan.declaration;
     plan_identity(plan, 0)?;
     if witness.version != 2
-        || artifact.manifest.column_schema_version != ExportSchemaVersion::ReviewedTasks
+        || !matches!(
+            artifact.manifest.column_schema_version,
+            ExportSchemaVersion::ReviewedTasks | ExportSchemaVersion::RecordOrigins
+        )
         || artifact.scope
             != (ExportScope::Run {
                 run_id: declaration.output.run_id.clone(),
@@ -238,7 +241,16 @@ pub(crate) fn validate(artifact: &ExportArtifact, rows: &[crate::export::Project
             .iter()
             .find(|binding| binding.record == member.record)
             .ok_or_else(|| integrity("screened row input binding missing"))?;
-        if binding.record_hash != row.record_hash || row.verdict.as_deref() != Some("admit") {
+        let origin = row
+            .origin_json
+            .as_ref()
+            .map(|json| serde_json::from_str::<ExportRecordOrigin>(json))
+            .transpose()?;
+        let expected_verdict = match origin {
+            Some(ExportRecordOrigin::ReviewedReference(_)) => None,
+            _ => Some("admit"),
+        };
+        if binding.record_hash != row.record_hash || row.verdict.as_deref() != expected_verdict {
             return Err(integrity(
                 "screened row record hash or admitted verdict contradicts its source binding",
             ));
@@ -270,7 +282,15 @@ pub(crate) fn validate(artifact: &ExportArtifact, rows: &[crate::export::Project
             &messages,
             Some(&task.provenance),
             Some(&task.verification_contract),
-            Some(Verdict::Admit),
+            row.verdict
+                .as_ref()
+                .map(|v| serde_json::from_value(serde_json::Value::String(v.clone())))
+                .transpose()?,
+            row.origin_json
+                .as_ref()
+                .map(|json| serde_json::from_str::<ExportRecordOrigin>(json))
+                .transpose()?
+                .as_ref(),
         )?;
         if projected != binding.export_projection_id
             || group.split.as_ref() != Some(&task.provenance.split)

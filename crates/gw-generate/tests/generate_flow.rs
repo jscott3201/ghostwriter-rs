@@ -205,7 +205,12 @@ async fn assistant_assembly_keeps_reasoning_a_sibling_of_clean_content() {
     assert_eq!(rec.lifecycle.state, LifecycleState::AssistantGenerated);
     assert_eq!(rec.messages.len(), 2);
     assert_eq!(
-        rec.provenance.user_turn_kind.as_deref(),
+        rec.origin
+            .generated()
+            .expect("generated fixture")
+            .provenance
+            .user_turn_kind
+            .as_deref(),
         Some("numeric_match")
     );
     // hashes left at default — gw-storage is authoritative.
@@ -275,10 +280,31 @@ async fn best_of_k_fan_out_produces_distinct_indexed_siblings() {
     assert_eq!(provider.call_count(), k as usize);
     assert_eq!(records.len(), k as usize);
     for (i, rec) in records.iter().enumerate() {
-        assert_eq!(rec.generation.completion_index, Some(i as u32));
-        assert_eq!(rec.generation.n_completions, Some(k));
+        assert_eq!(
+            rec.origin
+                .generated()
+                .expect("generated record")
+                .generation
+                .completion_index,
+            Some(i as u32)
+        );
+        assert_eq!(
+            rec.origin
+                .generated()
+                .expect("generated record")
+                .generation
+                .n_completions,
+            Some(k)
+        );
         // sibling_group_id is the engine's to fill from prompt_hash.
-        assert_eq!(rec.generation.sibling_group_id, None);
+        assert_eq!(
+            rec.origin
+                .generated()
+                .expect("generated record")
+                .generation
+                .sibling_group_id,
+            None
+        );
     }
 
     // Per-sibling sampling actually VARIED: the seeds sent to the provider are all distinct.
@@ -371,10 +397,22 @@ async fn adversarial_refusal_expected_turn_is_gated_in_and_generates() {
         None,
     );
     assert_eq!(
-        rec.provenance.user_turn_kind.as_deref(),
+        rec.origin
+            .generated()
+            .expect("generated fixture")
+            .provenance
+            .user_turn_kind
+            .as_deref(),
         Some("refusal_expected")
     );
-    assert_eq!(rec.provenance.in_scope_safe, Some(true));
+    assert_eq!(
+        rec.origin
+            .generated()
+            .expect("generated fixture")
+            .provenance
+            .in_scope_safe,
+        Some(true)
+    );
 }
 
 #[tokio::test]

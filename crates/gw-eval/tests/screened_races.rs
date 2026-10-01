@@ -98,7 +98,7 @@ async fn held_writer_committing_a_new_sibling_before_ack_prevents_any_partial_tr
     added.lifecycle.state = LifecycleState::Rejected;
     added.judging.verdict = Some(Verdict::Reject);
     sqlx::query("INSERT INTO records(record_id,run_id,lifecycle_state,verdict,judge_aggregate,record_hash,prompt_hash,record_json,updated_at) VALUES(?,?,'rejected','reject',NULL,?,?,?,'fixture')")
-        .bind(&added.record_id).bind(&added.provenance.run_id).bind(&added.hashes.record_hash).bind(&added.hashes.prompt_hash).bind(serde_json::to_string(&added).unwrap()).execute(&mut *writer).await.unwrap();
+        .bind(&added.record_id).bind(added.run_id()).bind(&added.hashes.record_hash).bind(&added.hashes.prompt_hash).bind(serde_json::to_string(&added).unwrap()).execute(&mut *writer).await.unwrap();
     let publisher = store.clone();
     let resume_id = id.clone();
     let task = tokio::spawn(async move { publisher.resume_export(&resume_id).await });

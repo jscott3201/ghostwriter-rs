@@ -79,6 +79,11 @@ def build(snapshot: VerifiedSnapshot, tokenizer, *, cot: str, turns: str, max_le
     for row in rows:
         source = {key: row[key] for key in ("record_id", "record_hash", "prompt_hash", "messages_json")}
         source["task_json"] = row.get("task_json")
+        origin = None
+        if "origin_json" in row:
+            from .origin import row_origin
+            origin = row_origin(row)
+            source["origin_json"] = row["origin_json"]
         source["artifact_id"] = source_artifact["artifact_id"]
         # The record itself is the grouping boundary available here. Split membership stays unknown.
         source["group_kind"] = "source_record"
@@ -91,6 +96,9 @@ def build(snapshot: VerifiedSnapshot, tokenizer, *, cot: str, turns: str, max_le
             if declarations["split"]["role"] != "train":
                 rejections.append({"record_id": row["record_id"], "target_index": None, "reason": "declared held-out task role is excluded from SFT training preparation"})
                 continue
+        if origin is not None and origin["kind"] == "reviewed_reference":
+            source["group_kind"] = "reviewed_reference_component"
+            source["group_id"] = identity(["ghostwriter.reference-component.v1", origin["catalogue_id"], origin["component"]])
         if screening is not None:
             member = components[row["record_id"]]
             source["group_kind"] = "screened_connected_component"
