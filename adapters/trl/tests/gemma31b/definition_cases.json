@@ -1,0 +1,6 @@
+[
+  {
+    "tool":{"type":"function","function":{"name":"aggregate","description":"Combine samples","parameters":{"type":"object","properties":{"mode":{"type":"string","enum":["brief","full"]},"samples":{"type":"array","description":"Numeric samples","items":{"type":"object","properties":{"label":{"type":"string","description":""},"value":{"type":"number"}},"required":["value"]}},"settings":{"type":"object","properties":{"enabled":{"type":"boolean"},"missing":{"type":"null"}},"required":["enabled"]}},"required":["mode"]}}},
+    "rendered":"<|tool>declaration:aggregate{description:<|\"|>Combine samples<|\"|>,parameters:{properties:{mode:{enum:[<|\"|>brief<|\"|>,<|\"|>full<|\"|>],type:<|\"|>STRING<|\"|>},samples:{description:<|\"|>Numeric samples<|\"|>,items:{properties:{label:{type:<|\"|>STRING<|\"|>},value:{type:<|\"|>NUMBER<|\"|>}},required:[<|\"|>value<|\"|>],type:<|\"|>OBJECT<|\"|>},type:<|\"|>ARRAY<|\"|>},settings:{properties:{enabled:{type:<|\"|>BOOLEAN<|\"|>},missing:{type:<|\"|>NULL<|\"|>}},required:[<|\"|>enabled<|\"|>],type:<|\"|>OBJECT<|\"|>}},required:[<|\"|>mode<|\"|>],type:<|\"|>OBJECT<|\"|>}}<tool|>"
+  }
+]

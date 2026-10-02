@@ -22,6 +22,11 @@ gemma-e2b = [
   "huggingface-hub==1.31.0", "trl==1.14.1", "datasets==4.7.0",
   "accelerate==1.4.0", "torch==2.8.0", "torchvision==0.23.0", "pillow==12.3.0",
 ]
+gemma-31b-tools = [
+  "transformers==5.18.0", "tokenizers==0.23.2", "safetensors==0.8.0",
+  "huggingface-hub==1.31.0", "trl==1.14.1", "datasets==4.7.0",
+  "accelerate==1.4.0", "torch==2.8.0", "torchvision==0.23.0", "pillow==12.3.0",
+]
 gemma-lora = [
   "transformers==5.18.0", "tokenizers==0.23.2", "safetensors==0.8.0",
   "huggingface-hub==1.31.0", "trl==1.14.1", "datasets==4.7.0",
@@ -30,6 +35,7 @@ gemma-lora = [
 ]
 
 [project.scripts]
+ghostwriter-trl-gemma31b = "ghostwriter_trl.gemma31b.cli:main"
 ghostwriter-trl = "ghostwriter_trl.cli:main"
 ghostwriter-trl-train = "ghostwriter_trl.training.cli:main"
 ghostwriter-trl-cuda-lora = "ghostwriter_trl.cuda_lora.cli:main"
@@ -39,6 +45,7 @@ ghostwriter-trl-compare = "ghostwriter_trl.comparison.cli:main"
 [tool.setuptools.package-data]
 ghostwriter_trl = ["*.json"]
 "ghostwriter_trl.profiles" = ["*.json"]
+"ghostwriter_trl.gemma31b" = ["*.json"]
 "ghostwriter_trl.lora" = ["*.json"]
 "ghostwriter_trl.comparison" = ["*.json"]
 "ghostwriter_trl.cuda_lora" = ["*.json"]

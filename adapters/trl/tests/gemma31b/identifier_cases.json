@@ -1,0 +1,15 @@
+[
+  {"value":"lookup","accepted":true},
+  {"value":"_","accepted":true},
+  {"value":"A_9","accepted":true},
+  {"value":"a0Z","accepted":true},
+  {"value":"Ⅰ","accepted":false},
+  {"value":"é","accepted":false},
+  {"value":"κλειδί","accepted":false},
+  {"value":"a²","accepted":false},
+  {"value":"a中","accepted":false},
+  {"value":"3foo","accepted":false},
+  {"value":"a-b","accepted":false},
+  {"value":"a:b","accepted":false},
+  {"value":"","accepted":false}
+]

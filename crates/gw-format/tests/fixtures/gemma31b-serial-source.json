@@ -1,0 +1,14 @@
+{
+  "tools": [{"type":"function","function":{"name":"lookup","description":"Look up source text","parameters":{"type":"object","properties":{"query":{"type":"string"},"options":{"type":"object","properties":{}}},"required":["query"]}}}],
+  "messages": [
+    {"role":"system","content":"Use the supplied tool and explain the result."},
+    {"role":"user","content":"Compare café, é, 中 and 🙂."},
+    {"role":"assistant","content":null,"reasoning":"Read the first observation.","tool_calls":[{"id":"call-a","function":{"name":"lookup","arguments":{"query":"café é 中 🙂","options":{"mixed":[null,true,3,1.5,"line\ntext",{"key":"κλειδί value"}]}},"raw_arguments":"RETAINED_RAW_ONLY <|tool_call>"}}]},
+    {"role":"tool","content":"EXTERNAL_ONLY_α\nfirst result","tool_call_id":"call-a","name":"lookup"},
+    {"role":"assistant","content":"","reasoning":"Read the second observation before comparing.","tool_calls":[{"id":"call-b","function":{"name":"lookup","arguments":{"query":"second"}}}]},
+    {"role":"tool","content":"EXTERNAL_ONLY_β second result","tool_call_id":"call-b"},
+    {"role":"assistant","content":"The two observations agree.","reasoning":"Both returned the requested source text."},
+    {"role":"user","content":"Summarize in one sentence."},
+    {"role":"assistant","content":"Both lookups returned consistent source text.","reasoning":"Keep the summary short."}
+  ]
+}

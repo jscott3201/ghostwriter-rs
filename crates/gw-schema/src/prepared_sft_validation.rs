@@ -64,6 +64,7 @@ impl PreparedSftPayload {
         let mut context = 0;
         let mut shifted = 0;
         let mut answers = 0;
+        let mut calls = 0;
         for example in &self.examples {
             if !hex(&example.example_id)
                 || !ids.insert(&example.example_id)
@@ -78,6 +79,10 @@ impl PreparedSftPayload {
             context += example.context_tokens;
             shifted += example.effective_shifted_supervised_tokens;
             answers += example.shifted_answer_token_indices.len() as u64;
+            calls += example
+                .shifted_call_token_indices
+                .as_ref()
+                .map_or(0, |v| v.len() as u64);
         }
         let mut rejections = HashSet::new();
         for item in &manifest.rejections {
@@ -116,6 +121,8 @@ impl PreparedSftPayload {
             || manifest.context_token_count != context
             || manifest.effective_shifted_supervised_token_count != shifted
             || manifest.effective_shifted_answer_token_count != answers
+            || manifest.effective_shifted_call_token_count
+                != crate::prepared_gemma31b::is_profile(&manifest.recipe).then_some(calls)
         {
             return Err("prepared SFT counts or ordered example references are contradictory");
         }
@@ -367,6 +374,12 @@ fn validate_limits(value: &Value, screened: bool) -> Result<(), &'static str> {
 
 impl PreparedSftExample {
     fn validate(&self, vocab: u32, recipe: &PreparedSftRecipe) -> Result<(), &'static str> {
+        let serial_tools = crate::prepared_gemma31b::is_profile(recipe);
+        if serial_tools {
+            crate::prepared_gemma31b::validate(self, recipe)?;
+        } else if self.target_kind.is_some() || self.shifted_call_token_indices.is_some() {
+            return Err("text profiles cannot declare call target evidence");
+        }
         let length = self.input_ids.len();
         let characters: Vec<_> = self.rendered.chars().collect();
         if let Some(profile) = &recipe.preparation_profile {
@@ -394,6 +407,10 @@ impl PreparedSftExample {
         for span in &self.spans {
             let expected = match span.kind.as_str() {
                 "answer" | "end" => span.message_index == self.target_index,
+                "call" | "call_wrapper" | "handoff" if serial_tools => {
+                    span.message_index == self.target_index
+                }
+                "definition" | "observation" if serial_tools => false,
                 "reasoning" | "reasoning_wrapper" => {
                     span.message_index == self.target_index
                         && recipe.cot_policy == CotPolicy::Supervised
@@ -421,6 +438,7 @@ impl PreparedSftExample {
             return Err("incomplete prepared SFT ownership ledger");
         }
         let mut answer_indices = Vec::new();
+        let mut call_indices = Vec::new();
         let mut previous = 0;
         for index in 0..length {
             let [raw_start, raw_end] = self.offset_mapping[index];
@@ -465,16 +483,25 @@ impl PreparedSftExample {
             }
             if index > 0
                 && owner.supervised
-                && kinds == ["answer"]
+                && (kinds == ["answer"] || (serial_tools && kinds == ["call"]))
                 && characters[start as usize..end as usize]
                     .iter()
                     .any(|c| !python_whitespace(*c))
             {
-                answer_indices.push(index as u64);
+                if kinds == ["call"] {
+                    call_indices.push(index as u64);
+                } else {
+                    answer_indices.push(index as u64);
+                }
             }
         }
         let supervised = self.labels.iter().filter(|label| **label != -100).count() as u64;
-        if answer_indices.is_empty()
+        if ((!serial_tools || self.target_kind.as_deref() == Some("text_answer"))
+            && answer_indices.is_empty())
+            || (serial_tools
+                && self.target_kind.as_deref() == Some("tool_call")
+                && call_indices.is_empty())
+            || self.shifted_call_token_indices != serial_tools.then_some(call_indices)
             || answer_indices != self.shifted_answer_token_indices
             || self.supervised_tokens != supervised
             || self.context_tokens != length as u64 - supervised
