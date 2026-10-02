@@ -65,7 +65,10 @@ mod user_synth;
 pub use user_synth::user_qc_contract;
 
 pub use assemble::{RecordContext, assemble};
-pub use assistant::{AccumulatedStream, AssistantTurn, accumulate, generate_turn};
+mod tool_calls;
+pub use assistant::{
+    AccumulatedStream, AssistantTurn, accumulate, generate_turn, generate_turn_observed,
+};
 pub use embedder::{Embedder, EmbeddingFuture, NullEmbedder};
 pub use error::{GenerateError, Result};
 pub use request::{ReasoningPolicy, SamplingPreset, TeacherCall};
@@ -74,6 +77,7 @@ pub use teacher::{
     FixedTeacher, Teacher, TeacherSelector, routing_to_provider, routing_to_reasoning,
     routing_to_sampling,
 };
+pub use tool_calls::StreamedToolCalls;
 pub use user_synth::{
     DEFAULT_COSINE_THRESHOLD, GatedUserTurn, UserSeed, UserTurnCandidate, cosine, gate,
     user_message,

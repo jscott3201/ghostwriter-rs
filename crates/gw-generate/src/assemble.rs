@@ -286,6 +286,8 @@ mod tests {
 
     fn turn() -> AssistantTurn {
         AssistantTurn {
+            resolved_model: None,
+            native_finish_reason: None,
             message: Message {
                 role: Role::Assistant,
                 content: Content::Text("96".into()),

@@ -28,6 +28,8 @@ impl ProfileInput {
 /// A requested control value, separate from configured capability claims.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ControlValue {
+    /// Native function definitions and selection controls, applied as one capability.
+    Tools(crate::ToolConfig),
     /// Shared canonical sampling vocabulary, without provider-extension serialization.
     Sampling(JudgeSampling),
     /// Positive combined output-token cap.
@@ -169,7 +171,7 @@ pub fn prepare_request(
                 validate_message(message, &profile.behavior)?;
             }
             (
-                json!({"model":semantics.alias,"messages":messages,"stream":true}),
+                json!({"model":semantics.alias,"messages":crate::wire_messages(messages).map_err(|_| ProfileError::InvalidRequest)?,"stream":true}),
                 "chat/completions",
             )
         }
@@ -236,10 +238,11 @@ pub(super) fn semantics_complete(value: &ModelExecutionSemantics) -> bool {
 }
 
 fn validate_message(message: &Message, behavior: &ProfileBehavior) -> Result<()> {
-    if message.role == Role::Tool
+    if (message.role == Role::Tool
         || message.tool_calls.is_some()
         || message.tool_call_id.is_some()
-        || message.name.is_some()
+        || message.name.is_some())
+        && !behavior.supports(ProfileControl::Tools)
         || matches!(message.content, Content::Parts(_))
         || (message.reasoning.is_some() || message.reasoning_details.is_some())
             && message.role != Role::Assistant

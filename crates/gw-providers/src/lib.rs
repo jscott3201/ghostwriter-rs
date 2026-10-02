@@ -76,6 +76,7 @@ mod request;
 mod retry;
 pub mod serving_profile;
 mod sse;
+mod tools;
 
 use std::pin::Pin;
 
@@ -98,6 +99,10 @@ pub use observation::{
 pub use request::{ChatRequest, ProviderRouting, ReasoningParam, SortStrategy, UsageRequest};
 pub use retry::{RetryPolicy, retry, retry_with};
 pub use sse::decode_sse;
+pub use tools::{
+    FunctionDefinition, FunctionDelta, ToolCallDelta, ToolChoice, ToolConfig, ToolDefinition,
+    wire_messages,
+};
 
 /// The boxed, `Send` stream of decoded deltas returned by [`Provider::stream_chat`].
 pub type DeltaStream = Pin<Box<dyn Stream<Item = Result<StreamDelta, ProviderError>> + Send>>;
