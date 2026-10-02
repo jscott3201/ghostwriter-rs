@@ -97,6 +97,9 @@ pub async fn dispatch(cli: Cli) -> anyhow::Result<CommandOutcome> {
             RewardCommand::Evaluate { .. } => commands::reward::evaluate_stdin(),
         }
         .map(|()| CommandOutcome::Success),
+        Command::Artifact(ArtifactCommand::VerifyCudaLora { .. }) => {
+            commands::artifact::verify_cuda_lora_stdin().map(|()| CommandOutcome::Success)
+        }
         Command::Artifact(ArtifactCommand::VerifyLora { .. }) => {
             commands::artifact::verify_lora_stdin().map(|()| CommandOutcome::Success)
         }

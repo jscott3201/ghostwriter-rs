@@ -174,3 +174,7 @@ pub use coding_population::CapturedCodingPopulation;
 
 #[cfg(test)]
 mod reference_tests;
+
+mod cuda_lora_checkpoint;
+mod cuda_state;
+pub use cuda_lora_checkpoint::{CudaLoraCheckpointReport, verify_cuda_lora_checkpoint};

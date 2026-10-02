@@ -77,6 +77,12 @@ pub enum ArtifactCommand {
         #[arg(long, required = true)]
         stdin: bool,
     },
+    /// Inspect the explicitly versioned CUDA Gemma checkpoint without running a model.
+    VerifyCudaLora {
+        /// Require one complete captured binary stream.
+        #[arg(long, required = true)]
+        stdin: bool,
+    },
     /// Inspect one complete Gemma q/v LoRA completion without running a model.
     VerifyLora {
         /// Require one complete captured binary stream.

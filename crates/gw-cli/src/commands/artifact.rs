@@ -50,3 +50,13 @@ pub fn verify_lora_stdin() -> anyhow::Result<()> {
     println!("{}", serde_json::to_string(&report)?);
     Ok(())
 }
+
+/// Stream the distinct CUDA checkpoint domain and report measured source/tensor evidence.
+///
+/// # Errors
+/// Rejects malformed framing, changed source bytes or unsupported CUDA state declarations.
+pub fn verify_cuda_lora_stdin() -> anyhow::Result<()> {
+    let report = gw_storage::verify_cuda_lora_checkpoint(std::io::stdin().lock())?;
+    println!("{}", serde_json::to_string(&report)?);
+    Ok(())
+}
