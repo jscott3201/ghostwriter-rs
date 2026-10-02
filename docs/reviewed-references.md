@@ -80,7 +80,9 @@ without advancing lifecycle. Engine publication accepts generated records. Seria
 origin fields alone cannot authorize publication, and references cannot be inserted through
 ordinary record insertion or fixture replacement.
 
-New Parquet uses v4 `record_origins`: v3 columns plus required strict canonical `origin_json`.
+New Parquet uses v5 `tool_definitions`: v3 columns plus required strict canonical `origin_json`
+and nullable canonical `tools_json`. Existing v4 `record_origins` artifacts retain their
+original identity and recovery contract.
 References expose stable catalogue, registration, batch, member, module, suite and native
 result bindings, declared actor categories, component and use. Judge verdict/aggregate are
 null and reasoning-token cost is zero. Reference down-projection to old column versions

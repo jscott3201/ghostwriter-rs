@@ -158,6 +158,13 @@ pub struct PreparedSftExampleSource {
     /// Exact version-four origin projection; absent only for historical source artifacts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin_json: Option<String>,
+    /// Exact v5 tools payload: outer absence means a historical artifact; inner null means no tools.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_tools"
+    )]
+    pub tools_json: Option<Option<String>>,
     /// Logical source artifact ID.
     pub artifact_id: String,
     /// Source-record, declared-task-group, or screened-component grouping basis.
@@ -279,4 +286,10 @@ fn required_option<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(
     deserializer: D,
 ) -> Result<Option<T>, D::Error> {
     Option::<T>::deserialize(deserializer)
+}
+
+fn present_tools<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Option<String>>, D::Error> {
+    Option::<String>::deserialize(deserializer).map(Some)
 }

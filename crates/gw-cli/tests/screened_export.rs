@@ -168,8 +168,8 @@ async fn actual_screened_cli_publication_generates_verified_consumer_golden_arti
             .await
             .unwrap();
         assert_eq!(std::fs::read(out.artifact()).unwrap(), bytes);
-        let name = format!("v4-screened-{case}.parquet");
-        if let Some(destination) = std::env::var_os("GW_REGENERATE_SCREENED_TRL_FIXTURES") {
+        let name = format!("v5-screened-{case}.parquet");
+        if let Some(destination) = std::env::var_os("GW_REGENERATE_TOOL_FIXTURES") {
             std::fs::write(std::path::Path::new(&destination).join(&name), &bytes).unwrap();
         }
         let golden =

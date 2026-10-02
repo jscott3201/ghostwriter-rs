@@ -200,6 +200,10 @@ fn validate_source(
         || source.messages_json != row.messages_json
         || source.task_json != row.task_json
         || source.origin_json != row.origin_json
+        || source.tools_json
+            != (artifact.manifest.column_schema_version
+                == gw_schema::ExportSchemaVersion::ToolDefinitions)
+                .then(|| row.tools_json.clone())
     {
         return Err(integrity(
             "prepared SFT source row differs from actual captured Parquet",

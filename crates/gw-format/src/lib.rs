@@ -98,6 +98,7 @@ mod preference;
 mod projection;
 mod render;
 mod tool_links;
+mod tool_training;
 mod validate;
 
 pub use error::{FormatError, Result, ToolCallRecovery, ToolSignal};
@@ -106,3 +107,5 @@ pub use preference::{PreferenceMessages, project_preference_messages};
 pub use projection::{SftProjection, SftTrainingUnit, project_sft, project_sft_units};
 pub use render::render;
 pub use tool_links::validate_tool_links;
+
+pub use tool_training::{validate_tool_projection_delimiters, validate_tool_training_source};

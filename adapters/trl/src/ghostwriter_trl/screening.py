@@ -51,7 +51,7 @@ def consumer_screening(artifact, cot, turns):
     manifest = artifact["manifest"]
     policy = witness["plan"]["declaration"]["policy"]
     layout = "assistant_prefix_v1" if turns == "all_assistant" else "full_conversation_final_v1"
-    if (manifest["column_schema_version"] not in {"reviewed_tasks", "record_origins"}
+    if (manifest["column_schema_version"] not in {"reviewed_tasks", "record_origins", "tool_definitions"}
             or manifest["target"] != "open_ai_messages" or policy["target"] != "open_ai_messages"
             or policy["cot_policy"] != cot or manifest["cot_policy"] != cot
             or policy["multi_turn_loss"] != turns or manifest["multi_turn_loss"] != turns

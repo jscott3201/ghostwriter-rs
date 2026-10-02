@@ -1,0 +1,13 @@
+{
+  "tools": [{"type":"function","function":{"name":"lookup","description":"Look up nested values","parameters":{"type":"object","properties":{"query":{"type":"string"},"options":{"type":"object","additionalProperties":true}},"required":["query"]}}}],
+  "messages": [
+    {"role":"user","content":"Look up two values"},
+    {"role":"assistant","content":null,"reasoning":"Use two independent lookups","tool_calls":[
+      {"id":"a","function":{"name":"lookup","arguments":{"query":"first","options":{"mixed":[null,true,3,1.5,"text",{"unicode":"中🙂"}]}},"raw_arguments":"{ \"query\": \"first\", \"options\": {\"mixed\":[null,true,3,1.5,\"text\",{\"unicode\":\"中🙂\"}]}}"}},
+      {"id":"b","function":{"name":"lookup","arguments":{"query":"second"}}}
+    ]},
+    {"role":"tool","content":"second result","tool_call_id":"b","name":"lookup"},
+    {"role":"tool","content":"first result","tool_call_id":"a","name":"lookup"},
+    {"role":"assistant","content":"Both found","reasoning":"Both calls returned"}
+  ]
+}

@@ -54,6 +54,7 @@ fn snapshot_golden_artifacts_cover_empty_nonempty_v2_v3_v4_and_raw_unicode() {
         (ExportSchemaVersion::CanonicalMessages, "v2"),
         (ExportSchemaVersion::ReviewedTasks, "v3"),
         (ExportSchemaVersion::RecordOrigins, "v4"),
+        (ExportSchemaVersion::ToolDefinitions, "v5"),
     ] {
         for empty in [false, true] {
             let plan = plan(version, empty);
@@ -75,6 +76,11 @@ fn snapshot_golden_artifacts_cover_empty_nonempty_v2_v3_v4_and_raw_unicode() {
             }
             if version == ExportSchemaVersion::RecordOrigins
                 && let Some(output) = std::env::var_os("GW_REGENERATE_ORIGIN_TRL_FIXTURES")
+            {
+                std::fs::write(Path::new(&output).join(&file_name), &encoded).unwrap();
+            }
+            if version == ExportSchemaVersion::ToolDefinitions
+                && let Some(output) = std::env::var_os("GW_REGENERATE_TOOL_FIXTURES")
             {
                 std::fs::write(Path::new(&output).join(&file_name), &encoded).unwrap();
             }

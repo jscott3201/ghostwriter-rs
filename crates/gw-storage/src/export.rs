@@ -18,6 +18,8 @@
 //! agree with the first by index.
 //!
 //! v3 adds nullable canonical `task_json` with reviewed task provenance and its numeric contract.
+//! v4 adds strict `origin_json`; v5 adds nullable canonical `tools_json` for the complete tool
+//! definitions. Absent tools stay SQL null, distinct from an explicit empty JSON list.
 //! The schema, projection, row identity, and writer follow the artifact's stored column version;
 //! v2 receipt recovery continues to use its exact original eight-column projection.
 //!
@@ -63,6 +65,7 @@ pub(crate) struct Projected {
     pub messages_json: String,
     pub task_json: Option<String>,
     pub origin_json: Option<String>,
+    pub tools_json: Option<String>,
 }
 
 /// Project a record into its export row. `messages_json` is the canonical conversation, serialized
@@ -73,14 +76,16 @@ pub(crate) struct Projected {
 /// `record_hash` falls back to a freshly computed content hash when the envelope's own hash is
 /// empty, so an externally-constructed record can never export `record_hash = ""`.
 pub(crate) fn project(rec: &TrainingRecord, version: ExportSchemaVersion) -> Result<Projected> {
-    if rec.origin.generated().is_none() && version != ExportSchemaVersion::RecordOrigins {
+    if rec.origin.generated().is_none() && version < ExportSchemaVersion::RecordOrigins {
         return Err(crate::artifact::integrity(
             "reference origin cannot be down-projected",
         ));
     }
     crate::reference_records::validate_record(rec)?;
     let task_json = match version {
-        ExportSchemaVersion::ReviewedTasks | ExportSchemaVersion::RecordOrigins => rec
+        ExportSchemaVersion::ReviewedTasks
+        | ExportSchemaVersion::RecordOrigins
+        | ExportSchemaVersion::ToolDefinitions => rec
             .task_provenance
             .as_ref()
             .map(|task| {
@@ -128,10 +133,22 @@ pub(crate) fn project(rec: &TrainingRecord, version: ExportSchemaVersion) -> Res
         reasoning_tokens: rec.cost.reasoning_tokens,
         messages_json: canonical_messages_json(&rec.messages)?,
         task_json,
-        origin_json: (version == ExportSchemaVersion::RecordOrigins)
+        tools_json: if version == ExportSchemaVersion::ToolDefinitions {
+            rec.tools.as_deref().map(canonical_tools_json).transpose()?
+        } else {
+            None
+        },
+        origin_json: (version >= ExportSchemaVersion::RecordOrigins)
             .then(|| canonical_origin_json(&rec.origin.projection()))
             .transpose()?,
     })
+}
+
+/// Encode definitions losslessly with recursively sorted object keys.
+pub(crate) fn canonical_tools_json(tools: &[serde_json::Value]) -> Result<String> {
+    let mut value = serde_json::to_value(tools)?;
+    value.sort_all_objects();
+    Ok(serde_json::to_string(&value)?)
 }
 
 pub(crate) fn canonical_origin_json(origin: &gw_schema::ExportRecordOrigin) -> Result<String> {
@@ -184,9 +201,11 @@ pub(crate) fn export_schema(version: ExportSchemaVersion) -> Result<Arc<Schema>>
         Field::new("messages_json", DataType::Utf8, false),
     ];
     match version {
-        ExportSchemaVersion::ReviewedTasks | ExportSchemaVersion::RecordOrigins => {
+        ExportSchemaVersion::ReviewedTasks
+        | ExportSchemaVersion::RecordOrigins
+        | ExportSchemaVersion::ToolDefinitions => {
             fields.push(Field::new("task_json", DataType::Utf8, true));
-            if version == ExportSchemaVersion::RecordOrigins {
+            if version >= ExportSchemaVersion::RecordOrigins {
                 fields.push(Field::new("origin_json", DataType::Utf8, false));
             }
         }
@@ -196,6 +215,9 @@ pub(crate) fn export_schema(version: ExportSchemaVersion) -> Result<Arc<Schema>>
                 "unsupported export column schema version",
             ));
         }
+    }
+    if version == ExportSchemaVersion::ToolDefinitions {
+        fields.push(Field::new("tools_json", DataType::Utf8, true));
     }
     Ok(Arc::new(Schema::new(fields)))
 }
@@ -230,7 +252,9 @@ pub(crate) fn build_batch(rows: &[Projected], version: ExportSchemaVersion) -> R
     ];
     if matches!(
         version,
-        ExportSchemaVersion::ReviewedTasks | ExportSchemaVersion::RecordOrigins
+        ExportSchemaVersion::ReviewedTasks
+            | ExportSchemaVersion::RecordOrigins
+            | ExportSchemaVersion::ToolDefinitions
     ) {
         columns.push(Arc::new(StringArray::from_iter(
             rows.iter().map(|r| r.task_json.as_deref()),
@@ -240,7 +264,7 @@ pub(crate) fn build_batch(rows: &[Projected], version: ExportSchemaVersion) -> R
             "older export schema cannot represent task provenance",
         ));
     }
-    if version == ExportSchemaVersion::RecordOrigins {
+    if version >= ExportSchemaVersion::RecordOrigins {
         if rows.iter().any(|r| r.origin_json.is_none()) {
             return Err(crate::artifact::integrity("v4 requires origin_json"));
         }
@@ -250,6 +274,15 @@ pub(crate) fn build_batch(rows: &[Projected], version: ExportSchemaVersion) -> R
     } else if rows.iter().any(|r| r.origin_json.is_some()) {
         return Err(crate::artifact::integrity(
             "older export schema cannot contain origin_json",
+        ));
+    }
+    if version == ExportSchemaVersion::ToolDefinitions {
+        columns.push(Arc::new(StringArray::from_iter(
+            rows.iter().map(|r| r.tools_json.as_deref()),
+        )));
+    } else if rows.iter().any(|r| r.tools_json.is_some()) {
+        return Err(crate::artifact::integrity(
+            "older export schema cannot contain tools_json",
         ));
     }
     Ok(RecordBatch::try_new(export_schema(version)?, columns)?)

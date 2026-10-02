@@ -126,6 +126,9 @@ fn frame(hash: &mut Hasher, bytes: &[u8]) {
 }
 
 pub(crate) fn projected_hash(row: &Projected, version: ExportSchemaVersion) -> Result<String> {
+    if version < ExportSchemaVersion::ToolDefinitions && row.tools_json.is_some() {
+        return Err(integrity("older projected row cannot contain tools_json"));
+    }
     let domain = match version {
         ExportSchemaVersion::CanonicalMessages
             if row.task_json.is_none() && row.origin_json.is_none() =>
@@ -137,6 +140,9 @@ pub(crate) fn projected_hash(row: &Projected, version: ExportSchemaVersion) -> R
         }
         ExportSchemaVersion::RecordOrigins if row.origin_json.is_some() => {
             "ghostwriter.export.projected-row.v3-record-origins"
+        }
+        ExportSchemaVersion::ToolDefinitions if row.origin_json.is_some() => {
+            "ghostwriter.export.projected-row.v4-tool-definitions"
         }
         _ => return Err(integrity("unsupported projected row/schema combination")),
     };
@@ -171,7 +177,9 @@ pub(crate) fn projected_hash(row: &Projected, version: ExportSchemaVersion) -> R
     frame(&mut hash, row.messages_json.as_bytes());
     if matches!(
         version,
-        ExportSchemaVersion::ReviewedTasks | ExportSchemaVersion::RecordOrigins
+        ExportSchemaVersion::ReviewedTasks
+            | ExportSchemaVersion::RecordOrigins
+            | ExportSchemaVersion::ToolDefinitions
     ) {
         match &row.task_json {
             Some(value) => {
@@ -183,7 +191,7 @@ pub(crate) fn projected_hash(row: &Projected, version: ExportSchemaVersion) -> R
             }
         }
     }
-    if version == ExportSchemaVersion::RecordOrigins {
+    if version >= ExportSchemaVersion::RecordOrigins {
         frame(
             &mut hash,
             row.origin_json
@@ -191,6 +199,17 @@ pub(crate) fn projected_hash(row: &Projected, version: ExportSchemaVersion) -> R
                 .expect("v4 origin presence checked")
                 .as_bytes(),
         );
+    }
+    if version == ExportSchemaVersion::ToolDefinitions {
+        match &row.tools_json {
+            Some(value) => {
+                hash.update(&[1]);
+                frame(&mut hash, value.as_bytes());
+            }
+            None => {
+                hash.update(&[0]);
+            }
+        }
     }
     Ok(hash.finalize().to_hex().to_string())
 }
@@ -386,18 +405,25 @@ fn read_batch(batch: &RecordBatch, version: ExportSchemaVersion) -> Result<Vec<P
     let messages = string(7)?;
     let tasks = if matches!(
         version,
-        ExportSchemaVersion::ReviewedTasks | ExportSchemaVersion::RecordOrigins
+        ExportSchemaVersion::ReviewedTasks
+            | ExportSchemaVersion::RecordOrigins
+            | ExportSchemaVersion::ToolDefinitions
     ) {
         Some(string(8)?)
     } else {
         None
     };
-    let origins = if version == ExportSchemaVersion::RecordOrigins {
+    let origins = if version >= ExportSchemaVersion::RecordOrigins {
         let column = string(9)?;
         if column.null_count() != 0 {
             return Err(integrity("null origin in v4 row"));
         }
         Some(column)
+    } else {
+        None
+    };
+    let tools = if version == ExportSchemaVersion::ToolDefinitions {
+        Some(string(10)?)
     } else {
         None
     };
@@ -426,6 +452,17 @@ fn read_batch(batch: &RecordBatch, version: ExportSchemaVersion) -> Result<Vec<P
                     ));
                 }
             }
+            let tools_json = tools
+                .filter(|column| !column.is_null(i))
+                .map(|column| column.value(i).to_owned());
+            if let Some(json) = &tools_json {
+                let parsed: Vec<serde_json::Value> = serde_json::from_str(json)?;
+                if crate::export::canonical_tools_json(&parsed)? != *json {
+                    return Err(integrity(
+                        "tools projection must use its exact canonical typed JSON",
+                    ));
+                }
+            }
             Ok(Projected {
                 record_id: ids.value(i).into(),
                 training_area: areas.value(i).into(),
@@ -436,6 +473,7 @@ fn read_batch(batch: &RecordBatch, version: ExportSchemaVersion) -> Result<Vec<P
                 reasoning_tokens: tokens.value(i),
                 messages_json: messages.value(i).into(),
                 task_json,
+                tools_json,
                 origin_json: origins.map(|column| column.value(i).to_owned()),
             })
         })
@@ -462,3 +500,7 @@ mod snapshot_tests;
 #[cfg(test)]
 #[path = "screened_artifact_tests.rs"]
 mod screened_tests;
+
+#[cfg(test)]
+#[path = "tool_artifact_tests.rs"]
+mod tool_tests;
