@@ -332,8 +332,10 @@ that replaces stale output. Publication failure fails the run; success events an
 acknowledgment. Standalone `gen export` leaves generation states unchanged.
 
 The authoritative footer key is `ghostwriter.export_artifact`. Metadata version 1 wraps the existing
-manifest, scope and `artifact_id`. New artifacts use the ten-column `record_origins` schema.
-Frozen v2 `canonical_messages` and v3 `reviewed_tasks` publications preserve their original columns and identities during recovery.
+manifest, scope and `artifact_id`. New artifacts use the eleven-column v5 `tool_definitions`
+schema: the ten v4 `record_origins` columns plus nullable `tools_json`. Frozen v2
+`canonical_messages`, v3 `reviewed_tasks`, and v4 `record_origins` publications preserve their
+original columns and identities during recovery.
 `gw_storage::verify_artifact` reads every batch and returns an explicit `MissingLegacyMetadata` result
 for historical files without this entry. Ordinary Parquet row readers can still read those files.
 No adjacent file is used to infer metadata.
@@ -353,10 +355,16 @@ For independent implementations of metadata identity version 1:
    64-bit big-endian bits when present; unsigned 32-bit big-endian `reasoning_tokens`; framed
    `messages_json`. For column schema v3, use context
    `ghostwriter.export.projected-row.v2-reviewed-tasks`, encode those same fields, then append a
-   task presence byte and framed canonical `task_json` when present. Encode the digest as lowercase
-   hexadecimal. For v4, use context `ghostwriter.export.projected-row.v3-record-origins`,
-   retain the v3 framing and append framed canonical `origin_json` (always present).
-   Task and origin JSON use strict typed fields and recursively sorted object keys.
+   task presence byte and framed canonical `task_json` when present. For v4, use context
+   `ghostwriter.export.projected-row.v3-record-origins`, retain the v3 framing and append framed
+   canonical `origin_json` (always present). For v5, use context
+   `ghostwriter.export.projected-row.v4-tool-definitions`, retain the v4 framing and append a
+   tools presence byte (`0` for SQL null, `1` for a present list), followed by framed canonical
+   `tools_json` when present. An empty list is present: `1` followed by a frame containing `[]`.
+   Encode each final row digest as lowercase hexadecimal. Task and origin JSON use strict typed
+   fields and recursively sorted object keys. Tools JSON preserves definition order and nested
+   JSON values, with recursively sorted object keys, compact separators and UTF-8 strings.
+   Bind the actual exported tools payload even when the stored `record_hash` is unchanged.
 3. Hash the artifact with context `ghostwriter.export.artifact.v1`: unsigned 32-bit big-endian
    `metadata_version`; framed scope JSON; framed complete manifest JSON; unsigned 64-bit big-endian
    row count; each framed hexadecimal row digest in sorted order. Scope and manifest JSON use the
@@ -819,9 +827,9 @@ tool result's `tool_call_id` verbatim. The other four targets (`gemma4`, `chat-m
 `harmony`) have nowhere to put them, so rendering a tool conversation for one **fails closed** with
 a structured error naming the route, the dropped signal and the first offending message — it never
 emits a training target in which a tool turn has been flattened into prose. The supported way to get
-a tool-faithful target is to export the canonical `messages_json` conversation and apply the model's
-official chat template in a consumer that owns that template. Text-only conversations are unaffected
-on every target.
+a tool-faithful target is to export the canonical `messages_json` conversation with its `tools_json`
+definitions and apply the model's official chat template in a consumer that owns that template.
+Text-only conversations are unaffected on every target.
 
 `--cot` records downstream training intent. Every policy preserves the same canonical messages in Parquet:
 
@@ -836,14 +844,18 @@ consumer decodes it straight back into `Message[]`. (The historical v1 `{role, c
 parallel `reasoning_json` pair was lossy — `reasoning_json` is gone, and `column_schema_version` in
 the manifest records which contract a shard was written under.) The CoT policy and the target are
 recorded as manifest metadata so a downstream trainer applies the matching loss mask and template.
-Current exports use column schema v4 (`record_origins`), adding required `origin_json` to v3's
-nullable `task_json`. Generated origin is explicit; reviewed references carry stable registration,
-batch, member, code and native-result bindings without fictitious teachers or judge scores. Task JSON contains
-typed task provenance plus the exact verification contract, validated against the row's prompt.
-Plain prompts have null task provenance. Task declarations participate in row and artifact identity.
-Verification and receipt recovery continue to honor v2/v3's exact original columns and hash
-framing. A prepared or acknowledged publication keeps its stored column version, identity, selected
-members, and acknowledgment history when restored or republished; it is never upgraded during
+Current exports use column schema v5 (`tool_definitions`): v3's nullable `task_json`, v4's required
+`origin_json`, and nullable canonical `tools_json`. SQL null means absent tool definitions; `[]`
+means an explicit empty list. Definition order and nested heterogeneous JSON values survive.
+Generated origin is explicit; reviewed references carry stable registration, batch, member, code
+and native-result bindings without fictitious teachers or judge scores. Reviewed-reference rows
+require absent tools (SQL null); even an explicit empty list contradicts that source contract.
+Task JSON contains typed task provenance plus the exact verification contract, validated against
+the row's prompt. Plain prompts have null task provenance. Task declarations, origin and the actual
+tools payload participate in row and artifact identity. Verification and receipt recovery continue
+to honor v2/v3/v4's exact original columns and hash framing. A prepared or acknowledged publication
+keeps its stored column version, identity, selected members, and acknowledgment history when
+restored or republished; it is never upgraded during
 recovery. A v2 receipt rejects selected records that acquired task provenance after preparation.
 The exporter does not emit token IDs or loss labels and does not qualify official tokenizer,
 truncation, or trainer behavior. TOML format values are `gemma4`, `chatml`, `share_gpt`,

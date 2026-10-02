@@ -306,6 +306,59 @@ async fn old_columns_and_rehashed_inconsistent_origins_cannot_hide_reference_fac
     }
 }
 
+async fn assert_reference_tools_rejected(tools: Vec<serde_json::Value>) {
+    let store = Store::open_in_memory().await.unwrap();
+    let registered = store
+        .register_reference_catalogue(&support::capture())
+        .await
+        .unwrap();
+    let result = store
+        .commit_reference_import(
+            &registered,
+            &observations(&registered),
+            std::future::pending(),
+        )
+        .await
+        .unwrap();
+    let mut plan =
+        ExportPlan::prepare_registered(&result.records, options(registered.batch_id())).unwrap();
+    assert_eq!(
+        plan.artifact.manifest.column_schema_version,
+        ExportSchemaVersion::ToolDefinitions
+    );
+    assert!(plan.rows.iter().all(|row| row.tools_json.is_none()));
+    let mut original = Vec::new();
+    crate::export::write_parquet(&plan.rows, &plan.artifact, &mut original).unwrap();
+    crate::verify_artifact_snapshot(original).unwrap();
+    let original_id = plan.artifact.artifact_id.clone();
+    plan.rows[0].tools_json = Some(crate::export::canonical_tools_json(&tools).unwrap());
+    plan.artifact.artifact_id =
+        crate::artifact::artifact_identity(&plan.artifact, &plan.rows).unwrap();
+    assert_ne!(plan.artifact.artifact_id, original_id);
+    let mut forged = Vec::new();
+    crate::export::write_parquet(&plan.rows, &plan.artifact, &mut forged).unwrap();
+    let checked = crate::verify_artifact_snapshot(forged);
+    assert!(
+        checked.is_err(),
+        "reference row accepted present tools after its outer identity was recomputed"
+    );
+    assert!(checked.unwrap_err().to_string().contains("reference row"));
+}
+
+#[tokio::test]
+async fn reference_rows_reject_rehashed_empty_tools() {
+    assert_reference_tools_rejected(vec![]).await;
+}
+
+#[tokio::test]
+async fn reference_rows_reject_rehashed_nonempty_tools() {
+    assert_reference_tools_rejected(vec![serde_json::json!({
+        "type":"function",
+        "function":{"name":"lookup","parameters":{"type":"object"}}
+    })])
+    .await;
+}
+
 async fn reference_counts(store: &Store) -> (i64, i64, i64, i64, i64) {
     sqlx::query_as("SELECT (SELECT COUNT(*) FROM records), (SELECT COUNT(*) FROM lifecycle_history), (SELECT COUNT(*) FROM reference_members), (SELECT COUNT(*) FROM reference_batches), (SELECT COUNT(*) FROM runs)")
         .fetch_one(store.pool()).await.unwrap()

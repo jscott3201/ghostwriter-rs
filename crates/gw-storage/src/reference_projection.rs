@@ -58,6 +58,7 @@ pub(crate) fn validate(row: &Projected, version: ExportSchemaVersion) -> Result<
         || row.verdict.is_some()
         || row.judge_aggregate.is_some()
         || row.reasoning_tokens != 0
+        || row.tools_json.is_some()
         || answer.role != Role::Assistant
         || answer.reasoning.is_some()
         || answer.reasoning_details.is_some()
