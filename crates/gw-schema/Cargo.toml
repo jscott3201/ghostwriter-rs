@@ -14,5 +14,6 @@ workspace = true
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
+unicode-normalization.workspace = true
 semver.workspace = true
 blake3.workspace = true

@@ -15,6 +15,7 @@ pub mod coding_pair;
 pub mod eval;
 pub mod export;
 pub mod replay;
+pub mod repository_episode;
 pub mod reward;
 pub mod run;
 pub mod screening;

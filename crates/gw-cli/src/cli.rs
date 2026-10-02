@@ -34,7 +34,7 @@ pub enum Command {
     /// Portable reviewed numeric tasks and fresh rewards (no providers, models, or database).
     #[command(subcommand)]
     Reward(RewardCommand),
-    /// Verify a self-contained immutable Parquet snapshot (no providers or database).
+    /// Capture or verify portable artifacts (no providers or database).
     #[command(subcommand)]
     Artifact(ArtifactCommand),
     /// Generation: drive the engine over a seed space (run / tui / export / replay).
@@ -71,6 +71,18 @@ pub enum RewardCommand {
 /// Provider-free artifact commands.
 #[derive(Debug, Subcommand, PartialEq)]
 pub enum ArtifactCommand {
+    /// Capture a declared repository episode without accessing providers, tools, or references.
+    CaptureRepository {
+        /// Require one complete strict JSON request on stdin (32 MiB maximum).
+        #[arg(long, required = true)]
+        stdin: bool,
+    },
+    /// Verify a saved repository episode and emit its declaration-only receipt.
+    VerifyRepository {
+        /// Require one complete captured JSON artifact on stdin (32 MiB maximum).
+        #[arg(long, required = true)]
+        stdin: bool,
+    },
     /// Inspect a complete paired coding artifact without granting model or execution authority.
     VerifyCodingPair {
         /// One complete captured JSON stream.

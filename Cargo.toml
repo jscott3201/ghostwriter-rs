@@ -31,6 +31,7 @@ gw-eval      = { path = "crates/gw-eval" }
 # --- external (versions verified against crates.io 2026-06-19; see _research/06-rust-ratatui-architecture.md) ---
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+unicode-normalization = "0.1.25"
 tokio = { version = "1", features = ["full"] }
 tokio-util = "0.7"
 futures = "0.3"
