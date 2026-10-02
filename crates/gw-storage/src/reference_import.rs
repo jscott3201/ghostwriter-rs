@@ -18,7 +18,7 @@ pub struct ReferenceImportOutcome {
     /// Private Validation/Test member count, never represented as training records.
     pub held_out_count: usize,
 }
-async fn current(
+pub(crate) async fn current(
     tx: &mut Transaction<'_, Sqlite>,
     registered: &RegisteredReferenceCatalogue,
 ) -> Result<Option<ReferenceImportOutcome>> {

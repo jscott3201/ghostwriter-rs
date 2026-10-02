@@ -13,15 +13,59 @@ pub(super) fn interpret(
     run_id: &str,
     cases: &[CodingCaseObservation],
 ) -> VerificationInterpretation {
+    interpret_parts(
+        &input.provenance.identity.digest,
+        &input.task.contract(),
+        input.task.prompt(),
+        &input.code,
+        &input.code_id,
+        run_id,
+        cases,
+    )
+}
+pub(super) fn interpret_public(
+    member: &gw_schema::CodingPopulationMember,
+    code: &str,
+    run_id: &str,
+    cases: &[CodingCaseObservation],
+) -> VerificationInterpretation {
+    let prompt = Message {
+        role: Role::User,
+        content: Content::Text(member.prompt.clone()),
+        reasoning: None,
+        reasoning_details: None,
+        tool_calls: None,
+        tool_call_id: None,
+        name: None,
+    };
+    interpret_parts(
+        &member.provenance.identity.digest,
+        &member.contract(),
+        prompt,
+        code,
+        &gw_schema::coding_digest("ghostwriter.coding-module.v1", code.as_bytes()),
+        run_id,
+        cases,
+    )
+}
+fn interpret_parts(
+    task_id: &str,
+    contract: &gw_schema::VerificationContract,
+    prompt: Message,
+    code: &str,
+    code_id: &str,
+    run_id: &str,
+    cases: &[CodingCaseObservation],
+) -> VerificationInterpretation {
     let outcome = outcome(cases);
     let binding = EvidenceBinding {
-        task: input.provenance.identity.digest.clone(),
+        task: task_id.into(),
         attempt: run_id.into(),
-        patch_hash: input.code_id.clone(),
+        patch_hash: code_id.into(),
     };
     let evidence = ExecutionEvidence {
         outcome,
-        required_tests: input.suite.case_ids.clone(),
+        required_tests: contract.required_tests.clone(),
         cases: cases
             .iter()
             .map(|case| TestCase {
@@ -39,10 +83,10 @@ pub(super) fn interpret(
         binding: binding.clone(),
     };
     let messages = [
-        input.task.prompt(),
+        prompt,
         Message {
             role: Role::Assistant,
-            content: Content::Text(input.code.clone()),
+            content: Content::Text(code.into()),
             reasoning: None,
             reasoning_details: None,
             tool_calls: None,
@@ -50,13 +94,12 @@ pub(super) fn interpret(
             name: None,
         },
     ];
-    let contract = input.task.contract();
     let grade = run_verifier(
         &VerifierInput {
             messages: &messages,
             reasoning_tokens: 0,
             cot_required: false,
-            contract: Some(&contract),
+            contract: Some(contract),
             execution_evidence: Some(&evidence),
             evidence_key: binding,
         },

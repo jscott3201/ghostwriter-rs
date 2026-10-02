@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import platform
 import tempfile
+from weakref import WeakKeyDictionary
 
 from ..artifact import ContractError, strict_json
 from ..build import identity, source_identity
@@ -21,10 +22,12 @@ from .runtime import seeded_runtime
 from .config import check_lora_dependencies
 from ..profiles import GEMMA
 
+_LIVE_COMPLETIONS = WeakKeyDictionary()
+
 
 class ObservedCompletion:
     """Receipt from this actual successful producer call; loading a bundle cannot create it."""
-    __slots__ = ("__state",)
+    __slots__ = ("__state", "__weakref__")
 
     def __new__(cls, *args, **kwargs):
         raise TypeError("observed completion is created only by successful local training")
@@ -181,7 +184,20 @@ def _run_loaded(prepared, tokenizer, loaded, gw, output, *, max_steps=2, batch_s
         raise errors[0][1]
     result = object.__new__(ObservedCompletion)
     object.__setattr__(result, "_ObservedCompletion__state", (completion_id, observed, reloaded))
+    _LIVE_COMPLETIONS[result] = (result._ObservedCompletion__state, Path(output).resolve(),
+                                 recipe["training_source_sha256"], recipe["preparation_source_sha256"])
     return result
+
+
+def _comparison_source(completed):
+    """Resolve only an actual live successful producer receipt and its original publication."""
+    if type(completed) is not ObservedCompletion or completed not in _LIVE_COMPLETIONS:
+        raise ContractError("comparison requires the live owned Gemma LoRA completion")
+    state, path, training_source, preparation_source = _LIVE_COMPLETIONS[completed]
+    if (getattr(completed, "_ObservedCompletion__state", None) is not state
+            or training_source != training_source_identity() or preparation_source != source_identity()):
+        raise ContractError("live completion state or producer source changed")
+    return path, state[0], strict_json(state[1]), state[2].report
 
 
 def train(prepared_path: Path, release_directory: Path, gw: Path, output: Path, **options) -> ObservedCompletion:

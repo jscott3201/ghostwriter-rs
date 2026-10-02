@@ -35,7 +35,7 @@ impl RegisteredReferenceCatalogue {
         &self.validated
     }
 }
-fn registration(capture: &ReferenceCapture) -> Result<RegisteredReferenceCatalogue> {
+pub(crate) fn registration(capture: &ReferenceCapture) -> Result<RegisteredReferenceCatalogue> {
     let validated = capture.validate().map_err(integrity)?;
     let registration_id = id(
         "ghostwriter.reference-registration.v1",

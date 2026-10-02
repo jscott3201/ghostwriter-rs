@@ -168,7 +168,9 @@ mod reference_records;
 pub use reference_import::ReferenceImportOutcome;
 pub use reference_records::ReferenceMemberObservation;
 
+mod coding_population;
 mod reference_projection;
+pub use coding_population::CapturedCodingPopulation;
 
 #[cfg(test)]
 mod reference_tests;

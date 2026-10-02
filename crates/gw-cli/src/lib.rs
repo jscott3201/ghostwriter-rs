@@ -83,6 +83,9 @@ pub async fn run() -> anyhow::Result<CommandOutcome> {
 /// Propagates the dispatched handler's error.
 pub async fn dispatch(cli: Cli) -> anyhow::Result<CommandOutcome> {
     match cli.command {
+        Command::Artifact(ArtifactCommand::VerifyCodingPair { .. }) => {
+            commands::coding_pair::inspect().map(|()| CommandOutcome::Success)
+        }
         Command::Reference(command) => match command {
             cli::ReferenceCommand::Register(args) => commands::reference::register(args).await,
             cli::ReferenceCommand::Import(args) => commands::reference::import(args).await,
@@ -124,6 +127,8 @@ pub async fn dispatch(cli: Cli) -> anyhow::Result<CommandOutcome> {
                 .map(|()| CommandOutcome::Success),
         },
         Command::Eval(eval_cmd) => match eval_cmd {
+            EvalCommand::CodingPair(args) => commands::coding_pair::bridge(args).await,
+            EvalCommand::CodingPairReplay(args) => commands::coding_pair::replay(args).await,
             EvalCommand::Coding(args) => commands::coding::evaluate(args).await,
             EvalCommand::CodingReplay(args) => commands::coding::replay(args).await,
             EvalCommand::Screen(args) => commands::screening::screen(args),

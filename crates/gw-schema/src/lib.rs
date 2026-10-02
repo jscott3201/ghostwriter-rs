@@ -30,9 +30,14 @@
 
 mod candidate;
 mod checkpoint_model;
+mod coding_generation;
+mod coding_generation_validation;
+mod coding_population;
 mod coding_task;
 mod coding_value;
 pub use checkpoint_model::*;
+pub use coding_generation::*;
+pub use coding_population::*;
 pub use coding_task::*;
 pub use coding_value::{CodingValue, coding_digest, strict_coding_json};
 mod message_validation;

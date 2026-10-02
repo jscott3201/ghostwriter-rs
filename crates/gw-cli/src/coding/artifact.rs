@@ -136,7 +136,7 @@ impl CodingCaseObservation {
             elapsed_ms: 0,
         }
     }
-    fn validate(&self) -> anyhow::Result<()> {
+    pub(super) fn validate(&self) -> anyhow::Result<()> {
         use CodingCaseReason::*;
         let expected = match self.reason {
             Matched => TestStatus::Passed,
@@ -171,7 +171,7 @@ impl CodingCaseObservation {
         }
         Ok(())
     }
-    fn stable(&self) -> impl Serialize + '_ {
+    pub(super) fn stable(&self) -> impl Serialize + '_ {
         (
             &self.case_id,
             self.status,

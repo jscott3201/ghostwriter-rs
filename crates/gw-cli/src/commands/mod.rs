@@ -11,6 +11,7 @@ mod accounting;
 pub mod artifact;
 pub mod calibration;
 pub mod coding;
+pub mod coding_pair;
 pub mod eval;
 pub mod export;
 pub mod replay;
