@@ -333,6 +333,9 @@ impl ChatCompletionsProvider {
         req: ChatRequest,
         observation: Option<CallObservation>,
     ) -> Result<DeltaStream, ProviderError> {
+        if let Some(tools) = &req.tool_config {
+            tools.validate()?;
+        }
         let body = serde_json::to_vec(&req).map_err(|e| ProviderError::Config(e.to_string()))?;
         let mut ordinal = 0;
         let (response, attempt) = retry(self.policy, || {

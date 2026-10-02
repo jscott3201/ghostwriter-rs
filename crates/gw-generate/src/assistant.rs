@@ -3,6 +3,11 @@
 //! This is the core teacher-call path. Given an injected [`Provider`] and a built [`ChatRequest`],
 //! it streams the SSE deltas, accumulates `content` / `reasoning` / `reasoning_details` / the
 //! terminal `finish_reason` / provenance / usage, and produces a clean [`AssistantTurn`].
+//! Native indexed tool calls retain separate reasoning, call IDs, and raw argument evidence.
+//! Tool-bearing turns require `finish_reason=tool_calls` and complete object arguments.
+//! Generation checks calls against the requested names, selection, and parallel policy.
+//! [`generate_turn_observed`] accepts a fresh caller-owned observation handle for external
+//! collectors. It requires complete terminal output; the collector owns tool execution.
 //!
 //! ## INVARIANT-a — reasoning is a sibling of content, never inlined
 //!
@@ -21,16 +26,6 @@
 //! on `length`, so a truncated CoT is never handed back for admission. The caller retries with a
 //! larger budget or routes to `revising`.
 //!
-//! ## Boundary: the live teacher stream is still text-only
-//!
-//! [`AccumulatedStream::ingest_payload`] hands ingest `content` + the flat `reasoning` only,
-//! because the streaming delta type deliberately does not model `tool_calls` / `tool_call_id`
-//! (see `gw-providers::delta`, which streams `n=1`). So a turn produced by THIS path is text-only
-//! and its `content` is always the explicit string the provider streamed — never
-//! [`Content::Null`]. The tool fields are populated on the non-streaming ingest boundary
-//! (`gw_format::ingest_openrouter`, which does parse them), so a captured/imported trajectory keeps
-//! its identity; making the live teacher emit tool calls is a provider-delta change, deliberately
-//! out of scope here.
 
 use futures::StreamExt;
 use serde_json::json;
@@ -60,6 +55,12 @@ fn message_content_is_empty(message: &Message) -> bool {
 pub struct AccumulatedStream {
     /// Concatenated final-answer text (may still carry inlined channel tokens until ingest).
     pub content: String,
+    /// Whether any explicit content string (including empty) was streamed.
+    pub content_present: bool,
+    /// Indexed native calls belonging only to this drained response.
+    pub tool_calls: crate::StreamedToolCalls,
+    /// Sticky protocol failure retained while draining later usage metadata.
+    pub invalid_completion: Option<String>,
     /// Concatenated flat plaintext chain-of-thought.
     pub reasoning: String,
     /// Structured reasoning blocks, accumulated across chunks in arrival order.
@@ -110,6 +111,10 @@ pub struct AssistantTurn {
     /// refusal text IS the content (the refusal is the assistant output — USER-SYNTHESIS §3.4),
     /// and [`refusal`](AssistantTurn::refusal) additionally carries it for downstream visibility.
     pub message: Message,
+    /// Resolved model reported by the provider.
+    pub resolved_model: Option<String>,
+    /// Raw upstream terminal reason, distinct from normalized finish_reason.
+    pub native_finish_reason: Option<String>,
     /// The provider's structured `refusal` text, when the turn declined via the OpenRouter
     /// `refusal` delta field (rather than via plain `content`). `None` for a normal turn or a
     /// refusal expressed in `content`. When set, it has also been folded into
@@ -145,7 +150,11 @@ impl AccumulatedStream {
     /// - [`GenerateError::EmptyResponse`] if no content AND no reasoning AND no refusal was
     ///   produced at all (a degenerate completion).
     /// - [`GenerateError::Format`] if the ingest path rejects the content (control-token leak).
+    /// - [`GenerateError::InvalidCompletion`] for incomplete or unsupported native calls.
     pub fn into_turn(self) -> Result<AssistantTurn> {
+        if let Some(detail) = &self.invalid_completion {
+            return Err(GenerateError::InvalidCompletion(detail.clone()));
+        }
         // The truncation hazard: a CoT cut off mid-channel must never be admitted.
         if self.hit_length_cap() && self.has_reasoning() {
             return Err(GenerateError::TruncatedReasoning {
@@ -158,7 +167,12 @@ impl AccumulatedStream {
             });
         }
 
-        if self.content.is_empty() && !self.has_reasoning() && self.refusal.is_none() {
+        let tool_calls = self.tool_calls.finish(self.finish_reason.as_deref())?;
+        if self.content.is_empty()
+            && !self.has_reasoning()
+            && self.refusal.is_none()
+            && tool_calls.is_none()
+        {
             return Err(GenerateError::EmptyResponse(
                 "teacher stream yielded no content, reasoning, or refusal".into(),
             ));
@@ -169,6 +183,10 @@ impl AccumulatedStream {
         // reasoning rather than re-peeling it from content.
         let payload = self.ingest_payload();
         let mut message = gw_format::ingest_openrouter(&payload)?;
+        message.tool_calls = tool_calls;
+        if !self.content_present && self.content.is_empty() && message.tool_calls.is_some() {
+            message.content = Content::Null;
+        }
 
         // A structured-refusal turn (content was null, refusal carried the decline) must NOT yield
         // an empty assistant output: the refusal IS the training signal for a RefusalExpected turn
@@ -188,6 +206,8 @@ impl AccumulatedStream {
 
         Ok(AssistantTurn {
             message,
+            resolved_model: self.resolved_model,
+            native_finish_reason: self.native_finish_reason,
             refusal: self.refusal,
             finish_reason: self.finish_reason,
             served_by: self.served_by,
@@ -256,7 +276,15 @@ pub async fn accumulate(mut stream: gw_providers::DeltaStream) -> Result<Accumul
     let mut acc = AccumulatedStream::default();
     while let Some(item) = stream.next().await {
         let delta = item?;
+        if acc.finish_reason.is_some() && !delta.is_empty_payload() {
+            acc.invalid_completion
+                .get_or_insert("payload after terminal finish".into());
+        }
+        if let Some(calls) = delta.tool_calls {
+            acc.tool_calls.push(calls);
+        }
         if let Some(c) = delta.content {
+            acc.content_present = true;
             acc.content.push_str(&c);
         }
         if let Some(r) = delta.reasoning {
@@ -271,6 +299,10 @@ pub async fn accumulate(mut stream: gw_providers::DeltaStream) -> Result<Accumul
             acc.refusal = Some(refusal);
         }
         if let Some(f) = delta.finish_reason {
+            if acc.finish_reason.as_ref().is_some_and(|prior| prior != &f) {
+                acc.invalid_completion
+                    .get_or_insert("conflicting terminal reasons".into());
+            }
             acc.finish_reason = Some(f);
         }
         if let Some(nf) = delta.native_finish_reason {
@@ -302,8 +334,89 @@ pub async fn generate_turn<P: Provider + ?Sized>(
     provider: &P,
     request: ChatRequest,
 ) -> Result<AssistantTurn> {
+    if let Some(tools) = &request.tool_config {
+        tools.validate()?;
+    }
+    let tools = request.tool_config.clone();
     let (stream, observation) = gw_providers::observed_chat(provider, request).await?;
-    let result = async { accumulate(stream).await?.into_turn() }.await;
+    finish_observed(stream, observation, tools.as_ref(), false).await
+}
+
+/// Generate a canonical turn with an explicit caller-owned observation handle.
+/// Pass a fresh handle from [`gw_providers::ObservationContext::call`] for each logical call.
+/// Each physical attempt retains intent-before-send and independent settlement. The caller can
+/// read the final attempt ID from `observation` and retrieve persisted receipts with its observer.
+/// No tools are executed. Accounting/cancellation failures remain errors.
+pub async fn generate_turn_observed<P: Provider + ?Sized>(
+    provider: &P,
+    request: ChatRequest,
+    observation: gw_providers::CallObservation,
+) -> Result<AssistantTurn> {
+    if observation.attempt_id().is_some() {
+        return Err(GenerateError::Invariant(
+            "observed generation requires a fresh call handle".into(),
+        ));
+    }
+    if provider.accounting_capability() != gw_schema::AccountingCapability::PhysicalAttemptsV1 {
+        return Err(GenerateError::Invariant(
+            "observed generation requires physical-attempt accounting".into(),
+        ));
+    }
+    if let Some(tools) = &request.tool_config {
+        tools.validate()?;
+    }
+    let tools = request.tool_config.clone();
+    let stream = match provider
+        .stream_chat_observed(request, observation.clone())
+        .await
+    {
+        Ok(stream) => stream,
+        Err(error) => {
+            if !error.is_accounting() {
+                observation
+                    .interpret(
+                        gw_schema::OutputInterpretation::Failed,
+                        Some(error.to_string()),
+                    )
+                    .await?;
+            }
+            return Err(error.into());
+        }
+    };
+    finish_observed(stream, Some(observation), tools.as_ref(), true).await
+}
+
+async fn finish_observed(
+    stream: gw_providers::DeltaStream,
+    observation: Option<gw_providers::CallObservation>,
+    tools: Option<&gw_providers::ToolConfig>,
+    require_complete: bool,
+) -> Result<AssistantTurn> {
+    let result = async {
+        let turn = accumulate(stream).await?.into_turn()?;
+        if require_complete
+            && observation
+                .as_ref()
+                .is_none_or(|call| call.attempt_id().is_none())
+        {
+            return Err(GenerateError::Invariant(
+                "observed provider returned no physical-attempt receipt".into(),
+            ));
+        }
+        if (require_complete || tools.is_some())
+            && !matches!(
+                turn.finish_reason.as_deref(),
+                Some("stop" | "tool_calls" | "content_filter")
+            )
+        {
+            return Err(GenerateError::InvalidCompletion(
+                "missing or unsupported terminal finish".into(),
+            ));
+        }
+        crate::tool_calls::validate_selection(&turn.message, tools)?;
+        Ok(turn)
+    }
+    .await;
     if let Some(call) = observation {
         let interpretation = match &result {
             Ok(_) => gw_schema::OutputInterpretation::Accepted,
@@ -408,8 +521,8 @@ mod tests {
 
     #[test]
     fn length_cap_without_reasoning_is_not_truncation() {
-        // finish_reason=length but NO reasoning (a non-thinking turn that ran long) is content,
-        // not a truncated CoT — it must not be misclassified as the hazard.
+        // Existing text-only callers retain the explicit length observation; native-tool
+        // and explicit observed generation require a complete terminal reason.
         let acc = AccumulatedStream {
             content: "a long answer".into(),
             finish_reason: Some("length".into()),

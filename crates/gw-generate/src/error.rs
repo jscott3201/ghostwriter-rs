@@ -26,6 +26,9 @@ use gw_providers::ProviderError;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum GenerateError {
+    /// Missing, unsupported, or contradictory completion evidence; never usable for admission.
+    #[error("invalid completion: {0}")]
+    InvalidCompletion(String),
     /// A request-builder INVARIANT was violated by the caller — e.g. building a teacher request
     /// with no `max_tokens`, or asking for BOTH a reasoning `effort` and a `reasoning_max_tokens`
     /// budget (they are mutually exclusive on the wire). A programmer/config fault: terminal, and

@@ -53,6 +53,8 @@ pub struct ProfileTermination {
 pub struct NormalizedProfileChunk {
     /// Final-answer text, distinct from reasoning. Missing/null differs from an empty string.
     pub content: Option<String>,
+    /// Indexed native tool-call fragments, kept separate from content and reasoning.
+    pub tool_calls: Option<Vec<crate::ToolCallDelta>>,
     /// One reasoning value after consistent aliases are reconciled.
     pub reasoning: Option<String>,
     /// Original structured objects, including provider extensions/unknown detail types.
@@ -104,6 +106,9 @@ pub fn normalize_chat_chunk(input: &str) -> Result<NormalizedProfileChunk> {
     {
         return Err(ProfileError::InvalidResponse);
     }
+    if delta.function_call.is_some() {
+        return Err(ProfileError::InvalidResponse);
+    }
     let reasoning = match (delta.reasoning, delta.reasoning_content) {
         (Some(a), Some(b)) if a != b => return Err(ProfileError::ConflictingReasoning),
         (Some(value), _) | (_, Some(value)) => Some(value),
@@ -139,6 +144,7 @@ pub fn normalize_chat_chunk(input: &str) -> Result<NormalizedProfileChunk> {
     };
     Ok(NormalizedProfileChunk {
         content: delta.content,
+        tool_calls: delta.tool_calls,
         reasoning,
         reasoning_details: delta.reasoning_details,
         refusal: delta.refusal,
@@ -174,6 +180,8 @@ struct RawChoice {
 }
 #[derive(Default, Deserialize)]
 struct RawDelta {
+    tool_calls: Option<Vec<crate::ToolCallDelta>>,
+    function_call: Option<Value>,
     content: Option<String>,
     reasoning: Option<String>,
     reasoning_content: Option<String>,

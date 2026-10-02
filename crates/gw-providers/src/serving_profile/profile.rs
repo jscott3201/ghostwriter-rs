@@ -18,6 +18,8 @@ pub enum ServingDialect {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProfileControl {
+    /// Native function definitions, selection, parallel policy, and linked tool history.
+    Tools,
     /// Sampling temperature.
     Temperature,
     /// Nucleus sampling.
@@ -143,7 +145,7 @@ impl ProfileBehavior {
         Ok(ModelAdapterBehavior {
             declaration: SemanticDeclaration::new(
                 "gw-providers/offline-request-preparation",
-                "1",
+                "2",
                 serde_json::json!({"operation":operation}),
             ),
         })

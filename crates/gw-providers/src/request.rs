@@ -24,7 +24,11 @@ pub struct ChatRequest {
     /// The model slug, e.g. `"z-ai/glm-5.2"`.
     pub model: String,
     /// The conversation, reusing the canonical [`gw_schema::Message`].
+    #[serde(serialize_with = "crate::tools::serialize_messages")]
     pub messages: Vec<Message>,
+    /// Native function tools and selection controls.
+    #[serde(flatten)]
+    pub tool_config: Option<crate::ToolConfig>,
     /// Always `true` — this crate is streaming-only.
     pub stream: bool,
 
@@ -65,6 +69,7 @@ impl ChatRequest {
         Self {
             model: model.into(),
             messages,
+            tool_config: None,
             stream: true,
             temperature: None,
             top_p: None,
@@ -74,6 +79,13 @@ impl ChatRequest {
             provider: None,
             usage: None,
         }
+    }
+
+    /// Set native function tools and their selection controls. Validated before dispatch.
+    #[must_use]
+    pub fn with_tools(mut self, tools: crate::ToolConfig) -> Self {
+        self.tool_config = Some(tools);
+        self
     }
 
     /// Set the reasoning param (effort or max-tokens). Chainable.
@@ -604,10 +616,8 @@ mod tests {
     }
 
     #[test]
-    fn a_result_without_a_link_sends_no_tool_call_id_key() {
+    fn a_result_without_a_link_is_rejected_before_dispatch() {
         let req = ChatRequest::new("m", vec![tool_result(None, "read_file", "ok")]);
-        let v: Value = serde_json::to_value(&req).unwrap();
-        assert!(v["messages"][0].get("tool_call_id").is_none());
-        assert_eq!(v["messages"][0]["name"], "read_file");
+        assert!(serde_json::to_value(&req).is_err());
     }
 }

@@ -17,6 +17,8 @@ use crate::delta::{CompletionTokensDetails, Usage};
 pub(crate) struct RawChunk {
     #[serde(default)]
     pub(crate) choices: Vec<RawChoice>,
+    #[serde(default)]
+    pub(crate) error: Option<serde_json::Value>,
     /// Generation id (e.g. `"gen-..."`), present on every chunk. (C5)
     #[serde(default)]
     pub(crate) id: Option<String>,
@@ -37,6 +39,8 @@ pub(crate) struct RawChunk {
 #[derive(Debug, Deserialize)]
 pub(crate) struct RawChoice {
     #[serde(default)]
+    pub(crate) index: Option<u32>,
+    #[serde(default)]
     pub(crate) delta: RawDelta,
     #[serde(default)]
     pub(crate) finish_reason: Option<String>,
@@ -52,14 +56,18 @@ pub(crate) struct RawChoice {
 /// co-located `content`. The array case is converted per-fragment in
 /// [`crate::delta::parse_chunk`].
 ///
-/// `tool_calls` / `function_call` are intentionally NOT modeled: the harness streams `n=1`
-/// with no tools, so OpenRouter never emits them on the teacher path. (C7)
 #[derive(Debug, Default, Deserialize)]
 pub(crate) struct RawDelta {
     #[serde(default)]
     pub(crate) content: Option<String>,
     #[serde(default)]
     pub(crate) reasoning: Option<String>,
+    #[serde(default)]
+    pub(crate) reasoning_content: Option<String>,
+    #[serde(default)]
+    pub(crate) tool_calls: Option<Vec<crate::ToolCallDelta>>,
+    #[serde(default)]
+    pub(crate) function_call: Option<serde_json::Value>,
     #[serde(default)]
     pub(crate) reasoning_details: Option<serde_json::Value>,
     /// A model refusal string, when present. (C4)

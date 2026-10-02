@@ -100,7 +100,7 @@ fn built_in_embedding_location_changes_do_not_change_execution_semantics() {
 }
 
 #[test]
-fn original_v1_client_declarations_remain_byte_identical() {
+fn current_client_declarations_have_explicit_wire_contracts() {
     use gw_providers::Provider;
     let chat = ChatCompletionsProvider::builder()
         .base_url("https://primary.example.test/v1/")
@@ -114,8 +114,8 @@ fn original_v1_client_declarations_remain_byte_identical() {
         .dim(12)
         .declared_revision(Some("requested-revision".into()))
         .declared_index(gw_schema::VectorIndex::Usearch);
-    // Explicit pre-repair v1 wire contracts, including endpoint and unenforced declarations.
-    let chat_bytes = r#"{"implementation":"gw-providers/openai-compatible-chat-sse","revision":"1","configuration":{"base_endpoint":"https://primary.example.test/v1","redirects":"reject","request_method":"POST","retry_classification":"provider-error-retryable-v1","route":"chat/completions","stream_contract":"content-and-reasoning-details-v1","transport_attempts":1}}"#;
+    // Explicit wire contracts, including the native-tool stream revision and unenforced embedding declarations.
+    let chat_bytes = r#"{"implementation":"gw-providers/openai-compatible-chat-sse","revision":"1","configuration":{"base_endpoint":"https://primary.example.test/v1","redirects":"reject","request_method":"POST","retry_classification":"provider-error-retryable-v1","route":"chat/completions","stream_contract":"content-reasoning-native-tools-v2","transport_attempts":1}}"#;
     let embedding_bytes = r#"{"implementation":"gw-providers/openai-compatible-embeddings","revision":"1","configuration":{"base_endpoint":"https://primary.example.test/v1","batch_order":"response-index-v1","configured_declarations":{"index":"usearch","index_selects_runtime_implementation":false,"model_revision":"requested-revision","model_revision_enforced":false},"dimension":12,"normalization":"none-preserve-finite-nonzero-vectors-v1","requested_model":"example-model","retries":0,"route":"embeddings"}}"#;
     for (declaration, expected) in [
         (chat.semantic_declaration().unwrap(), chat_bytes),
