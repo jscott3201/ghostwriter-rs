@@ -184,3 +184,35 @@ async fn captured_http_bytes_and_attempt_digest_include_native_tools_and_history
     assert_eq!(receipt.metadata.prompt_tokens, None);
     assert_eq!(receipt.metadata.cost_usd, gw_schema::ReportedCost::Missing);
 }
+
+#[test]
+fn outbound_histories_validate_links_across_all_messages_without_requiring_results() {
+    let valid = history();
+    let mut dangling = valid.clone();
+    dangling[1].tool_call_id = Some("missing".into());
+    let premature = vec![valid[1].clone(), valid[0].clone()];
+    let duplicate_result = vec![valid[0].clone(), valid[1].clone(), valid[1].clone()];
+    let duplicate_call = vec![valid[0].clone(), valid[1].clone(), valid[0].clone()];
+    let mut profile = support::profile(ServingDialect::VllmV1);
+    profile.behavior.capabilities.push(ProfileControl::Tools);
+    let semantics = support::semantics(&profile, ModelOperation::ChatCompletion);
+    for messages in [dangling, premature, duplicate_result, duplicate_call] {
+        assert!(serde_json::to_vec(&ChatRequest::new("m", messages.clone())).is_err());
+        let request = ProfileRequest {
+            input: ProfileInput::Chat(messages),
+            controls: vec![],
+        };
+        assert_eq!(
+            prepare_request(&profile, &semantics, &request).unwrap_err(),
+            ProfileError::InvalidRequest
+        );
+    }
+    for messages in [valid.clone(), vec![valid[0].clone()]] {
+        assert!(serde_json::to_vec(&ChatRequest::new("m", messages.clone())).is_ok());
+        let request = ProfileRequest {
+            input: ProfileInput::Chat(messages),
+            controls: vec![],
+        };
+        assert!(prepare_request(&profile, &semantics, &request).is_ok());
+    }
+}

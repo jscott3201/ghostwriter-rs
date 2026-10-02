@@ -97,6 +97,7 @@ fn invalid() -> crate::ProviderError {
 /// # Errors
 /// Rejects invalid argument objects, missing call identities, and invalid tool-role linkage.
 pub fn wire_messages(messages: &[Message]) -> Result<Vec<Value>, crate::ProviderError> {
+    gw_schema::validate_tool_links(messages).map_err(|_| invalid())?;
     messages.iter().map(wire_message).collect()
 }
 fn wire_message(message: &Message) -> Result<Value, crate::ProviderError> {

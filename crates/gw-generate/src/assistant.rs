@@ -352,11 +352,6 @@ pub async fn generate_turn_observed<P: Provider + ?Sized>(
     request: ChatRequest,
     observation: gw_providers::CallObservation,
 ) -> Result<AssistantTurn> {
-    if observation.attempt_id().is_some() {
-        return Err(GenerateError::Invariant(
-            "observed generation requires a fresh call handle".into(),
-        ));
-    }
     if provider.accounting_capability() != gw_schema::AccountingCapability::PhysicalAttemptsV1 {
         return Err(GenerateError::Invariant(
             "observed generation requires physical-attempt accounting".into(),
@@ -365,6 +360,9 @@ pub async fn generate_turn_observed<P: Provider + ?Sized>(
     if let Some(tools) = &request.tool_config {
         tools.validate()?;
     }
+    observation.claim_invocation().map_err(|_| {
+        GenerateError::Invariant("observed generation requires a fresh call handle".into())
+    })?;
     let tools = request.tool_config.clone();
     let stream = match provider
         .stream_chat_observed(request, observation.clone())

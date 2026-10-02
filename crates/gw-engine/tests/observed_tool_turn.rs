@@ -181,3 +181,115 @@ async fn dropping_partial_tool_stream_leaves_attempt_unsettled_and_next_call_ind
     assert_eq!(cancelled.metadata.cost_usd, ReportedCost::Missing);
     assert_eq!(server.posts.load(Ordering::SeqCst), 2);
 }
+
+struct DelayedAdmission {
+    inner: StoreObserver,
+    entered: std::sync::atomic::AtomicUsize,
+    first_entered: tokio::sync::Notify,
+    second_entered: tokio::sync::Notify,
+    release: tokio::sync::Semaphore,
+}
+impl gw_providers::AttemptObserver for DelayedAdmission {
+    fn begin(
+        &self,
+        intent: gw_schema::AttemptIntent,
+    ) -> gw_providers::ObservationFuture<'_, String> {
+        Box::pin(async move {
+            let index = self.entered.fetch_add(1, Ordering::SeqCst);
+            if index == 0 {
+                self.first_entered.notify_one();
+            } else {
+                self.second_entered.notify_one();
+            }
+            self.release.acquire().await.unwrap().forget();
+            self.inner.begin(intent).await
+        })
+    }
+    fn metadata(
+        &self,
+        id: String,
+        sequence: u64,
+        metadata: gw_schema::AttemptMetadata,
+    ) -> gw_providers::ObservationFuture<'_, ()> {
+        self.inner.metadata(id, sequence, metadata)
+    }
+    fn settle(
+        &self,
+        id: String,
+        settlement: gw_schema::TransportSettlement,
+    ) -> gw_providers::ObservationFuture<'_, ()> {
+        self.inner.settle(id, settlement)
+    }
+    fn interpret(
+        &self,
+        id: String,
+        value: OutputInterpretation,
+    ) -> gw_providers::ObservationFuture<'_, ()> {
+        self.inner.interpret(id, value)
+    }
+}
+
+#[tokio::test]
+async fn concurrent_clones_reserve_one_logical_invocation_before_admission_awaits() {
+    use std::sync::{Arc, atomic::AtomicUsize};
+    let store = Store::open_in_memory().await.unwrap();
+    let mut ctx = context(&store, AttemptRole::Teacher, AttemptPurpose::Initial).await;
+    let observer = Arc::new(DelayedAdmission {
+        inner: StoreObserver(store.clone()),
+        entered: AtomicUsize::new(0),
+        first_entered: tokio::sync::Notify::new(),
+        second_entered: tokio::sync::Notify::new(),
+        release: tokio::sync::Semaphore::new(0),
+    });
+    ctx.observer = observer.clone();
+    let server = Server::responses(vec![(200, body("only-response", "tool_calls"))]).await;
+    let client = provider(&server);
+    let call = ctx.call();
+    let first_call = call.clone();
+    let first_client = client.clone();
+    let first =
+        tokio::spawn(
+            async move { generate_turn_observed(&first_client, request(), first_call).await },
+        );
+    observer.first_entered.notified().await;
+    assert_eq!(
+        call.attempt_id(),
+        None,
+        "first admission has not produced a receipt"
+    );
+    let mut second = Box::pin(generate_turn_observed(&client, request(), call.clone()));
+    // Both the old race and the fixed rejection have deterministic progress signals.
+    let second_result = tokio::select! {
+        result=&mut second => Some(result),
+        _=observer.second_entered.notified() => None,
+    };
+    observer.release.add_permits(2);
+    let (first_result, second_result) = match second_result {
+        Some(result) => (first.await.unwrap(), result),
+        None => {
+            let (first_result, second_result) = tokio::join!(first, second);
+            (first_result.unwrap(), second_result)
+        }
+    };
+    assert!(first_result.is_ok());
+    assert!(
+        second_result.is_err(),
+        "second invocation reused the first call's receipt"
+    );
+    assert_eq!(observer.entered.load(Ordering::SeqCst), 1);
+    assert_eq!(server.posts.load(Ordering::SeqCst), 1);
+    let attempts = store.model_attempts("run").await.unwrap();
+    assert_eq!(attempts.len(), 1);
+    assert_eq!(call.attempt_id(), Some(attempts[0].attempt_id.clone()));
+    assert_eq!(
+        attempts[0].interpretation,
+        Some(OutputInterpretation::Accepted)
+    );
+    assert!(
+        generate_turn_observed(&client, request(), call.clone())
+            .await
+            .is_err()
+    );
+    assert_eq!(server.posts.load(Ordering::SeqCst), 1);
+    assert_eq!(call.attempt_id(), Some(attempts[0].attempt_id.clone()));
+}

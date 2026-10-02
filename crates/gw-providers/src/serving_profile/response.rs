@@ -98,7 +98,12 @@ pub fn normalize_chat_chunk(input: &str) -> Result<NormalizedProfileChunk> {
     if choice.index.is_some_and(|v| v != 0) || choice.delta.is_some() && choice.message.is_some() {
         return Err(ProfileError::InvalidResponse);
     }
-    let delta = choice.delta.or(choice.message).unwrap_or_default();
+    let delta = match (choice.delta, choice.message) {
+        (Some(delta), None) => delta,
+        (None, Some(message)) => message_delta(message)?,
+        (None, None) => RawDelta::default(),
+        (Some(_), Some(_)) => return Err(ProfileError::InvalidResponse),
+    };
     if delta
         .reasoning_details
         .as_ref()
@@ -174,7 +179,7 @@ struct RawChunk {
 struct RawChoice {
     index: Option<u64>,
     delta: Option<RawDelta>,
-    message: Option<RawDelta>,
+    message: Option<Value>,
     finish_reason: Option<String>,
     native_finish_reason: Option<String>,
 }
@@ -199,4 +204,18 @@ struct RawUsage {
 #[derive(Deserialize)]
 struct RawCompletionTokens {
     reasoning_tokens: Option<u64>,
+}
+
+// Complete messages do not carry streaming call indices. Their array order is authoritative;
+// actual delta objects continue to deserialize directly and require every explicit index.
+fn message_delta(mut message: Value) -> Result<RawDelta> {
+    if let Some(Value::Array(calls)) = message.get_mut("tool_calls") {
+        for (index, call) in calls.iter_mut().enumerate() {
+            let index = u32::try_from(index).map_err(|_| ProfileError::InvalidResponse)?;
+            call.as_object_mut()
+                .ok_or(ProfileError::InvalidResponse)?
+                .insert("index".into(), Value::from(index));
+        }
+    }
+    serde_json::from_value(message).map_err(|_| ProfileError::InvalidResponse)
 }
