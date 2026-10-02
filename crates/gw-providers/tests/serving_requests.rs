@@ -330,7 +330,7 @@ fn chat_requires_present_template_and_all_semantic_fields_must_be_declared() {
     value.serving_profile = Declaration::Unknown;
     variants.push(value);
     let mut value = baseline.clone();
-    value.adapter_behavior.declaration.revision = "2".into();
+    value.adapter_behavior.declaration.revision = "1".into();
     variants.push(value);
     for value in variants {
         assert_eq!(

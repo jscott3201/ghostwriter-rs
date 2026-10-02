@@ -20,13 +20,15 @@ use crate::delta_wire::{RawChunk, RawDelta, convert_reasoning_details, convert_u
 /// `reasoning` is the flat plaintext CoT some providers emit; `reasoning_details` is the
 /// structured form (`reasoning.text` / `.summary` / `.encrypted`) stored verbatim.
 ///
-/// `tool_calls` / `function_call` are intentionally **not** modeled: the harness streams `n=1`
-/// with no tools, so OpenRouter never emits them on the teacher path. (C7)
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct StreamDelta {
     /// Incremental final-answer text. Concatenate across chunks for the answer.
     #[serde(default)]
     pub content: Option<String>,
+
+    /// Indexed native function-call fragments.
+    #[serde(default)]
+    pub tool_calls: Option<Vec<crate::ToolCallDelta>>,
 
     /// Incremental flat plaintext chain-of-thought. Concatenate across chunks for the CoT.
     #[serde(default)]
@@ -67,7 +69,7 @@ pub struct StreamDelta {
 
 impl StreamDelta {
     /// `true` when this delta carries no incremental **display** payload — no content, no
-    /// reasoning, no structured reasoning, no refusal — e.g. a role-only opening chunk or a
+    /// reasoning, no structured reasoning, no refusal, no tool fragments — e.g. a role-only opening chunk or a
     /// bare keep-alive shape. A caller may skip emitting such deltas to the UI.
     ///
     /// This reflects only the absence of incremental display payload. Callers MUST still
@@ -80,6 +82,7 @@ impl StreamDelta {
             && self.reasoning.is_none()
             && self.reasoning_details.is_none()
             && self.refusal.is_none()
+            && self.tool_calls.is_none()
     }
 }
 
@@ -166,19 +169,47 @@ pub struct CompletionTokensDetails {
 /// (see [`convert_reasoning_details`]).
 ///
 /// # Errors
-/// Returns the underlying `serde_json` error only if the payload is not a valid JSON chunk
-/// object at all. A malformed `reasoning_details` (non-array, or a bad fragment) and a
+/// Returns a decode error for malformed known fields, ambiguous choices, conflicting reasoning
+/// aliases, terminal provider errors, or unsupported legacy `function_call` payloads. A malformed `reasoning_details` (non-array, or a bad fragment) and a
 /// type-drifted `usage` (string cost, float token counts, garbage shape) never error here —
 /// they are coerced or skipped, not propagated, so a terminal chunk's `finish_reason` /
 /// provenance / coercible usage fields always survive.
 pub(crate) fn parse_chunk(json: &str) -> Result<StreamDelta, serde_json::Error> {
     let raw: RawChunk = serde_json::from_str(json)?;
+    use serde::de::Error as _;
+    if let Some(error) = raw.error {
+        return Err(serde_json::Error::custom(format!(
+            "provider terminal error: {error}"
+        )));
+    }
+    if raw.choices.len() > 1
+        || raw
+            .choices
+            .first()
+            .is_some_and(|c| c.index.is_some_and(|i| i != 0))
+    {
+        return Err(serde_json::Error::custom(
+            "only choice index zero is supported",
+        ));
+    }
     let first = raw.choices.into_iter().next();
     let (delta, finish_reason, native_finish_reason) = match first {
         Some(c) => (c.delta, c.finish_reason, c.native_finish_reason),
         None => (RawDelta::default(), None, None),
     };
 
+    if delta.function_call.is_some() {
+        return Err(serde_json::Error::custom(
+            "legacy function_call is unsupported; native tool_calls required",
+        ));
+    }
+    let reasoning = match (delta.reasoning, delta.reasoning_content) {
+        (Some(a), Some(b)) if a != b => {
+            return Err(serde_json::Error::custom("conflicting reasoning aliases"));
+        }
+        (Some(value), _) | (_, Some(value)) => Some(value),
+        (None, None) => None,
+    };
     let provenance = {
         let p = ChunkProvenance {
             served_by: raw.provider,
@@ -192,7 +223,8 @@ pub(crate) fn parse_chunk(json: &str) -> Result<StreamDelta, serde_json::Error> 
 
     Ok(StreamDelta {
         content: delta.content,
-        reasoning: delta.reasoning,
+        reasoning,
+        tool_calls: delta.tool_calls,
         reasoning_details,
         refusal: delta.refusal,
         finish_reason,

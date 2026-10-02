@@ -67,7 +67,7 @@ impl ObservationContext {
     pub fn call(&self) -> CallObservation {
         CallObservation {
             context: self.clone(),
-            latest: Arc::new(Mutex::new(None)),
+            state: Arc::new(Mutex::new(CallState::default())),
         }
     }
 }
@@ -76,9 +76,34 @@ impl ObservationContext {
 #[derive(Clone)]
 pub struct CallObservation {
     context: ObservationContext,
-    latest: Arc<Mutex<Option<String>>>,
+    state: Arc<Mutex<CallState>>,
 }
+#[derive(Default)]
+struct CallState {
+    claimed: bool,
+    latest: Option<String>,
+}
+
 impl CallObservation {
+    /// Atomically reserve this handle for one logical invocation, across all inspection clones.
+    /// The reservation is permanent, including after cancellation or pre-send failure. Create a
+    /// fresh handle for another invocation; physical retries within this invocation remain valid.
+    ///
+    /// # Errors
+    /// Rejects an already reserved handle or one that has already started a physical attempt.
+    pub fn claim_invocation(&self) -> Result<(), ProviderError> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.claimed || state.latest.is_some() {
+            return Err(ProviderError::Config(
+                "observation handle already belongs to an invocation".into(),
+            ));
+        }
+        state.claimed = true;
+        Ok(())
+    }
     /// Run that owns physical attempts made by this call.
     #[must_use]
     pub fn run_id(&self) -> &str {
@@ -88,9 +113,10 @@ impl CallObservation {
     /// Latest physical attempt identity, when a call crossed durable pre-send admission.
     #[must_use]
     pub fn attempt_id(&self) -> Option<String> {
-        self.latest
+        self.state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .latest
             .clone()
     }
 
@@ -102,9 +128,10 @@ impl CallObservation {
         primary: Option<String>,
     ) -> Result<(), ProviderError> {
         let id = self
-            .latest
+            .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .latest
             .clone();
         if let Some(id) = id {
             self.context
@@ -138,10 +165,10 @@ impl CallObservation {
             .begin(intent)
             .await
             .map_err(|e| accounting("pre-send intent", e, None))?;
-        *self
-            .latest
+        self.state
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(id.clone());
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .latest = Some(id.clone());
         Ok(ActiveAttempt {
             id,
             observer: self.context.observer.clone(),

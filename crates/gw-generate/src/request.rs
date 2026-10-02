@@ -131,6 +131,8 @@ pub struct TeacherCall {
     pub max_tokens: u32,
     /// Optional OpenRouter provider routing (e.g. a hard pin for reproducible provenance).
     pub routing: Option<ProviderRouting>,
+    /// Optional native function definitions and selection controls.
+    pub tool_config: Option<gw_providers::ToolConfig>,
 }
 
 impl TeacherCall {
@@ -146,7 +148,15 @@ impl TeacherCall {
             sampling: SamplingPreset::official(),
             max_tokens,
             routing: None,
+            tool_config: None,
         }
+    }
+
+    /// Set native function tools and selection controls.
+    #[must_use]
+    pub fn with_tools(mut self, tools: gw_providers::ToolConfig) -> Self {
+        self.tool_config = Some(tools);
+        self
     }
 
     /// Override the reasoning policy. Chainable.
@@ -222,6 +232,10 @@ impl TeacherCall {
             req = req.with_provider(routing.clone());
         }
 
+        if let Some(tools) = &self.tool_config {
+            tools.validate()?;
+            req = req.with_tools(tools.clone());
+        }
         Ok(req)
     }
 

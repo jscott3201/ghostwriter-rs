@@ -41,7 +41,7 @@ pub(crate) fn chat(
         "1",
         serde_json::json!({
             "base_endpoint": normalize_endpoint(base_url)?, "route": "chat/completions", "request_method": "POST",
-            "stream_contract": "content-and-reasoning-details-v1", "transport_attempts": attempts.max(1),
+            "stream_contract": "content-reasoning-native-tools-v2", "transport_attempts": attempts.max(1),
             "retry_classification": "provider-error-retryable-v1", "redirects": "reject"
         }),
     ))

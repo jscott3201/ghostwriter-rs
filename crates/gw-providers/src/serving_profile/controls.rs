@@ -81,6 +81,24 @@ impl Controls<'_> {
     }
     fn apply(&mut self, value: &ControlValue, required: bool) -> Result<()> {
         match value {
+            ControlValue::Tools(config) => {
+                config
+                    .validate()
+                    .map_err(|_| ProfileError::InvalidRequest)?;
+                if self.supported(ProfileControl::Tools, required, true)? {
+                    let fields =
+                        serde_json::to_value(config).map_err(|_| ProfileError::Encoding)?;
+                    self.body
+                        .as_object_mut()
+                        .ok_or(ProfileError::InvalidRequest)?
+                        .extend(
+                            fields
+                                .as_object()
+                                .ok_or(ProfileError::InvalidRequest)?
+                                .clone(),
+                        );
+                }
+            }
             ControlValue::Sampling(sampling) => {
                 if !sampling.temperature.is_finite()
                     || !(0.0..=2.0).contains(&sampling.temperature)

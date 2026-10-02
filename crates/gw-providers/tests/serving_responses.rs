@@ -175,3 +175,47 @@ fn ambiguous_choices_invalid_known_fields_and_mixed_delta_message_are_rejected()
     let malformed = normalize_chat_chunk("sensitive-sentinel").unwrap_err();
     assert!(!format!("{malformed:?} {malformed}").contains("sensitive-sentinel"));
 }
+
+#[test]
+fn complete_message_calls_use_array_order_but_stream_fragments_require_indices() {
+    let calls = json!([
+        {"id":"a","type":"function","function":{"name":"read_file","arguments":"{ \"path\": \"a\" }"}},
+        {"id":"b","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"b\"}"}}
+    ]);
+    let full = decode(
+        json!({"choices":[{"message":{"role":"assistant","content":null,"reasoning_content":"two reads","tool_calls":calls},"finish_reason":"tool_calls"}]}),
+    );
+    let normalized = full.tool_calls.unwrap();
+    assert_eq!(
+        normalized.iter().map(|v| v.index).collect::<Vec<_>>(),
+        vec![0, 1]
+    );
+    assert_eq!(normalized[0].id.as_deref(), Some("a"));
+    assert_eq!(normalized[1].id.as_deref(), Some("b"));
+    assert_eq!(
+        normalized[0]
+            .function
+            .as_ref()
+            .unwrap()
+            .arguments
+            .as_deref(),
+        Some("{ \"path\": \"a\" }")
+    );
+    assert_eq!(full.content, None);
+    assert_eq!(full.reasoning.as_deref(), Some("two reads"));
+    assert_eq!(full.termination.kind, ProfileTerminationKind::ToolCalls);
+    assert_eq!(
+        normalize_chat_chunk(&chunk(json!({"tool_calls":calls})).to_string()).unwrap_err(),
+        ProfileError::InvalidResponse
+    );
+    let mut indexed = calls;
+    indexed[0]["index"] = json!(1);
+    indexed[1]["index"] = json!(0);
+    let fragments = decode(chunk(json!({"tool_calls":indexed})))
+        .tool_calls
+        .unwrap();
+    assert_eq!(
+        fragments.iter().map(|v| v.index).collect::<Vec<_>>(),
+        vec![1, 0]
+    );
+}
