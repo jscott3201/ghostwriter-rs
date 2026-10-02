@@ -305,3 +305,7 @@ fn validate_source(
 #[cfg(test)]
 #[path = "prepared_sft_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "prepared_gemma31b_tests.rs"]
+mod gemma31b_tests;

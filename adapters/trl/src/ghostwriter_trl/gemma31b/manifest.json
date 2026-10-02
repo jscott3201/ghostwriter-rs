@@ -1,0 +1,52 @@
+{
+  "repository": "google/gemma-4-31B-it",
+  "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "files": [
+    {
+      "name": "README.md",
+      "bytes": 27963,
+      "sha256": "e209f5c435b1e66055bd6d7c29185103ae8d2027a03a96b359335154f206b82b",
+      "repository_oid": "abf7c941ad9bb8d4fe2e350b6e6bf0e3ba05a28d"
+    },
+    {
+      "name": "config.json",
+      "bytes": 4621,
+      "sha256": "e967dd38bc5cfd38bd09a995a7bf4a754075df2b46aba68f7fbb5a791e6d8dd1",
+      "repository_oid": "5f291aa9973fbb38982f9bade924989edc7b895d"
+    },
+    {
+      "name": "generation_config.json",
+      "bytes": 208,
+      "sha256": "d4226bbe3117d2d253ba4609720ba82c6c4ce4627a9a6ae05387c78983ac03de",
+      "repository_oid": "e605bb4523b1462ea9d9a3810b9e3ecf7ab7b1f6"
+    },
+    {
+      "name": "processor_config.json",
+      "bytes": 1689,
+      "sha256": "32bdf45d2ad4cc29a0822ddd157a182de76644f0419a6228d151495256e9813c",
+      "repository_oid": "5465974d23e1eca2c46c2809b26c997946ce0d90"
+    },
+    {
+      "name": "tokenizer_config.json",
+      "bytes": 3082,
+      "sha256": "9f4fec4b1dc6ecddf8f4a92e9caea5971c0e67d81309f3f9066a2bee8c362633",
+      "repository_oid": "6068e357379d36f823c377e30efb101fa2c67fe4"
+    },
+    {
+      "name": "chat_template.jinja",
+      "bytes": 18683,
+      "sha256": "ae53464bf3be25802b3a5b37def7fd89667067d7577049b3b2d74c4d8de4c6d4",
+      "repository_oid": "4741bf6e4132ba23a5537f9d6e74e9a6d613d7cd"
+    },
+    {
+      "name": "tokenizer.json",
+      "bytes": 32169626,
+      "sha256": "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f",
+      "repository_oid": "1ff9f3e3439a939b971f9919e821bf87e835a503"
+    }
+  ],
+  "license": "Apache-2.0",
+  "declared_parent": "google/gemma-4-31B",
+  "parent_revision": null,
+  "chat_template_sha256": "ae53464bf3be25802b3a5b37def7fd89667067d7577049b3b2d74c4d8de4c6d4"
+}

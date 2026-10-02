@@ -72,11 +72,14 @@ pub struct PreparedSftManifest {
     pub effective_shifted_supervised_token_count: u64,
     /// Sum of whole nonwhitespace answer tokens surviving causal shifting.
     pub effective_shifted_answer_token_count: u64,
+    /// Whole call tokens surviving causal shifting; present only for serial tool recipes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_shifted_call_token_count: Option<u64>,
     /// Explicit source-only screening scope and unavailable model/execution/decision evidence.
     pub qualification_limits: Value,
 }
 
-/// Producer recipe. Version two pins a named text profile's files, wrapper, and dependencies.
+/// Producer recipe. Version two pins a named profile's files, wrapper, and dependencies.
 /// Historical version-one tokenizer declarations retain their original shape validation.
 /// Python replay checks actual official rendering and tokenization; Rust does not implement BPE.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -88,7 +91,7 @@ pub struct PreparedSftRecipe {
     pub adapter_version: String,
     /// Installed adapter source/package-policy identity.
     pub adapter_source_sha256: String,
-    /// Explicit version-two text profile; absent only on historical version-one recipes.
+    /// Explicit version-two model profile; absent only on historical version-one recipes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preparation_profile: Option<crate::PreparedSftProfile>,
     /// Complete qualified dependency versions.
@@ -238,7 +241,7 @@ pub struct PreparedSftSpan {
     pub start: u64,
     /// Exclusive end.
     pub end: u64,
-    /// Header, context, reasoning, wrapper, answer, end, or separator.
+    /// Profile-specific ownership: headers, context, reasoning, answers, calls, or observations.
     pub kind: String,
     /// Whether labels owned by this span are supervised.
     pub supervised: bool,
@@ -268,6 +271,12 @@ pub struct PreparedSftExample {
     pub token_kinds: Vec<Vec<String>>,
     /// Complete sorted whole-answer token indices that survive causal shifting.
     pub shifted_answer_token_indices: Vec<u64>,
+    /// Whole native function/argument tokens, required only for the serial tool profile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shifted_call_token_indices: Option<Vec<u64>>,
+    /// Explicit text_answer or tool_call contract for the serial tool profile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_kind: Option<String>,
     /// Exact original source and grouping bindings.
     pub source: PreparedSftExampleSource,
     /// Original assistant message index.

@@ -1,10 +1,10 @@
-//! Explicit text profiles and immutable policy commitments. This module performs no I/O and
+//! Explicit preparation profiles and immutable policy commitments. This module performs no I/O and
 //! does not execute tokenization; the installed Python consumer separately replays the renderer.
 use crate::{PreparedSftExample, PreparedSftRecipe};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// Supported, qualified text-only preparation profiles.
+/// Supported, qualified model preparation profiles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PreparedSftProfileName {
     /// The pinned Qwen3-0.6B tokenizer and existing qualified dependency stack.
@@ -13,9 +13,12 @@ pub enum PreparedSftProfileName {
     /// The pinned Gemma4 E2B processor's text subset and separately qualified stack.
     #[serde(rename = "gemma4_e2b_text_v1")]
     Gemma4E2bTextV1,
+    /// Official Gemma4 31B processor with validated serial calls and external observations.
+    #[serde(rename = "gemma4_31b_tools_v1")]
+    Gemma4ThirtyOneBToolsV1,
 }
 
-/// Complete supported official renderer controls; tool and multimodal controls are unavailable.
+/// Complete supported official renderer controls; multimodal content is unavailable.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PreparedSftRenderControls {
@@ -23,7 +26,7 @@ pub struct PreparedSftRenderControls {
     pub enable_thinking: bool,
     /// Always false for complete training conversations.
     pub add_generation_prompt: bool,
-    /// Gemma explicitly disables historical tool-thinking preservation; absent for Qwen.
+    /// Historical tool-thinking preservation: explicit for Gemma; absent for Qwen.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preserve_thinking: Option<bool>,
 }
@@ -32,7 +35,7 @@ pub struct PreparedSftRenderControls {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PreparedSftProfile {
-    /// Closed set of supported model-specific text contracts.
+    /// Closed set of supported model-specific text and serial tool contracts.
     pub name: PreparedSftProfileName,
     /// Exact renderer controls; saved declarations do not grant execution authority.
     pub controls: PreparedSftRenderControls,
@@ -40,13 +43,14 @@ pub struct PreparedSftProfile {
 
 impl PreparedSftProfile {
     pub(crate) fn validate_recipe(&self, recipe: &PreparedSftRecipe) -> Result<u32, &'static str> {
-        use PreparedSftProfileName::{Gemma4E2bTextV1, Qwen3TextV1};
+        use PreparedSftProfileName::{Gemma4E2bTextV1, Gemma4ThirtyOneBToolsV1, Qwen3TextV1};
         if self.controls.add_generation_prompt
             || match self.name {
                 Qwen3TextV1 => {
                     !self.controls.enable_thinking || self.controls.preserve_thinking.is_some()
                 }
                 Gemma4E2bTextV1 => self.controls.preserve_thinking != Some(false),
+                Gemma4ThirtyOneBToolsV1 => self.controls.preserve_thinking.is_none(),
             }
         {
             return Err("unsupported prepared text-profile rendering controls");
@@ -63,6 +67,14 @@ impl PreparedSftProfile {
                     "428f189b94afe5048d4cf4c660bfe4b3baaf87fc75a39352dd7c5ddb88e1ef4c",
                 ],
                 151_669,
+            ),
+            Gemma4ThirtyOneBToolsV1 => (
+                [
+                    "ab56340cecefaead5b77f502d5733db81dcfb52c5807fb48ce25cef714926b79",
+                    "d97d6a08801124a98a11bd211d23fc966a7ded707496830954fefecac8df5628",
+                    "08c6a7480c62167482471321ab8b421838c56de65063246c12b7912ab0424d58",
+                ],
+                262_144,
             ),
             Gemma4E2bTextV1 => (
                 [

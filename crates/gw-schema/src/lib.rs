@@ -390,3 +390,10 @@ mod cuda_lora_checkpoint;
 pub use cuda_lora_checkpoint::*;
 mod cuda_state;
 pub use cuda_state::*;
+
+mod tool_training;
+pub use tool_training::{validate_tool_projection_delimiters, validate_tool_training_source};
+mod prepared_gemma31b;
+mod prepared_gemma31b_render;
+
+mod prepared_gemma31b_json;

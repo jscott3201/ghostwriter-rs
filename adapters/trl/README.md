@@ -22,6 +22,10 @@ execution lineage remain unresolved. Label and trainer-handoff qualification is 
 the bounded full-SFT checkpoint path described below. Local software qualification
 uses freshly initialized tiny models and establishes no learned quality benefit.
 
+The separate [`gemma4_31b_tools_v1` consumer](GEMMA31B_TOOLS.md) prepares complete
+serial text/tool trajectories with the official 31B template, explicit call targets,
+and source-bound native replay.
+
 ## Reproduce the qualified environment
 
 Both checked environments were exercised on **CPython 3.12.14, macOS ARM64, CPU**.
@@ -354,7 +358,7 @@ outside this adapter's current evidence.
 GW_TRL_TOKENIZER="$PWD/qwen3-tokenizer" GW_TRL_GW="$PWD/target/debug/gw" \
   adapters/trl/.venv/bin/python -m pytest -q adapters/trl/tests \
     --ignore=adapters/trl/tests/gemma --ignore=adapters/trl/tests/gemma_lora \
-    --ignore=adapters/trl/tests/gemma_comparison \
+    --ignore=adapters/trl/tests/gemma_comparison --ignore=adapters/trl/tests/gemma31b \
     --ignore=adapters/trl/tests/gemma_cuda_lora
 GW_TRL_GEMMA_TOKENIZER="$PWD/gemma-e2b-tokenizer" GW_TRL_GW="$PWD/target/debug/gw" \
   adapters/trl/.venv-gemma/bin/python -m pytest -q adapters/trl/tests/gemma

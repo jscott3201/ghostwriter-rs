@@ -504,3 +504,7 @@ mod screened_tests;
 #[cfg(test)]
 #[path = "tool_artifact_tests.rs"]
 mod tool_tests;
+
+#[cfg(test)]
+#[path = "gemma31b_fixture_tests.rs"]
+mod gemma31b_fixture_tests;
