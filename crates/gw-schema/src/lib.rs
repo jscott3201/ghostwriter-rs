@@ -385,3 +385,8 @@ pub use reference_catalogue::{
     ReferenceActor, ReferenceCapture, ReferenceCatalogue, ReferenceMemberDeclaration,
     ReferenceReview, ValidatedReferenceCatalogue, ValidatedReferenceMember, reference_task_digest,
 };
+
+mod cuda_lora_checkpoint;
+pub use cuda_lora_checkpoint::*;
+mod cuda_state;
+pub use cuda_state::*;

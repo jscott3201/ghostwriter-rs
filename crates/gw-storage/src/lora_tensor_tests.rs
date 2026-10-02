@@ -111,3 +111,43 @@ fn tensor_framing_rejects_truncation_and_excess_allocation_claims() {
     let raw = u64::MAX.to_le_bytes();
     assert!(measure(&mut raw.as_slice(), 100, GemmaBaseKind::Fixture, false).is_err());
 }
+
+#[test]
+fn cuda_bf16_rounding_preserves_signed_zero_subnormals_and_even_ties() {
+    for (input, expected) in [
+        (0x0000_0000, 0x0000),
+        (0x8000_0000, 0x8000),
+        (0x0000_0001, 0x0000),
+        (0x8000_0001, 0x8000),
+        (0x0000_8000, 0x0000),
+        (0x0000_8001, 0x0001),
+        (0x0001_8000, 0x0002),
+        (0x8001_8000, 0x8002),
+        (0x3f80_7fff, 0x3f80),
+        (0x3f80_8000, 0x3f80),
+        (0x3f80_8001, 0x3f81),
+        (0x3f81_8000, 0x3f82),
+        (0xbf80_8000, 0xbf80),
+        (0xbf81_8000, 0xbf82),
+        (0x7f7f_0000, 0x7f7f),
+        (0xff7f_0000, 0xff7f),
+    ] {
+        assert_eq!(bf16_bits(input).unwrap(), expected, "{input:08x}");
+    }
+}
+
+#[test]
+fn cuda_bf16_rejects_nonfinite_source_and_finite_conversion_overflow() {
+    for bits in [
+        0x7f80_0000,
+        0xff80_0000,
+        0x7fc0_0000,
+        0x7f80_0001,
+        0x7f7f_8000,
+        0xff7f_8000,
+        0x7f7f_ffff,
+        0xff7f_ffff,
+    ] {
+        assert!(bf16_bits(bits).is_err(), "{bits:08x}");
+    }
+}

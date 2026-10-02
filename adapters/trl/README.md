@@ -354,7 +354,8 @@ outside this adapter's current evidence.
 GW_TRL_TOKENIZER="$PWD/qwen3-tokenizer" GW_TRL_GW="$PWD/target/debug/gw" \
   adapters/trl/.venv/bin/python -m pytest -q adapters/trl/tests \
     --ignore=adapters/trl/tests/gemma --ignore=adapters/trl/tests/gemma_lora \
-    --ignore=adapters/trl/tests/gemma_comparison
+    --ignore=adapters/trl/tests/gemma_comparison \
+    --ignore=adapters/trl/tests/gemma_cuda_lora
 GW_TRL_GEMMA_TOKENIZER="$PWD/gemma-e2b-tokenizer" GW_TRL_GW="$PWD/target/debug/gw" \
   adapters/trl/.venv-gemma/bin/python -m pytest -q adapters/trl/tests/gemma
 ```
@@ -867,3 +868,77 @@ This store models the prior native reference-import boundary with explicitly syn
 observations. Its paired tests perform fresh actual Docker execution. The separate
 ignored `reference_full_population_cached_runtime_roundtrip` test qualifies actual
 112-member reference import. Preserve that distinction when reporting evidence.
+
+### Separate CUDA checkpoint policy
+
+`ghostwriter-trl-cuda-lora` consumes the same complete verified Gemma prepared
+input and exact local approved release bytes. It uses the distinct `GWCUDA01`
+frame and `ghostwriter.completed-gemma-cuda-lora.v1` digest domain. Existing CPU
+LoRA and comparison commands retain their v1 contracts and source identities.
+
+The CUDA policy requires one BF16-capable Linux x86_64 CUDA device and a standalone
+process. Frozen parameters use BF16; the exact rank-8 q/v adapters, their
+gradients and AdamW moments use FP32. Floating buffers stay FP32, including
+nonpersistent RoPE buffers. The loader preserves tied aliases and frozen towers.
+Training uses eager attention, BF16 autocast, explicit complete labels and
+sequential batches. TF32, quantization, checkpointing, compilation, offload and
+automatic batch reduction are disabled. Actual operator observations must show
+the FP32 normalization, RoPE, softmax and loss operations.
+
+```sh
+CUBLAS_WORKSPACE_CONFIG=:4096:8 ghostwriter-trl-cuda-lora train \
+  --prepared prepared-gemma/prepared.gwsft \
+  --release-directory gemma-e2b-release \
+  --gw "$PWD/target/debug/gw" --output completed-cuda.gwckpt \
+  --max-steps 2 --batch-size 1 --accumulation 1 --max-sequence-length 2048
+
+gw artifact verify-cuda-lora --stdin < completed-cuda.gwckpt
+
+ghostwriter-trl-cuda-lora reload --checkpoint completed-cuda.gwckpt \
+  --tokenizer-directory gemma-e2b-tokenizer --gw "$PWD/target/debug/gw"
+```
+
+No acquisition occurs. The installed named dependency versions must exactly match
+`requirements-gemma-lora.lock`; CUDA wheel local-version suffixes are not
+normalized. The actual Linux CUDA wheel/image closure and device must be
+qualified separately. The separate CUDA policy checks the 15 NVIDIA/Triton versions declared by Torch
+2.8.0 for CUDA 12.8. It records runtime build facts and commitments to installed
+distribution METADATA/RECORD files; those are installed-wheel declarations, not
+independent image attestation. Driver process-residency measurement requires `nvidia-smi`.
+The commands above describe the implemented interface, not completed hardware
+qualification or an acquired pretrained release.
+
+The native reader checks original source bytes, derives BF16 frozen-parameter
+hashes, and verifies FP32 persistent-buffer and adapter hashes. Nonpersistent
+buffer values remain declared until independent model allocation reproduces the
+complete typed state. Saved training observations always remain `declared`.
+The producer requires an exact independent reload probe under its separate
+`cuda_bf16_exact_probe_v1` policy; it does not inherit the CPU floating tolerance.
+
+A successful Python `cuda_lora.producer.train(...)` returns a model-free
+`ObservedCompletion`. It owns a private complete capture, survives replacement
+of the public output path, and supports a context manager or explicit `close()`.
+`cuda_lora.ownership.consume(...)` transfers the capture once and revokes further
+live use. Saved paths, reports and reloaded models cannot create this capability.
+The CLI prints the receipt and closes its capture. Training and verification
+models are released sequentially before issuance; allocator peaks, host RSS and
+this process's driver-reported GPU residency are recorded. Python, NumPy, CPU
+Torch and selected CUDA RNG states and changed backend flags are restored.
+
+The explicit `--owned-fixture-tokenizer` alternative generates the reduced
+random official architecture locally. Real-device qualification controls are
+opt-in:
+
+```sh
+CUBLAS_WORKSPACE_CONFIG=:4096:8 GW_TRL_CUDA_QUALIFICATION=1 \
+  GW_TRL_GW="$PWD/target/debug/gw" \
+  GW_TRL_GEMMA_TOKENIZER="$PWD/gemma-e2b-tokenizer" \
+  python -m pytest adapters/trl/tests/gemma_cuda_lora -q
+```
+
+Host controls cover typed state, aliases, private-capture lifetime, native
+accept/reject cases and unsupported-host rejection. Opt-in CUDA controls add
+real updates, padding/partial accumulation, independent reload and RNG recovery.
+Host controls do not establish CUDA execution, memory fit, throughput or model
+quality. Sequential CUDA comparison and an owned remote controller are separate
+interfaces and are not provided by this checkpoint command.
