@@ -25,9 +25,10 @@ schemas support explicit primitive types, object properties/required fields,
 array items, string enums, and descriptions. Constraints that the official
 formatter would omit, such as `additionalProperties` or function `strict`, are
 rejected. This checks schema shape and linkage, not argument conformance to a
-JSON Schema. Unescaped names and object keys must use letters, digits or
-underscores and begin with a letter or underscore; keys that collide after
-lowercasing are rejected. All pinned control-token literals are rejected in
+JSON Schema. Unescaped function names, property names, and argument keys must use
+ASCII letters, ASCII digits or underscores and begin with an ASCII letter or
+underscore; keys that collide after lowercasing are rejected. Unicode remains supported in string values and message
+content. All pinned control-token literals are rejected in
 projected keys and values. Retained `raw_arguments` remains source evidence;
 only parsed structured arguments are rendered.
 
@@ -35,8 +36,10 @@ Argument values may include nested objects/lists, strings, booleans, null,
 integers from −2^63 through 2^64−1, and finite decimal floats. Floats must be zero
 or have magnitude at least 0.0001 and less than 10^16. Scientific JSON spellings
 within that value range, such as `1e3`, render according to the official template
-as `1000.0`. Scientific output outside that qualified domain, nonfinite values,
-overflow and duplicate JSON keys are rejected without rounding or coercion.
+as `1000.0`. Bare JSON `-0` is preserved as negative floating-point zero and
+renders as `-0.0`, matching the native decoder. Scientific output outside that
+qualified domain, nonfinite values, overflow and duplicate JSON keys are rejected
+without rounding or coercion.
 
 | Ownership | Labels |
 | --- | --- |

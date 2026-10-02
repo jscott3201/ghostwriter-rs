@@ -23,13 +23,13 @@ fn keys(value: &Value, allowed: &[&str]) -> Result<()> {
 }
 fn identifier(text: &str) -> Result<()> {
     if text.is_empty()
-        || !text.chars().all(|c| c.is_alphanumeric() || c == '_')
+        || !text.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
         || text
             .chars()
             .next()
-            .is_none_or(|c| !c.is_alphabetic() && c != '_')
+            .is_none_or(|c| !c.is_ascii_alphabetic() && c != '_')
     {
-        return Err("unescaped serial tool names/keys require identifiers");
+        return Err("unescaped serial tool names/keys require ASCII identifiers");
     }
     Ok(())
 }
@@ -290,4 +290,24 @@ pub(super) fn validate(example: &PreparedSftExample, recipe: &PreparedSftRecipe)
         return Err("serial call/answer ending or token evidence disagrees");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod repair_tests {
+    use super::*;
+    #[test]
+    fn identifiers_match_the_literal_ascii_domain() {
+        let cases: Value = serde_json::from_str(include_str!(
+            "../../../adapters/trl/tests/gemma31b/identifier_cases.json"
+        ))
+        .unwrap();
+        for case in cases.as_array().unwrap() {
+            let name = case["value"].as_str().unwrap();
+            assert_eq!(
+                identifier(name).is_ok(),
+                case["accepted"].as_bool().unwrap(),
+                "{name:?}"
+            );
+        }
+    }
 }

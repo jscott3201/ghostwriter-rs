@@ -16,9 +16,10 @@ fn official_serial_tool_build_imports_all_four_targets() {
     assert_eq!(verified.report().example_count, 4);
     assert_eq!(
         payload.manifest.effective_shifted_call_token_count,
-        Some(52)
+        Some(53)
     );
     assert_eq!(payload.manifest.effective_shifted_answer_token_count, 13);
+    assert!(payload.examples[0].rendered.contains("κλειδί value"));
     for (example, (target, call)) in
         payload
             .examples

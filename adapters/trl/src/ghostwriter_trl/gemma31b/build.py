@@ -6,6 +6,7 @@ import platform
 from .. import __version__
 from ..artifact import ContractError, VerifiedSnapshot, strict_json
 from .projection import prepare_target, project_messages
+from .source import source_json
 from .policy import PROFILE, controls
 from ..screening import consumer_screening
 from .tokenizer import PACKAGE, check_dependencies, tokenizer_manifest, tokenizer_policy, validate_tokenizer
@@ -112,8 +113,8 @@ def build(snapshot: VerifiedSnapshot, tokenizer, *, cot: str, turns: str, max_le
         try:
             if "tools_json" not in row:
                 raise ContractError("serial tool preparation requires a complete v5 source")
-            definitions = strict_json(row["tools_json"]) if row["tools_json"] is not None else []
-            messages = project_messages(strict_json(row["messages_json"]), definitions, cot)
+            definitions = source_json(row["tools_json"]) if row["tools_json"] is not None else []
+            messages = project_messages(source_json(row["messages_json"]), definitions, cot)
         except ContractError as error:
             rejections.append({"record_id": row["record_id"], "target_index": None, "reason": str(error)})
             continue

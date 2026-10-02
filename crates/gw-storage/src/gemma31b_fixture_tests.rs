@@ -18,7 +18,7 @@ fn record(source: &serde_json::Value, id: &str) -> TrainingRecord {
     })).unwrap()
 }
 fn fixture(records: &[TrainingRecord], filename: &str) {
-    let plan = ExportPlan::prepare(
+    let mut plan = ExportPlan::prepare(
         records,
         ExportOptions {
             target: TrlFormat::OpenAiMessages,
@@ -28,6 +28,12 @@ fn fixture(records: &[TrainingRecord], filename: &str) {
         },
     )
     .unwrap();
+    if filename == "v5-gemma31b-negative-zero.parquet" {
+        let raw = &mut plan.rows[0].messages_json;
+        assert!(raw.contains("\"negative\":-0.0"));
+        *raw = raw.replace("\"negative\":-0.0", "\"negative\":-0");
+        plan.artifact.artifact_id = artifact_identity(&plan.artifact, &plan.rows).unwrap();
+    }
     let mut bytes = Vec::new();
     crate::export::write_parquet(&plan.rows, &plan.artifact, &mut bytes).unwrap();
     let report = verify_artifact_snapshot(bytes.clone()).unwrap();
@@ -75,5 +81,29 @@ fn serial_gemma31b_canonical_capture_retains_unsupported_complete_sources() {
             record(&parallel, "parallel-calls"),
         ],
         "v5-gemma31b-rejected.parquet",
+    );
+}
+
+#[test]
+fn serial_gemma31b_mixed_schema_types_remain_captured_records() {
+    let mut records = vec![record(&source(), "valid-source")];
+    for (name, kind) in [
+        ("array-type", json!([])),
+        ("object-type", json!({})),
+        ("union-type", json!(["string", "null"])),
+    ] {
+        let mut invalid = source();
+        invalid["tools"][0]["function"]["parameters"]["properties"]["query"]["type"] = kind;
+        records.push(record(&invalid, name));
+    }
+    fixture(&records, "v5-gemma31b-mixed-schema.parquet");
+}
+#[test]
+fn serial_gemma31b_generated_messages_retain_bare_negative_zero() {
+    let mut values = source();
+    values["messages"][2]["tool_calls"][0]["function"]["arguments"]["negative"] = json!(-0.0);
+    fixture(
+        &[record(&values, "negative-zero")],
+        "v5-gemma31b-negative-zero.parquet",
     );
 }

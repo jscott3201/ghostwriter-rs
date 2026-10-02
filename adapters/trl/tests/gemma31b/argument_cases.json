@@ -1,11 +1,52 @@
 [
-  {"name":"fractional-exponent-nested-unicode","raw":"{\"nested\":[null,true,false,3,-4,1.5,-0.0,1e3,0.0001,\"é🙂\",{\"a\":\"b\"}]}","rendered":"{nested:[null,true,false,3,-4,1.5,-0.0,1000.0,0.0001,<|\"|>é🙂<|\"|>,{a:<|\"|>b<|\"|>}]}"},
-  {"name":"integer-boundaries","raw":"{\"low\":-9223372036854775808,\"high\":18446744073709551615}","rendered":"{high:18446744073709551615,low:-9223372036854775808}"},
-  {"name":"fractional-roundtrip","raw":"{\"value\":1.2345678901234567}","rendered":"{value:1.2345678901234567}"},
-  {"name":"duplicate-key","raw":"{\"value\":1,\"value\":2}","rendered":null},
-  {"name":"nonfinite","raw":"{\"value\":NaN}","rendered":null},
-  {"name":"overflow","raw":"{\"value\":1e309}","rendered":null},
-  {"name":"small-scientific","raw":"{\"value\":1e-5}","rendered":null},
-  {"name":"large-scientific","raw":"{\"value\":1e16}","rendered":null},
-  {"name":"integer-overflow","raw":"{\"value\":18446744073709551616}","rendered":null}
+  {
+    "name": "fractional-exponent-nested-unicode",
+    "raw": "{\"nested\":[null,true,false,3,-4,1.5,-0.0,1e3,0.0001,\"é🙂\",{\"a\":\"b\"}]}",
+    "rendered": "{nested:[null,true,false,3,-4,1.5,-0.0,1000.0,0.0001,<|\"|>é🙂<|\"|>,{a:<|\"|>b<|\"|>}]}"
+  },
+  {
+    "name": "integer-boundaries",
+    "raw": "{\"low\":-9223372036854775808,\"high\":18446744073709551615}",
+    "rendered": "{high:18446744073709551615,low:-9223372036854775808}"
+  },
+  {
+    "name": "fractional-roundtrip",
+    "raw": "{\"value\":1.2345678901234567}",
+    "rendered": "{value:1.2345678901234567}"
+  },
+  {
+    "name": "duplicate-key",
+    "raw": "{\"value\":1,\"value\":2}",
+    "rendered": null
+  },
+  {
+    "name": "nonfinite",
+    "raw": "{\"value\":NaN}",
+    "rendered": null
+  },
+  {
+    "name": "overflow",
+    "raw": "{\"value\":1e309}",
+    "rendered": null
+  },
+  {
+    "name": "small-scientific",
+    "raw": "{\"value\":1e-5}",
+    "rendered": null
+  },
+  {
+    "name": "large-scientific",
+    "raw": "{\"value\":1e16}",
+    "rendered": null
+  },
+  {
+    "name": "integer-overflow",
+    "raw": "{\"value\":18446744073709551616}",
+    "rendered": null
+  },
+  {
+    "name": "bare-negative-zero",
+    "raw": "{\"negative\":-0,\"positive\":0,\"nested\":[-0,-0.0,0]}",
+    "rendered": "{negative:-0.0,nested:[-0.0,-0.0,0],positive:0}"
+  }
 ]

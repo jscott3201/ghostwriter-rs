@@ -1,7 +1,8 @@
 """Validate the complete serial conversation before selecting any assistant prefix."""
 from copy import deepcopy
 import math
-from ..artifact import ContractError
+import json
+from ..artifact import ContractError, strict_json
 from .policy import data
 from . import PROFILE
 
@@ -11,8 +12,21 @@ def require(condition, reason):
         raise ContractError(reason)
 
 
+def source_json(text):
+    """Preserve bare negative zero consistently with the pinned native source decoder.
+
+    Shared validation rejects duplicates and nonstandard constants before this local
+    numeric interpretation. The legacy preparation decoder and captured bytes stay fixed.
+    """
+    strict_json(text)
+    return json.loads(text, parse_int=lambda value: -0.0 if value == '-0' else int(value))
+
+
 def identifier(value):
-    require(isinstance(value, str) and value and (value[0].isalpha() or value[0] == '_') and all(c.isalnum() or c == '_' for c in value), 'unescaped tool names/keys require identifiers')
+    require(isinstance(value, str) and value and value.isascii()
+            and (value[0].isalpha() or value[0] == '_')
+            and all(c.isalnum() or c == '_' for c in value),
+            'unescaped tool names/keys require ASCII identifiers')
 
 
 def clean(value, depth=0):
@@ -48,7 +62,7 @@ def argument(value, depth=0):
 def schema(value, *, root=False, depth=0):
     require(depth <= 64 and isinstance(value, dict), 'unsupported parameter schema nesting/shape')
     kind = value.get('type')
-    require(kind in {'object', 'array', 'string', 'integer', 'number', 'boolean', 'null'}, 'unsupported parameter type')
+    require(isinstance(kind, str) and kind in {'object', 'array', 'string', 'integer', 'number', 'boolean', 'null'}, 'unsupported parameter type')
     allowed = {'type', 'description'} | ({'properties', 'required'} if kind == 'object' else {'items'} if kind == 'array' else {'enum'} if kind == 'string' else set())
     if root:
         allowed = {'type', 'properties', 'required'}

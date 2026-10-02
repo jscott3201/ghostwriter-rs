@@ -33,6 +33,7 @@ def test_official_prefixes_native_roundtrip_and_shifted_labels(serial_source, to
     loaded = verify_prepared(data, gw, tokenizer)
     examples = loaded.examples
     assert [e['target_index'] for e in examples] == [2, 4, 6, 8]
+    assert 'κλειδί value' in examples[0]['rendered']
     assert [e['target_kind'] for e in examples] == ['tool_call', 'tool_call', 'text_answer', 'text_answer']
     for e in examples:
         call = e['target_kind'] == 'tool_call'
@@ -143,10 +144,10 @@ def test_independently_rehashed_native_source_tampering_is_rejected(serial_sourc
 
 @pytest.mark.parametrize('case', json.loads((Path(__file__).parent / 'argument_cases.json').read_text()), ids=lambda c:c['name'])
 def test_literal_numeric_domain_matches_official_template(serial_source,tokenizer,case):
-    from ghostwriter_trl.artifact import strict_json
+    from ghostwriter_trl.gemma31b.source import source_json
     m,t=source_values(serial_source)
     def prepare_case():
-        m[2]['tool_calls'][0]['function']['arguments']=strict_json(case['raw'])
+        m[2]['tool_calls'][0]['function']['arguments']=source_json(case['raw'])
         projected=project_messages(m,t,'masked')
         return prepare_target(projected[:3],tokenizer,'masked',4096,tools=t,
                               settings=controls(PROFILE,True,True))
@@ -176,3 +177,34 @@ def test_nested_definition_ledger_matches_literal_and_official_template(serial_s
     example=prepare_target(projected[:3],tokenizer,'masked',4096,tools=t,settings=controls(PROFILE,True,True))
     assert case['rendered'] in example['rendered']
     assert all(not s['supervised'] for s in example['spans'] if s['kind']=='definition')
+
+
+def test_mixed_unsupported_schema_types_keep_valid_record_targets(tokenizer,gw):
+    from ghostwriter_trl.artifact import read_snapshot
+    snapshot=read_snapshot(Path(__file__).parents[1]/'fixtures/v5-gemma31b-mixed-schema.parquet',gw)
+    loaded=verify_prepared(prepare(snapshot,tokenizer,**options()),gw,tokenizer)
+    assert len(loaded.examples)==4
+    assert {e['source']['record_id'] for e in loaded.examples}=={'valid-source'}
+    assert loaded.manifest['rejected_record_count']==3
+    assert loaded.manifest['candidate_target_count']==4
+    assert {r['record_id'] for r in loaded.manifest['rejections']}=={'array-type','object-type','union-type'}
+    assert all(r['target_index'] is None for r in loaded.manifest['rejections'])
+
+
+def test_verified_generated_bare_negative_zero_survives_native_and_official_replay(tokenizer,gw):
+    from ghostwriter_trl.artifact import read_snapshot
+    snapshot=read_snapshot(Path(__file__).parents[1]/'fixtures/v5-gemma31b-negative-zero.parquet',gw)
+    assert '"negative":-0,' in snapshot.rows()[0]['messages_json']
+    loaded=verify_prepared(prepare(snapshot,tokenizer,**options()),gw,tokenizer)
+    assert len(loaded.examples)==4
+    assert 'negative:-0.0' in loaded.examples[0]['rendered']
+    assert loaded.manifest['rejected_item_count']==0
+
+
+@pytest.mark.parametrize('case',json.loads((Path(__file__).parent/'identifier_cases.json').read_text()),ids=lambda c:repr(c['value']))
+def test_identifier_ascii_domain_is_shared(case):
+    from ghostwriter_trl.gemma31b.source import identifier
+    if case['accepted']:
+        identifier(case['value'])
+    else:
+        with pytest.raises(ContractError): identifier(case['value'])
