@@ -1,0 +1,221 @@
+{
+  "version": 1,
+  "task": {
+    "task_id": "authored-repository-1",
+    "source": {
+      "namespace": "authored",
+      "item": "repository-1",
+      "revision": "fixture-v1",
+      "citation": "urn:fixture:repository"
+    },
+    "rights": {
+      "basis": "owned",
+      "evidence": [
+        "authored fixture"
+      ],
+      "reviewer": "fixture-author",
+      "permitted_uses": [
+        "evaluation"
+      ]
+    },
+    "group": {
+      "namespace": "authored",
+      "id": "repository"
+    },
+    "split": {
+      "manifest": {
+        "namespace": "authored",
+        "id": "split"
+      },
+      "revision": "v1",
+      "role": "test"
+    },
+    "problem": "Repair the public function.",
+    "repository": "https://example.org/fixtures/project",
+    "upstream_base": {
+      "algorithm": "git_sha1",
+      "hex": "1111111111111111111111111111111111111111"
+    },
+    "actor_baseline": {
+      "algorithm": "git_sha1",
+      "hex": "2222222222222222222222222222222222222222"
+    },
+    "environment": {
+      "digest": {
+        "algorithm": "sha256",
+        "hex": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "platform": "linux/amd64",
+      "recipe": "authored-python-v1"
+    },
+    "private_contract": {
+      "digest": {
+        "algorithm": "blake3",
+        "hex": "4444444444444444444444444444444444444444444444444444444444444444"
+      },
+      "required_test_ids": [
+        "case-a",
+        "case-b"
+      ]
+    }
+  },
+  "candidate": {
+    "attempt": "attempt-1",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Repair the public function."
+      },
+      {
+        "role": "assistant",
+        "content": null,
+        "reasoning": "Read both files.",
+        "tool_calls": [
+          {
+            "id": "a",
+            "function": {
+              "name": "read_file",
+              "arguments": {
+                "path": "a.py",
+                "fraction": 0.125,
+                "nested": [
+                  0,
+                  false,
+                  null,
+                  -0.0
+                ]
+              },
+              "raw_arguments": "{ \"path\": \"a.py\", \"fraction\": 0.125 }"
+            }
+          },
+          {
+            "id": "b",
+            "function": {
+              "name": "read_file",
+              "arguments": {
+                "path": "b.py"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "name": "read_file",
+        "tool_call_id": "b",
+        "content": "second file\r\n"
+      },
+      {
+        "role": "tool",
+        "name": "read_file",
+        "tool_call_id": "a",
+        "content": "first file\n"
+      },
+      {
+        "role": "assistant",
+        "content": "Repaired the function.",
+        "reasoning": "Applied the public change."
+      }
+    ],
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "read_file",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "fraction": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "path"
+            ]
+          }
+        }
+      }
+    ],
+    "trajectory_complete": true,
+    "delta": {
+      "enumeration": "complete",
+      "changes": [
+        {
+          "path": "src/a.py",
+          "before": {
+            "kind": "text",
+            "text": "old\r\n",
+            "mode": "100644"
+          },
+          "after": {
+            "kind": "text",
+            "text": "new",
+            "mode": "100644"
+          }
+        },
+        {
+          "path": "bin/run",
+          "before": {
+            "kind": "text",
+            "text": "run\n",
+            "mode": "100644"
+          },
+          "after": {
+            "kind": "text",
+            "text": "run\n",
+            "mode": "100755"
+          }
+        },
+        {
+          "path": "new.txt",
+          "before": {
+            "kind": "absent"
+          },
+          "after": {
+            "kind": "text",
+            "text": "added\n",
+            "mode": "100644"
+          }
+        },
+        {
+          "path": "gone.txt",
+          "before": {
+            "kind": "text",
+            "text": "removed",
+            "mode": "100644"
+          },
+          "after": {
+            "kind": "absent"
+          }
+        }
+      ],
+      "unsupported": []
+    }
+  },
+  "generation": {
+    "model": {
+      "status": "unknown"
+    },
+    "serving": {
+      "status": "declared",
+      "value": {
+        "implementation": "fixture",
+        "temperature": 0.6
+      }
+    },
+    "settings": {
+      "temperature": 0.125,
+      "negative_zero": -0.0
+    },
+    "usage": {
+      "input_tokens": null,
+      "output_tokens": 0,
+      "reasoning_tokens": null,
+      "cost_usd": null
+    }
+  },
+  "report": null
+}

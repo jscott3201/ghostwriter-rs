@@ -18,6 +18,8 @@
 //! | `gw eval audit-separation`| pure  | score diagnostics and independent outcome comparison     |
 //! | `gw eval promote`        | pure   | variance-aware promotion gate over two `eval_results.json` |
 //! | `gw artifact verify --stdin` | pure | verify one immutable Parquet snapshot and report its raw digest |
+//! | `gw artifact capture-repository --stdin` | pure | capture a declared repository episode as portable JSON |
+//! | `gw artifact verify-repository --stdin` | pure | recheck episode identities and declaration diagnostics |
 //!
 //! ## Security posture
 //!
@@ -83,6 +85,12 @@ pub async fn run() -> anyhow::Result<CommandOutcome> {
 /// Propagates the dispatched handler's error.
 pub async fn dispatch(cli: Cli) -> anyhow::Result<CommandOutcome> {
     match cli.command {
+        Command::Artifact(ArtifactCommand::CaptureRepository { .. }) => {
+            commands::repository_episode::capture_stdin().map(|()| CommandOutcome::Success)
+        }
+        Command::Artifact(ArtifactCommand::VerifyRepository { .. }) => {
+            commands::repository_episode::verify_stdin().map(|()| CommandOutcome::Success)
+        }
         Command::Artifact(ArtifactCommand::VerifyCodingPair { .. }) => {
             commands::coding_pair::inspect().map(|()| CommandOutcome::Success)
         }

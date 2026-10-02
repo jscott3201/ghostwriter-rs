@@ -95,6 +95,13 @@ recovery cannot guarantee remote exactly-once execution.
 `Error` is terminal-until-requeue: a faulted record carries its last error and attempt count, and a
 re-run picks it back up.
 
+### Repository episode capture
+
+`gw artifact capture-repository --stdin` saves a complete supplied repository episode as portable
+JSON. `gw artifact verify-repository --stdin` rechecks its task, candidate and capture identities.
+Reports remain declarations: observed execution is Unknown and training eligibility is false.
+See [repository episode capture](docs/repository-episodes.md) for the request contract and example.
+
 ### Reviewed reference imports
 
 `gw reference register`, `import`, and `export` provide an explicit local registration and

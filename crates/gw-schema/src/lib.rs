@@ -28,6 +28,8 @@
 //! responses). `gw-schema` owns the *persisted* envelope `Verdict { Admit, Reject,
 //! NeedsReview }` and the config-side `JudgeSampling` policy folded into the contract.
 
+mod repository;
+pub use repository::*;
 mod candidate;
 mod checkpoint_model;
 mod coding_generation;

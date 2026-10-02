@@ -59,6 +59,8 @@
 //! inject a fake in-memory provider returning canned judge JSON — NO network. The verifier rail is
 //! pure; the cache uses `Store::open_in_memory`. Any live test is `#[ignore]` + env-key-gated.
 
+mod repository_episode;
+pub use repository_episode::{capture_repository_episode, verify_repository_episode};
 mod cache;
 mod cached_panel;
 mod calibration;
