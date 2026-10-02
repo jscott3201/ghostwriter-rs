@@ -20,8 +20,8 @@ pub fn strict_repository_json(bytes: &[u8]) -> Result<Value> {
             "repository JSON exceeds 32 MiB bound",
         ));
     }
-    let mut numbers = numbers(bytes)?;
-    let mut decoder = serde_json::Deserializer::from_slice(bytes);
+    let (structure, mut numbers) = numeric_structure(bytes)?;
+    let mut decoder = serde_json::Deserializer::from_slice(&structure);
     let value = JsonSeed(&mut numbers)
         .deserialize(&mut decoder)
         .map_err(|_| RepositoryEpisodeError("invalid or duplicate repository JSON"))?;
@@ -34,9 +34,12 @@ pub fn strict_repository_json(bytes: &[u8]) -> Result<Value> {
     Ok(value)
 }
 
-// Lexical numeric evidence is retained before serde can turn an out-of-range integer into f64 or
-// erase nonzero underflow. Numeric visits consume these independently parsed values in input order.
-fn numbers(bytes: &[u8]) -> Result<VecDeque<Number>> {
+// Validate the JSON number grammar and interpret each value exactly once. Replace those tokens
+// with integer zero plus padding for structural decoding, so serde never imposes a second numeric
+// acceptance boundary. Strings and all other bytes stay exact; numeric visits consume the saved
+// values in input order. Padding preserves delimiters and offsets without expanding the input.
+fn numeric_structure(bytes: &[u8]) -> Result<(Vec<u8>, VecDeque<Number>)> {
+    let mut structure = bytes.to_vec();
     let mut values = VecDeque::new();
     let mut index = 0;
     while index < bytes.len() {
@@ -63,12 +66,56 @@ fn numbers(bytes: &[u8]) -> Result<VecDeque<Number>> {
                 }
                 let token = std::str::from_utf8(&bytes[start..index])
                     .map_err(|_| RepositoryEpisodeError("invalid repository number"))?;
+                number_grammar(token.as_bytes())?;
                 values.push_back(number(token)?);
+                structure[start] = b'0';
+                structure[start + 1..index].fill(b' ');
             }
             _ => index += 1,
         }
     }
-    Ok(values)
+    Ok((structure, values))
+}
+fn number_grammar(token: &[u8]) -> Result<()> {
+    let invalid = || RepositoryEpisodeError("invalid repository number grammar");
+    let mut index = usize::from(token.first() == Some(&b'-'));
+    match token.get(index) {
+        Some(b'0') => index += 1,
+        Some(b'1'..=b'9') => {
+            index += 1;
+            while token.get(index).is_some_and(u8::is_ascii_digit) {
+                index += 1;
+            }
+        }
+        _ => return Err(invalid()),
+    }
+    if token.get(index) == Some(&b'.') {
+        index += 1;
+        let first = index;
+        while token.get(index).is_some_and(u8::is_ascii_digit) {
+            index += 1;
+        }
+        if first == index {
+            return Err(invalid());
+        }
+    }
+    if matches!(token.get(index), Some(b'e' | b'E')) {
+        index += 1;
+        if matches!(token.get(index), Some(b'+' | b'-')) {
+            index += 1;
+        }
+        let first = index;
+        while token.get(index).is_some_and(u8::is_ascii_digit) {
+            index += 1;
+        }
+        if first == index {
+            return Err(invalid());
+        }
+    }
+    if index != token.len() {
+        return Err(invalid());
+    }
+    Ok(())
 }
 fn number(token: &str) -> Result<Number> {
     let invalid = || RepositoryEpisodeError("unsupported repository number");

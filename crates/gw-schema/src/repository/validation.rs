@@ -116,15 +116,23 @@ fn path(value: &str) -> Result<String> {
             || matches!(component, "." | "..")
             || component.ends_with(['.', ' '])
             || folded == ".GIT"
-            || matches!(stem, "CON" | "PRN" | "AUX" | "NUL")
-            || (stem.len() == 4
-                && (stem.starts_with("COM") || stem.starts_with("LPT"))
-                && matches!(stem.as_bytes()[3], b'1'..=b'9'))
+            || reserved_device(stem)
         {
             return Err(err("invalid or ambiguous repository path"));
         }
     }
     Ok(value.to_lowercase().to_uppercase().nfc().collect())
+}
+fn reserved_device(stem: &str) -> bool {
+    matches!(stem, "CON" | "PRN" | "AUX" | "NUL")
+        || ["COM", "LPT"].iter().any(|prefix| {
+            stem.strip_prefix(prefix).is_some_and(|suffix| {
+                matches!(
+                    suffix,
+                    "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+                )
+            })
+        })
 }
 fn state(value: &RepositoryFileState) -> Result<()> {
     if matches!(value, RepositoryFileState::Text { text, .. } if text.contains('\0')) {

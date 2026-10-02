@@ -11,7 +11,8 @@ Both commands consume one complete JSON document, with a 32 MiB input limit. Cap
 sorts changed paths, computes three separate identities, and verifies the complete
 artifact before writing it to stdout. Verification recomputes every identity and the
 report diagnostic from the saved material. Output is also limited to 32 MiB, including
-its final newline. Invalid input produces no stdout. Diagnostics contain fixed messages
+its final newline. The Rust capture API reserves that newline in the complete artifact limit
+before returning an artifact. Invalid input produces no stdout. Diagnostics contain fixed messages
 without supplied field names, enum values, paths, or report contents. An output-device
 failure can still interrupt a write; consumers must check the exit status and verify
 saved bytes before using them.
@@ -39,7 +40,7 @@ Arguments, tool definitions, generation settings, model/serving values, and the 
 publisher report remain opaque JSON. Their complete values participate in the relevant
 identities. Canonical message fields retain reasoning separately from content, preserve
 null versus empty content, and retain raw argument strings alongside structured arguments.
-Optional unknown fields serialize as `null` in new protocol structures; the existing
+Optional fields with unknown values serialize as `null` in new protocol structures; the existing
 canonical message representation omits absent optional fields.
 
 ### Task declarations
@@ -96,7 +97,8 @@ including line endings and a missing final newline; embedded NUL requires an uns
 binary declaration. Only regular file modes `100644` and `100755` are accepted.
 
 Paths use relative slash-separated NFC Unicode names. Absolute paths, empty/dot/traversal
-segments, backslashes, control characters, Windows reserved names or punctuation, trailing
+segments, backslashes, control characters, Windows reserved names (including COM/LPT with
+superscript ¹, ², or ³) or punctuation, trailing
 dots/spaces, `.git` components, duplicate paths and case aliases are rejected. Alias checks
 use lowercase then uppercase Unicode folding and NFC; text contents are never normalized.
 A regular file cannot also be the ancestor of another regular file in either represented

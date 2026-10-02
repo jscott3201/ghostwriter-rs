@@ -1,9 +1,9 @@
 //! Consistency checking of supplied repository episodes; no execution or admission authority.
 use crate::verifier::evidence::observe;
 use gw_schema::{
-    EvidenceBinding, RepositoryEpisodeArtifact, RepositoryEpisodeAssessment,
-    RepositoryEpisodeError, RepositoryEpisodeReceipt, RepositoryEpisodeRequest,
-    RepositoryReportBinding, VerificationOutcome,
+    EvidenceBinding, REPOSITORY_EPISODE_MAX_BYTES, RepositoryEpisodeArtifact,
+    RepositoryEpisodeAssessment, RepositoryEpisodeError, RepositoryEpisodeReceipt,
+    RepositoryEpisodeRequest, RepositoryReportBinding, VerificationOutcome,
 };
 
 fn assessment(
@@ -53,6 +53,7 @@ fn assessment(
 
 /// Capture one complete portable repository artifact from strict caller-supplied JSON.
 /// No providers, environment loaders, executors, database, or referenced resources are accessed.
+/// The complete canonical artifact must fit the wire bound with one terminating newline reserved.
 ///
 /// # Errors
 /// Rejects invalid, oversized, duplicate or unknown protected fields and invalid internal bindings.
@@ -66,12 +67,21 @@ pub fn capture_repository_episode(
         identities.task.as_deref(),
         identities.candidate.as_deref(),
     );
-    Ok(RepositoryEpisodeArtifact {
+    let artifact = RepositoryEpisodeArtifact {
         version: 1,
         request,
         identities,
         assessment,
-    })
+    };
+    let length = serde_json::to_vec(&artifact)
+        .map_err(|_| RepositoryEpisodeError::new("repository serialization failed"))?
+        .len();
+    if length >= REPOSITORY_EPISODE_MAX_BYTES {
+        return Err(RepositoryEpisodeError::new(
+            "repository output exceeds 32 MiB bound",
+        ));
+    }
+    Ok(artifact)
 }
 
 /// Independently recompute all saved content bindings and declaration diagnostics.
