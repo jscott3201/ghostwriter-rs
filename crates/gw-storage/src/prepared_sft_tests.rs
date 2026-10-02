@@ -197,3 +197,28 @@ fn captured_build_is_independent_of_replaced_bundle_path() {
     assert_ne!(first.report().build_id, second.report().build_id);
     std::fs::remove_file(path).unwrap();
 }
+
+#[test]
+fn prepared_source_binds_tools_presence_and_exact_bytes() {
+    let (report, mut rows) =
+        crate::artifact::verify_snapshot_with_rows(fixture("v5-text.parquet")).unwrap();
+    let row = &mut rows[0];
+    let mut source: PreparedSftExampleSource = serde_json::from_value(serde_json::json!({
+        "record_id":row.record_id,"record_hash":row.record_hash,"prompt_hash":row.prompt_hash,
+        "messages_json":row.messages_json,"task_json":row.task_json,"origin_json":row.origin_json,
+        "tools_json":null,"artifact_id":report.artifact.artifact_id,
+        "group_kind":"source_record","group_id":"fixture"
+    }))
+    .unwrap();
+    assert_eq!(source.tools_json, Some(None));
+    validate_source(&source, &report.artifact, row).unwrap();
+    source.tools_json = None;
+    assert!(validate_source(&source, &report.artifact, row).is_err());
+    row.tools_json = Some("[]".into());
+    source.tools_json = Some(None);
+    assert!(validate_source(&source, &report.artifact, row).is_err());
+    source.tools_json = Some(Some("[]".into()));
+    validate_source(&source, &report.artifact, row).unwrap();
+    source.tools_json = Some(Some("[ ]".into()));
+    assert!(validate_source(&source, &report.artifact, row).is_err());
+}

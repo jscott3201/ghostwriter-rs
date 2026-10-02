@@ -73,8 +73,11 @@ pub enum MultiTurnLoss {
 ///   columns plus nullable `task_json`, a self-contained [`crate::ExportTaskProjection`]. New
 ///   frozen receipts retain this exact version.
 ///
-/// - [`RecordOrigins`](ExportSchemaVersion::RecordOrigins) (v4, current) adds required strict
+/// - [`RecordOrigins`](ExportSchemaVersion::RecordOrigins) (v4) adds required strict
 ///   `origin_json`; reference rows carry redacted bindings with null judge fields.
+/// - [`ToolDefinitions`](ExportSchemaVersion::ToolDefinitions) (v5, current) adds nullable
+///   canonical `tools_json`. SQL null means absent definitions; `[]` means an explicit empty list.
+///   Definition order and heterogeneous JSON values are preserved.
 ///
 /// v1 → v2 is an intentional BREAK for any consumer reading `reasoning_json` or parsing
 /// `messages_json` as `Vec<{role, content}>`. It is recorded in
@@ -91,12 +94,14 @@ pub enum ExportSchemaVersion {
     ReviewedTasks = 3,
     /// v4 — v3 columns plus required strict `origin_json` with truthful reference bindings.
     RecordOrigins = 4,
+    /// v5 — v4 columns plus nullable canonical `tools_json`, preserving absent versus empty tools.
+    ToolDefinitions = 5,
 }
 
 impl ExportSchemaVersion {
     /// The default version for new publications. Frozen publications retain their stored version
     /// when recovery writes their shards again.
-    pub const CURRENT: Self = Self::RecordOrigins;
+    pub const CURRENT: Self = Self::ToolDefinitions;
 }
 
 impl Default for ExportSchemaVersion {
@@ -180,7 +185,7 @@ mod tests {
     fn current_version_serializes_as_a_named_token() {
         assert_eq!(
             serde_json::to_string(&ExportSchemaVersion::CURRENT).unwrap(),
-            "\"record_origins\""
+            "\"tool_definitions\""
         );
         let m = ExportManifest {
             column_schema_version: ExportSchemaVersion::CURRENT,
@@ -197,7 +202,7 @@ mod tests {
         };
         let s = serde_json::to_string(&m).unwrap();
         assert!(
-            s.contains(r#""column_schema_version":"record_origins""#),
+            s.contains(r#""column_schema_version":"tool_definitions""#),
             "{s}"
         );
         assert_eq!(serde_json::from_str::<ExportManifest>(&s).unwrap(), m);
@@ -216,7 +221,7 @@ mod tests {
         assert_eq!(ExportSchemaVersion::ReviewedTasks as u8, 3);
         assert_eq!(
             ExportSchemaVersion::CURRENT,
-            ExportSchemaVersion::RecordOrigins
+            ExportSchemaVersion::ToolDefinitions
         );
         assert!(ExportSchemaVersion::CURRENT > ExportSchemaVersion::RoleContentText);
     }

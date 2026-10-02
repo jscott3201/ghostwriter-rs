@@ -138,7 +138,9 @@ pub(crate) fn validate(artifact: &ExportArtifact, rows: &[crate::export::Project
     if witness.version != 2
         || !matches!(
             artifact.manifest.column_schema_version,
-            ExportSchemaVersion::ReviewedTasks | ExportSchemaVersion::RecordOrigins
+            ExportSchemaVersion::ReviewedTasks
+                | ExportSchemaVersion::RecordOrigins
+                | ExportSchemaVersion::ToolDefinitions
         )
         || artifact.scope
             != (ExportScope::Run {
@@ -256,9 +258,14 @@ pub(crate) fn validate(artifact: &ExportArtifact, rows: &[crate::export::Project
             ));
         }
         let messages: Vec<Message> = serde_json::from_str(&row.messages_json)?;
+        let tools: Option<Vec<serde_json::Value>> = row
+            .tools_json
+            .as_ref()
+            .map(|json| serde_json::from_str(json))
+            .transpose()?;
         let shape = classify_screening_training_source(
             &messages,
-            None,
+            tools.as_deref(),
             declaration.policy.target,
             declaration.policy.multi_turn_loss,
         );
@@ -291,6 +298,8 @@ pub(crate) fn validate(artifact: &ExportArtifact, rows: &[crate::export::Project
                 .map(|json| serde_json::from_str::<ExportRecordOrigin>(json))
                 .transpose()?
                 .as_ref(),
+            (artifact.manifest.column_schema_version == ExportSchemaVersion::ToolDefinitions)
+                .then_some(tools.as_deref()),
         )?;
         if projected != binding.export_projection_id
             || group.split.as_ref() != Some(&task.provenance.split)

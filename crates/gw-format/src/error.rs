@@ -100,6 +100,10 @@ pub enum FormatError {
     /// check never guesses a link from a function name.
     #[error("tool identity error: {0}")]
     ToolIdentity(String),
+
+    /// A complete tool-training source or its separate projection prerequisite is invalid.
+    #[error("tool training source error: {0}")]
+    ToolTrainingSource(String),
 }
 
 impl From<gw_schema::RenderSourceIssue> for FormatError {

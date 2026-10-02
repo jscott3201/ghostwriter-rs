@@ -65,7 +65,7 @@ class VerifiedSnapshot:
     def rows(self) -> list[dict]:
         """Decode the already-verified buffer; never reopen a source path."""
         rows = pq.read_table(pa.BufferReader(self.data)).to_pylist()
-        if self.report["artifact"]["manifest"]["column_schema_version"] == "record_origins":
+        if self.report["artifact"]["manifest"]["column_schema_version"] in {"record_origins", "tool_definitions"}:
             from .origin import row_origin
             for row in rows:
                 row_origin(row)
@@ -115,7 +115,7 @@ def verify_snapshot(data: bytes, gw: Path) -> VerifiedSnapshot:
         raise ContractError("invalid artifact identity")
     manifest = artifact["manifest"]
     if not isinstance(manifest, dict) or manifest.get("column_schema_version") not in {
-        "canonical_messages", "reviewed_tasks", "record_origins",
+        "canonical_messages", "reviewed_tasks", "record_origins", "tool_definitions",
     }:
         raise ContractError("unsupported artifact columns")
     for key in ("n_records", "n_admitted"):

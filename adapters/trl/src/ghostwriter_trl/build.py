@@ -79,6 +79,8 @@ def build(snapshot: VerifiedSnapshot, tokenizer, *, cot: str, turns: str, max_le
     for row in rows:
         source = {key: row[key] for key in ("record_id", "record_hash", "prompt_hash", "messages_json")}
         source["task_json"] = row.get("task_json")
+        if "tools_json" in row:
+            source["tools_json"] = row["tools_json"]
         origin = None
         if "origin_json" in row:
             from .origin import row_origin
@@ -107,6 +109,8 @@ def build(snapshot: VerifiedSnapshot, tokenizer, *, cot: str, turns: str, max_le
                 "component_id": member["component_id"],
                 "export_projection_id": projections[(member["record"]["run_id"], member["record"]["record_id"])]}
         try:
+            if row.get("tools_json") is not None and strict_json(row["tools_json"]):
+                raise ContractError("tool definitions require a qualified tool-training consumer")
             messages = project_messages(strict_json(row["messages_json"]), tokenizer, cot, profile=profile)
         except ContractError as error:
             rejections.append({"record_id": row["record_id"], "target_index": None, "reason": str(error)})

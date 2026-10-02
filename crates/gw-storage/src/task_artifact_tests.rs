@@ -91,7 +91,7 @@ fn current_roundtrip_retains_task_contract_and_declarations_with_null_plain_prom
         .next()
         .unwrap()
         .unwrap();
-    assert_eq!(batch.num_columns(), 10);
+    assert_eq!(batch.num_columns(), 11);
     let tasks = batch
         .column_by_name("task_json")
         .unwrap()

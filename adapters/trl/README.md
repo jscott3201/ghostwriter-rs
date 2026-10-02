@@ -231,7 +231,7 @@ omitted where the official template omits it.
 
 ## Integrity, grouping, and limits
 
-The Rust bridge shares the existing complete v2/v3/v4 artifact verifier: exact schema,
+The Rust bridge shares the existing complete v2/v3/v4/v5 artifact verifier: exact schema,
 authoritative metadata, every batch, required values, message/task validation,
 sorted unique IDs, counts, and logical identity. Missing legacy metadata is an
 error for the bridge. Its versioned report carries the verified `ExportArtifact`,
@@ -750,7 +750,7 @@ fit, learned benefit, or an immutable publisher-parent revision.
 
 ### Reference origins
 
-Version-four `record_origins` rows carry exact `origin_json` into every prepared example.
+Version-four `record_origins` and version-five `tool_definitions` rows carry exact `origin_json` into every prepared example.
 The native verifier checks the reference module and suite bindings, declared Train use,
 and absent judge fields. Preparation binds origin to the captured Parquet and uses the
 reference component for grouping unless an explicit screened component is present.
@@ -942,3 +942,33 @@ real updates, padding/partial accumulation, independent reload and RNG recovery.
 Host controls do not establish CUDA execution, memory fit, throughput or model
 quality. Sequential CUDA comparison and an owned remote controller are separate
 interfaces and are not provided by this checkpoint command.
+
+
+### Complete tool artifacts (column schema v5)
+
+New Parquet publications use `tool_definitions`: the v4 columns plus nullable UTF-8
+`tools_json`. SQL null preserves absent definitions; `[]` preserves an explicit empty list.
+The column contains canonical JSON with sorted object keys, ordered definitions, and
+unchanged nested JSON values. `messages_json` retains null assistant content, parallel calls,
+explicit result IDs, reasoning, and raw argument evidence. The new row identity binds
+actual definition bytes even when a producer supplies an unchanged `record_hash`.
+Historical v2/v3/v4 receipts replay their original columns and identity domains.
+
+Prepared examples from v5 copy the exact `tools_json` field, including explicit null.
+Historical examples omit the field. Rust source verification rejects a missing or changed
+copy. The current text adapter accepts v5 text sources with absent or empty definitions
+and rejects nonempty tool definitions and tool trajectories before tokenization.
+
+`gw_format::validate_tool_training_source` is a separate complete-source check. It requires
+unique function definitions, supported explicit object parameter schemas, object arguments,
+assistant calls with unique IDs, and exactly one later result linked by ID per call.
+Parallel same-name calls and reversed result order are valid sources. Supported schema
+keywords are `type`, `description`, `properties`, `required`, `items`, `enum`, and boolean
+`additionalProperties`; references, compositions, and content parts are unsupported.
+It checks schema structure and linkage, not argument conformance to JSON Schema.
+
+`validate_tool_projection_delimiters` separately checks a consumer-supplied set of control
+tokens recursively in messages, reasoning, parsed arguments, and definition keys/values.
+Raw argument strings are evidence, never training targets. Canonical export applies neither
+restriction and preserves source evidence. This artifact support does not qualify official
+31B template bytes, serial/parallel consumer behavior, trainer labels, or student quality.

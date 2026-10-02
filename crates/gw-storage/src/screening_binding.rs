@@ -26,7 +26,7 @@ pub(crate) fn capture_screening_input_for(
     policy: &ScreeningPolicy,
     version: gw_schema::ExportSchemaVersion,
 ) -> Result<ScreeningInputBinding> {
-    let origin = (version == gw_schema::ExportSchemaVersion::RecordOrigins)
+    let origin = (version >= gw_schema::ExportSchemaVersion::RecordOrigins)
         .then(|| record.origin.projection());
     let generated = record.origin.generated();
     let mut parents = generated.map_or_else(Vec::new, |g| g.provenance.parent_ids.clone());
@@ -48,6 +48,8 @@ pub(crate) fn capture_screening_input_for(
         record.verification_contract.as_ref(),
         record.judging.verdict,
         origin.as_ref(),
+        (version == gw_schema::ExportSchemaVersion::ToolDefinitions)
+            .then_some(record.tools.as_deref()),
     )?;
     let mut input = serde_json::json!({
         "record":key,"record_hash":record_hash,"export_projection_id":export_projection_id,"task":record.task_provenance,
@@ -61,7 +63,9 @@ pub(crate) fn capture_screening_input_for(
         input["origin"] = serde_json::to_value(origin)?;
     }
     let screening_input_id = screening_hash(
-        if origin.is_some() {
+        if version == gw_schema::ExportSchemaVersion::ToolDefinitions {
+            "screening-record-input-v4-tools"
+        } else if origin.is_some() {
             "screening-record-input-v3-origins"
         } else {
             "screening-record-input-v2"
@@ -77,7 +81,7 @@ pub(crate) fn capture_screening_input_for(
 }
 
 /// The same pure typed projection is derived from raw records and independently decoded rows.
-/// Top-level tool definitions are not exported by v3; full raw bindings retain them separately.
+/// Historical v3/v4 projections omit definitions; v5 binds their explicit presence and payload.
 /// Scores, token costs and publication history are deliberately outside this screening digest.
 pub(crate) fn screening_projection_id(
     training_area: &str,
@@ -86,6 +90,7 @@ pub(crate) fn screening_projection_id(
     verification_contract: Option<&VerificationContract>,
     verdict: Option<Verdict>,
     origin: Option<&gw_schema::ExportRecordOrigin>,
+    tools: Option<Option<&[serde_json::Value]>>,
 ) -> Result<String> {
     let mut value = serde_json::json!({
         "training_area":training_area,"messages":messages,"task":task,
@@ -94,8 +99,13 @@ pub(crate) fn screening_projection_id(
     if let Some(origin) = origin {
         value["origin"] = serde_json::to_value(origin)?;
     }
+    if let Some(tools) = tools {
+        value["tools"] = serde_json::to_value(tools)?;
+    }
     screening_hash(
-        if origin.is_some() {
+        if tools.is_some() {
+            "screening-export-projection-v3-tools"
+        } else if origin.is_some() {
             "screening-export-projection-v2-origins"
         } else {
             "screening-export-projection-v1"

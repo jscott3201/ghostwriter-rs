@@ -3,7 +3,7 @@ use crate::{Result, artifact::integrity, export::Projected, reference_registrati
 use gw_schema::*;
 
 pub(crate) fn validate(row: &Projected, version: ExportSchemaVersion) -> Result<()> {
-    if version != ExportSchemaVersion::RecordOrigins {
+    if version < ExportSchemaVersion::RecordOrigins {
         if row.origin_json.is_some() {
             return Err(integrity("historical row contains v4 origin"));
         }

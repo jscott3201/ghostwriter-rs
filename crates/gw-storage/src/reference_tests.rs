@@ -164,7 +164,7 @@ async fn complete_commit_keeps_heldouts_private_and_requires_registered_publicat
     let (report, rows) = crate::artifact::verify_snapshot_with_rows(bytes).unwrap();
     assert_eq!(
         report.artifact.manifest.column_schema_version,
-        ExportSchemaVersion::RecordOrigins
+        ExportSchemaVersion::CURRENT
     );
     assert_eq!(rows.len(), 64);
     for row in rows {
